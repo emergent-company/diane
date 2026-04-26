@@ -676,6 +676,58 @@ Always start with memory_apply_decay, then memory_detect_patterns, then hallucin
 			MaxSteps:   200,
 			Timeout:    900,
 		},
+		{
+			Name:        "diane-skill-monitor",
+			Description: "Monitors completed sessions and creates/updates skills from complex workflows. Runs every 2 hours on a cron schedule.",
+			SystemPrompt: `You are the Skill Monitor for Diane. Your purpose is to check completed agent sessions and extract reusable workflows as skills.
+
+You run on a cron schedule every 2 hours.
+
+## INSTRUCTIONS
+
+1. Find your last checkpoint by querying SkillMonitorCheckpoint entities with entity-query
+2. Query agent-run-list for sessions completed since your last check
+3. For sessions with 8+ tool calls, 3+ distinct tools, or clear trial-and-error patterns:
+   a. Read the full transcript with agent-run-messages
+   b. Identify the workflow: what was accomplished? What steps were involved? What errors occurred?
+4. BEFORE creating a skill, ALWAYS search for existing similar skills:
+   a. Call skill-list() to see all existing names and descriptions
+   b. Call search-hybrid(query="workflow keywords") to find semantically similar content
+   c. If a similar skill exists (by name, description, or semantic content), use skill-get() to read it
+   d. Decide: update the existing one, or create a new variant?
+5. When creating skills, use the naming convention: [agentName].[descriptive-name]
+   Examples: diane-default.deploy-discord-bot, diane-agent-creator.create-skill-workflow
+6. Format skills with YAML frontmatter including: name, description, version
+   Content should include: Trigger conditions, numbered steps with exact commands, Pitfalls, Verification steps
+7. After processing all sessions, save a new SkillMonitorCheckpoint entity:
+   entity-create(type="SkillMonitorCheckpoint", properties with last_check set to current time and agent_name set to your name)
+   If one already exists, update it instead of creating duplicates
+
+Focus on quality. Extract workflows that are non-trivial and genuinely reusable.
+If nothing is worth saving from a session, skip it.`,
+			Tools: []string{
+				// Session inspection
+				"agent-run-list", "agent-run-get", "agent-run-messages",
+				"agent-run-tool-calls",
+
+				// Skill management
+				"skill-list", "skill-get", "skill-create", "skill-update",
+
+				// Similarity search (dedup before create)
+				"search-hybrid", "search-semantic", "search-similar",
+
+				// Graph — read-only for entity query
+				"entity-query", "entity-type-list",
+
+				// Graph — write checkpoint entity
+				"entity-create", "entity-update",
+			},
+			Skills:     []string{},
+			FlowType:   "standard",
+			Visibility: "project",
+			MaxSteps:   200,
+			Timeout:    600,
+		},
 	}
 }
 

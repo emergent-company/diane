@@ -13,6 +13,7 @@ import (
 	"github.com/Emergent-Comapny/diane/internal/config"
 	"github.com/Emergent-Comapny/diane/internal/db"
 	"github.com/Emergent-Comapny/diane/internal/memory"
+	sdkagentrun "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agents"
 )
 
 func cmdMonitor() {
@@ -139,58 +140,180 @@ func cmdMonitor() {
 				fmt.Printf("⚠️  Bridge: %v\n", err)
 			} else {
 				defer bridge.Close()
-				sdkClient := bridge.Client()
 
-				// Get latest runs across all agents
-				runsResp, err := sdkClient.Agents.ListProjectRuns(ctx, pc.ProjectID, nil)
+				// Use the new aggregate stats endpoint (requires MP ≥v0.40.2)
+				since := time.Now().Add(-24 * time.Hour)
+				runsResp, err := bridge.GetProjectRunStats(ctx, &sdkagentrun.RunStatsOptions{
+					Since: &since,
+				})
 				if err != nil {
+					// Fallback to legacy ListProjectRuns for older MP servers
 					fmt.Printf("⚠️  %v\n", err)
-				} else if len(runsResp.Data.Items) == 0 {
-					fmt.Println("None")
+					fmt.Println("   ↳ Falling back to legacy run list...")
+
+					legacyRuns, legacyErr := bridge.Client().Agents.ListProjectRuns(ctx, pc.ProjectID, nil)
+					if legacyErr != nil {
+						fmt.Printf("   ⚠️  Legacy fallback also failed: %v\n", legacyErr)
+					} else if len(legacyRuns.Data.Items) == 0 {
+						fmt.Println("   (no runs found)")
+					} else {
+						total := len(legacyRuns.Data.Items)
+						success := 0
+						failed := 0
+						var totalDur int
+						agents := map[string]int{}
+
+						for _, r := range legacyRuns.Data.Items {
+							agents[r.AgentName]++
+							if r.Status == "completed" || r.Status == "success" {
+								success++
+							} else if r.Status == "error" || r.Status == "failed" {
+								failed++
+							}
+							if r.DurationMs != nil {
+								totalDur += *r.DurationMs
+							}
+						}
+
+						avgDur := "0s"
+						if total > 0 {
+							avg := time.Duration(totalDur/total) * time.Millisecond
+							avg = avg.Round(time.Millisecond * 100)
+							avgDur = avg.String()
+						}
+
+						successRate := float64(success) / float64(total) * 100
+						fmt.Printf("   %d total, %d✅ %d❌ (%.0f%% success), avg %v (legacy)\n",
+							total, success, failed, successRate, avgDur)
+
+						if len(agents) > 0 {
+							var names []string
+							for name := range agents {
+								names = append(names, name)
+							}
+							sort.Strings(names)
+							for _, name := range names {
+								fmt.Printf("   %s: %d runs\n", name, agents[name])
+							}
+						}
+					}
 				} else {
-					total := len(runsResp.Data.Items)
-					success := 0
-					failed := 0
-					var totalDur int
-					agents := map[string]int{}
+					stats := runsResp.Data
+					o := stats.Overview
 
-					for _, r := range runsResp.Data.Items {
-						agents[r.AgentName]++
-						if r.Status == "completed" || r.Status == "success" {
-							success++
-						} else if r.Status == "error" || r.Status == "failed" {
-							failed++
-						}
-						if r.DurationMs != nil {
-							totalDur += *r.DurationMs
-						}
-					}
+				fmt.Printf("%d total, %d✅ %d❌ %d⚠️  (%.0f%% success), avg %v, $%.4f\n",
+					o.TotalRuns, o.SuccessCount, o.FailedCount, o.ErrorCount,
+					o.SuccessRate*100,
+					time.Duration(o.AvgDurationMs)*time.Millisecond,
+					o.TotalCostUSD)
 
-					avgDur := "0s"
-					if total > 0 {
-						avg := time.Duration(totalDur/total) * time.Millisecond
-						avg = avg.Round(time.Millisecond * 100)
-						avgDur = avg.String()
-					}
-
-					successRate := float64(success) / float64(total) * 100
-					fmt.Printf("%d total, %d✅ %d❌ (%.0f%% success), avg %v\n",
-						total, success, failed, successRate, avgDur)
-
-					// Show agent breakdown
-					if len(agents) > 0 {
+					// Per-agent breakdown
+					if len(stats.ByAgent) > 0 {
 						var names []string
-						for name := range agents {
+						for name := range stats.ByAgent {
 							names = append(names, name)
 						}
 						sort.Strings(names)
 						for _, name := range names {
-							fmt.Printf("   %s: %d runs\n", name, agents[name])
+							a := stats.ByAgent[name]
+							fmt.Printf("   %s: %d runs (%d✅ %d❌, avg %v, $%.4f)\n",
+								name, a.Total, a.Success, a.Failed,
+								time.Duration(a.AvgDurationMs)*time.Millisecond,
+								a.TotalCostUSD)
+						}
+					}
+
+					// Top errors
+					if len(stats.TopErrors) > 0 {
+						fmt.Println("\n   Top errors:")
+						for _, e := range stats.TopErrors {
+							fmt.Printf("     • %d× %s\n", e.Count, e.Message)
+						}
+					}
+
+					// Tool stats (top 5)
+					if stats.ToolStats.TotalToolCalls > 0 {
+						fmt.Printf("\n   Tool calls: %d total\n", stats.ToolStats.TotalToolCalls)
+						type toolEntry struct {
+							name string
+							stat sdkagentrun.RunStatsTool
+						}
+						var toolList []toolEntry
+						for name, stat := range stats.ToolStats.ByTool {
+							toolList = append(toolList, toolEntry{name, stat})
+						}
+						sort.Slice(toolList, func(i, j int) bool {
+							return toolList[i].stat.Total > toolList[j].stat.Total
+						})
+						limit := 5
+						if len(toolList) < limit {
+							limit = len(toolList)
+						}
+						for _, t := range toolList[:limit] {
+							rate := float64(t.stat.Success) / float64(t.stat.Total) * 100
+							fmt.Printf("     %s: %d calls (%d✅ %d❌, %.0f%%, avg %v)\n",
+								t.name, t.stat.Total, t.stat.Success, t.stat.Failed, rate,
+								time.Duration(t.stat.AvgDurationMs)*time.Millisecond)
+						}
+					}
+
+					// Session analytics
+					fmt.Println("\n   📊 Sessions (last 24h):")
+					sessionStats, err := bridge.GetProjectRunSessionStats(ctx, &sdkagentrun.RunStatsOptions{
+						Since: &since,
+						TopN:  5,
+					})
+					if err != nil {
+						fmt.Printf("   ⚠️  %v\n", err)
+					} else {
+						ss := sessionStats.Data
+						fmt.Printf("   %d total, %d active, avg %.1f runs/session, max %d\n",
+							ss.TotalSessions, ss.ActiveSessions,
+							ss.AvgRunsPerSession, ss.MaxRunsPerSession)
+
+						// Platform breakdown
+						if len(ss.SessionsByPlatform) > 0 {
+							var platforms []string
+							for p := range ss.SessionsByPlatform {
+								platforms = append(platforms, p)
+							}
+							sort.Strings(platforms)
+							for _, p := range platforms {
+								fmt.Printf("     %s: %d sessions\n", p, ss.SessionsByPlatform[p])
+							}
+						}
+
+						// Top sessions
+						if len(ss.TopSessions) > 0 {
+							fmt.Println("   Top sessions:")
+							for _, s := range ss.TopSessions {
+								var channelDisplay string
+								if s.ThreadID != "" {
+									channelDisplay = s.ThreadID
+								} else {
+									channelDisplay = s.ChannelID
+								}
+								if len(channelDisplay) > 10 {
+									channelDisplay = channelDisplay[:10] + "..."
+								}
+								lastRun := time.Since(s.LastRunAt).Round(time.Second)
+								fmt.Printf("     %s/%s: %d runs, $%.4f, last %v ago\n",
+									s.Platform, channelDisplay, s.TotalRuns, s.TotalCostUSD, lastRun)
+							}
 						}
 					}
 				}
 			}
 		}
+	}
+
+	// ── 6. Version info ──
+	fmt.Print("\n📦 Version info... ")
+	versionData, err := os.ReadFile(filepath.Join(dianeDir, "version"))
+	if err == nil {
+		fmt.Printf("v%s\n", strings.TrimSpace(string(versionData)))
+	} else {
+		fmt.Println("(unknown)")
 	}
 
 	fmt.Println()

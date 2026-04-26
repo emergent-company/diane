@@ -4,6 +4,7 @@
     "description": "Personal memory facts — preferences, decisions, patterns, corrections. Stores what the user has said, done, or preferred.",
     "json_schema": {
       "label": "Memory Fact",
+      "type": "object",
       "properties": {
         "fact": {
           "type": "string",
@@ -11,7 +12,8 @@
         },
         "category": {
           "type": "string",
-          "description": "Category: user-preference, decision, pattern, entity, action-item"
+          "description": "Category: user-preference, decision, pattern, entity, action-item",
+          "enum": ["user-preference", "decision", "pattern", "entity", "action-item"]
         },
         "confidence": {
           "type": "number",
@@ -44,6 +46,7 @@
     "namespace": "system",
     "json_schema": {
       "label": "MCP Proxy Config",
+      "type": "object",
       "properties": {
         "scope": {
           "type": "string",
@@ -72,6 +75,7 @@
     "namespace": "system",
     "json_schema": {
       "label": "MCP Secret",
+      "type": "object",
       "properties": {
         "name": {
           "type": "string",
@@ -95,41 +99,11 @@
     "enabled": true
   },
   {
-    "type_name": "Person",
-    "description": "A person known to the user — contact, colleague, friend, or family",
-    "json_schema": {
-      "label": "Person",
-      "properties": {
-        "name": {
-          "type": "string",
-          "description": "Full name"
-        },
-        "role": {
-          "type": "string",
-          "description": "Relationship or role (friend, colleague, family, etc.)"
-        },
-        "email": {
-          "type": "string",
-          "description": "Email address"
-        },
-        "notes": {
-          "type": "string",
-          "description": "Personal notes about this person"
-        },
-        "phone": {
-          "type": "string",
-          "description": "Phone number"
-        }
-      },
-      "description": "A person known to the user"
-    },
-    "enabled": true
-  },
-  {
     "type_name": "Invoice",
-    "description": "A bill or invoice received or sent",
+    "description": "A bill or invoice received or sent — tracks amount, status, due date, and what it's for.",
     "json_schema": {
       "label": "Invoice",
+      "type": "object",
       "properties": {
         "amount": {
           "type": "number",
@@ -141,7 +115,8 @@
         },
         "status": {
           "type": "string",
-          "description": "Status: pending, paid, overdue, cancelled"
+          "description": "Status: pending, paid, overdue, cancelled",
+          "enum": ["pending", "paid", "overdue", "cancelled"]
         },
         "currency": {
           "type": "string",
@@ -165,68 +140,1046 @@
     "enabled": true
   },
   {
-    "type_name": "Subscription",
-    "description": "A recurring subscription — services, memberships, recurring payments",
+    "type_name": "Person",
+    "description": "A person in the user's life — family, friend, colleague, or public figure. Diane builds and enriches these from email, calendar, and conversation context.",
     "json_schema": {
-      "label": "Subscription",
+      "label": "Person",
+      "type": "object",
       "properties": {
-        "name": {
+        "first_name": {
           "type": "string",
-          "description": "Service name"
+          "description": "First name"
         },
-        "plan": {
+        "last_name": {
           "type": "string",
-          "description": "Plan or tier name"
+          "description": "Last name"
         },
-        "amount": {
-          "type": "number",
-          "description": "Billing amount per period"
-        },
-        "period": {
+        "display_name": {
           "type": "string",
-          "description": "Billing period: monthly, yearly, weekly"
+          "description": "Full display name or preferred name"
         },
-        "status": {
+        "relationship": {
           "type": "string",
-          "description": "active, cancelled, paused, expired"
+          "description": "Relation to user: family, friend, colleague, acquaintance, public_figure, service_provider",
+          "enum": ["family", "friend", "colleague", "acquaintance", "public_figure", "service_provider"]
         },
-        "currency": {
+        "emails": {
           "type": "string",
-          "description": "Currency code"
+          "description": "JSON array of email addresses"
         },
-        "next_billing": {
+        "phones": {
           "type": "string",
-          "description": "Next billing date"
+          "description": "JSON array of phone numbers"
+        },
+        "organization": {
+          "type": "string",
+          "description": "Company or organisation they belong to"
+        },
+        "job_title": {
+          "type": "string",
+          "description": "Job title or role"
+        },
+        "birthday": {
+          "type": "string",
+          "description": "Birthday in YYYY-MM-DD format"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Free-form notes about this person"
+        },
+        "last_contacted": {
+          "type": "string",
+          "description": "Date of last contact or interaction (RFC3339)"
+        },
+        "source": {
+          "type": "string",
+          "description": "Where this record originated: gmail, apple_contacts, calendar, conversation, manual",
+          "enum": ["gmail", "apple_contacts", "calendar", "conversation", "manual"]
         }
       },
-      "description": "A recurring subscription"
+      "description": "A person in the user's life"
     },
     "enabled": true
   },
   {
     "type_name": "Contact",
-    "description": "A general contact record — company, organization, or service",
+    "description": "Raw address book record from Apple Contacts, Gmail contacts, or manual entry. Separated from Person: Contact is the raw record, Person is Diane's enriched entity.",
     "json_schema": {
       "label": "Contact",
+      "type": "object",
       "properties": {
-        "name": {
+        "source": {
           "type": "string",
-          "description": "Contact name / company name"
+          "description": "Origin: apple_contacts, gmail, manual",
+          "enum": ["apple_contacts", "gmail", "manual"]
         },
-        "type": {
+        "source_id": {
           "type": "string",
-          "description": "Type: company, organization, service, venue"
+          "description": "Native contact ID in the source system"
+        },
+        "first_name": {
+          "type": "string",
+          "description": "First name"
+        },
+        "last_name": {
+          "type": "string",
+          "description": "Last name"
+        },
+        "display_name": {
+          "type": "string",
+          "description": "Full display name"
+        },
+        "emails": {
+          "type": "string",
+          "description": "JSON array of email objects with label and value"
+        },
+        "phones": {
+          "type": "string",
+          "description": "JSON array of phone objects with label and value"
+        },
+        "organization": {
+          "type": "string",
+          "description": "Company or organisation name"
+        },
+        "job_title": {
+          "type": "string",
+          "description": "Job title or role"
         },
         "notes": {
           "type": "string",
-          "description": "Personal notes"
+          "description": "Free-form notes field from the contact record"
+        },
+        "groups": {
+          "type": "string",
+          "description": "JSON array of contact group names"
+        }
+      },
+      "description": "Raw address book contact record"
+    },
+    "enabled": true
+  },
+  {
+    "type_name": "Task",
+    "description": "A to-do item or action the user needs to complete. Created by Diane from conversations, emails, calendar events, or explicitly by the user.",
+    "json_schema": {
+      "label": "Task",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Short task title"
+        },
+        "description": {
+          "type": "string",
+          "description": "Detailed description or context"
+        },
+        "status": {
+          "type": "string",
+          "description": "Status: pending, in_progress, blocked, done, cancelled",
+          "enum": ["pending", "in_progress", "blocked", "done", "cancelled"]
+        },
+        "priority": {
+          "type": "string",
+          "description": "Priority: low, medium, high, urgent",
+          "enum": ["low", "medium", "high", "urgent"]
+        },
+        "due_date": {
+          "type": "string",
+          "description": "Due date in YYYY-MM-DD or RFC3339 format"
+        },
+        "completed_at": {
+          "type": "string",
+          "description": "Timestamp when completed (RFC3339)"
+        },
+        "source": {
+          "type": "string",
+          "description": "Originating system: conversation, email, calendar, apple_reminders, manual",
+          "enum": ["conversation", "email", "calendar", "apple_reminders", "manual"]
+        },
+        "source_ref": {
+          "type": "string",
+          "description": "Reference ID in the source system"
+        },
+        "tags": {
+          "type": "string",
+          "description": "JSON array of tag strings"
+        }
+      },
+      "description": "A to-do item or action item"
+    },
+    "enabled": true
+  },
+  {
+    "type_name": "Project",
+    "description": "A collection of related tasks and goals with a defined objective. Represents work projects, personal goals, or life areas.",
+    "json_schema": {
+      "label": "Project",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Project name"
+        },
+        "description": {
+          "type": "string",
+          "description": "Purpose and scope"
+        },
+        "status": {
+          "type": "string",
+          "description": "Status: active, on_hold, completed, archived",
+          "enum": ["active", "on_hold", "completed", "archived"]
+        },
+        "start_date": {
+          "type": "string",
+          "description": "Start date (YYYY-MM-DD)"
+        },
+        "target_date": {
+          "type": "string",
+          "description": "Target completion date (YYYY-MM-DD)"
+        },
+        "completed_at": {
+          "type": "string",
+          "description": "Actual completion date (RFC3339)"
+        },
+        "category": {
+          "type": "string",
+          "description": "Category: work, personal, health, finance, education, home, social",
+          "enum": ["work", "personal", "health", "finance", "education", "home", "social"]
+        },
+        "tags": {
+          "type": "string",
+          "description": "JSON array of tag strings"
+        }
+      },
+      "description": "A collection of related tasks and goals"
+    },
+    "enabled": true
+  },
+  {
+    "type_name": "CalendarEvent",
+    "description": "A calendar event synced to the knowledge graph. Key: {account}:{google_event_id}. Labels: account:{email}, calendar_id:{id}.",
+    "json_schema": {
+      "label": "Calendar Event",
+      "type": "object",
+      "properties": {
+        "google_event_id": {
+          "type": "string",
+          "description": "Google Calendar event ID"
+        },
+        "calendar_id": {
+          "type": "string",
+          "description": "Calendar ID the event belongs to"
+        },
+        "account": {
+          "type": "string",
+          "description": "Google account email address"
+        },
+        "summary": {
+          "type": "string",
+          "description": "Event title or summary"
+        },
+        "description": {
+          "type": "string",
+          "description": "Event description or agenda"
+        },
+        "location": {
+          "type": "string",
+          "description": "Physical or virtual location"
+        },
+        "start": {
+          "type": "string",
+          "description": "Start time (RFC3339 or YYYY-MM-DD for all-day)"
+        },
+        "end": {
+          "type": "string",
+          "description": "End time (RFC3339 or YYYY-MM-DD for all-day)"
+        },
+        "all_day": {
+          "type": "boolean",
+          "description": "All-day event flag"
+        },
+        "status": {
+          "type": "string",
+          "description": "Event status: confirmed, tentative, cancelled",
+          "enum": ["confirmed", "tentative", "cancelled"]
+        },
+        "html_link": {
+          "type": "string",
+          "description": "URL to view in Google Calendar"
+        },
+        "hangout_link": {
+          "type": "string",
+          "description": "Google Meet or Hangout video call link"
+        },
+        "attendees": {
+          "type": "string",
+          "description": "JSON array of attendee objects (email, displayName, responseStatus)"
+        },
+        "organizer_email": {
+          "type": "string",
+          "description": "Organiser email address"
+        },
+        "organizer_name": {
+          "type": "string",
+          "description": "Organiser display name"
+        },
+        "recurrence": {
+          "type": "string",
+          "description": "JSON array of RRULE recurrence strings"
+        }
+      },
+      "description": "A calendar event synced from Google Calendar"
+    },
+    "enabled": true
+  },
+  {
+    "type_name": "FinancialTransaction",
+    "description": "A financial transaction from Actual Budget or Enable Banking. Key: {source}:{external_id}. Labels: account_id:{id}, category:{cat}.",
+    "json_schema": {
+      "label": "Financial Transaction",
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "Origin: actual_budget, enable_banking, manual",
+          "enum": ["actual_budget", "enable_banking", "manual"]
+        },
+        "external_id": {
+          "type": "string",
+          "description": "Transaction ID in the source system"
+        },
+        "date": {
+          "type": "string",
+          "description": "Transaction date (YYYY-MM-DD)"
+        },
+        "amount": {
+          "type": "number",
+          "description": "Amount (negative = debit, positive = credit)"
+        },
+        "currency": {
+          "type": "string",
+          "description": "ISO 4217 code (EUR, USD, PLN, GBP)"
+        },
+        "payee": {
+          "type": "string",
+          "description": "Payee or merchant name"
+        },
+        "account_id": {
+          "type": "string",
+          "description": "Account ID in the source system"
+        },
+        "account_name": {
+          "type": "string",
+          "description": "Human-readable account name"
+        },
+        "category": {
+          "type": "string",
+          "description": "Budget category"
+        },
+        "memo": {
+          "type": "string",
+          "description": "Transaction memo or notes"
+        },
+        "cleared": {
+          "type": "boolean",
+          "description": "Whether transaction has cleared the bank"
+        },
+        "reconciled": {
+          "type": "boolean",
+          "description": "Whether transaction has been reconciled"
+        },
+        "iban": {
+          "type": "string",
+          "description": "IBAN of counterpart account (Enable Banking only)"
+        }
+      },
+      "description": "A financial transaction from budget or banking"
+    },
+    "enabled": true
+  },
+  {
+    "type_name": "Place",
+    "description": "A physical location from Google Places or manually added. Key: place_id. Labels: place_id:{id}, type:{primary_type}.",
+    "json_schema": {
+      "label": "Place",
+      "type": "object",
+      "properties": {
+        "place_id": {
+          "type": "string",
+          "description": "Google Places unique identifier"
+        },
+        "name": {
+          "type": "string",
+          "description": "Place name"
+        },
+        "address": {
+          "type": "string",
+          "description": "Formatted address"
+        },
+        "lat": {
+          "type": "number",
+          "description": "Latitude"
+        },
+        "lng": {
+          "type": "number",
+          "description": "Longitude"
+        },
+        "types": {
+          "type": "string",
+          "description": "JSON array of Google Places types (restaurant, cafe, etc.)"
+        },
+        "rating": {
+          "type": "number",
+          "description": "Google rating (0–5)"
+        },
+        "website": {
+          "type": "string",
+          "description": "Website URL"
+        },
+        "phone": {
+          "type": "string",
+          "description": "International phone number"
+        },
+        "google_maps_url": {
+          "type": "string",
+          "description": "Google Maps URL"
+        },
+        "is_favorite": {
+          "type": "boolean",
+          "description": "Marked as a favourite or frequent place"
+        }
+      },
+      "description": "A physical location"
+    },
+    "enabled": true
+  },
+  {
+    "type_name": "Note",
+    "description": "A free-form note or memory captured by the user or extracted by Diane from conversations, emails, or documents. Markdown content supported.",
+    "json_schema": {
+      "label": "Note",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Short title or heading"
+        },
+        "content": {
+          "type": "string",
+          "description": "Full content, markdown supported"
+        },
+        "source": {
+          "type": "string",
+          "description": "Where this came from: conversation, email, document, manual",
+          "enum": ["conversation", "email", "document", "manual"]
+        },
+        "source_ref": {
+          "type": "string",
+          "description": "Reference to the source (Gmail message ID, file path, etc.)"
+        },
+        "category": {
+          "type": "string",
+          "description": "Category: idea, journal, reference, decision, summary, snippet",
+          "enum": ["idea", "journal", "reference", "decision", "summary", "snippet"]
+        },
+        "tags": {
+          "type": "string",
+          "description": "JSON array of tag strings"
+        }
+      },
+      "description": "A free-form note or captured memory"
+    },
+    "enabled": true
+  },
+  {
+    "type_name": "Habit",
+    "description": "A recurring behaviour or routine the user is tracking. Diane monitors completion and surfaces streaks and gaps in the daily briefing.",
+    "json_schema": {
+      "label": "Habit",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Habit name (e.g. Morning run, Read 30 minutes)"
+        },
+        "description": {
+          "type": "string",
+          "description": "Details about the habit and its goal"
+        },
+        "frequency": {
+          "type": "string",
+          "description": "How often: daily, weekdays, weekly, monthly, custom",
+          "enum": ["daily", "weekdays", "weekly", "monthly", "custom"]
+        },
+        "target_time": {
+          "type": "string",
+          "description": "Preferred time of day (e.g. 07:00)"
+        },
+        "status": {
+          "type": "string",
+          "description": "Status: active, paused, archived",
+          "enum": ["active", "paused", "archived"]
+        },
+        "streak_current": {
+          "type": "integer",
+          "description": "Current consecutive completion streak (days)"
+        },
+        "streak_best": {
+          "type": "integer",
+          "description": "Best ever consecutive streak (days)"
+        },
+        "last_completed": {
+          "type": "string",
+          "description": "Date last completed (YYYY-MM-DD)"
+        },
+        "tags": {
+          "type": "string",
+          "description": "JSON array of tags: health, productivity, learning, fitness, etc."
+        }
+      },
+      "description": "A recurring behaviour or routine"
+    },
+    "enabled": true
+  },
+  {
+    "type_name": "ShoppingItem",
+    "description": "An item on a shopping or to-buy list. Can be tied to a specific project, trip, or event via relationships.",
+    "json_schema": {
+      "label": "Shopping Item",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Item name"
+        },
+        "quantity": {
+          "type": "string",
+          "description": "Quantity (e.g. 2, 500g, 1L)"
+        },
+        "category": {
+          "type": "string",
+          "description": "Category: groceries, household, electronics, gifts, supplies, wishlist",
+          "enum": ["groceries", "household", "electronics", "gifts", "supplies", "wishlist"]
+        },
+        "due_date": {
+          "type": "string",
+          "description": "Date needed by (YYYY-MM-DD)"
+        },
+        "purchased": {
+          "type": "boolean",
+          "description": "Whether the item has been purchased"
+        },
+        "purchased_date": {
+          "type": "string",
+          "description": "Date purchased (YYYY-MM-DD)"
+        },
+        "price_estimate": {
+          "type": "number",
+          "description": "Estimated or budgeted price"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Free-form notes about the item"
+        },
+        "url": {
+          "type": "string",
+          "description": "URL to product page or listing"
+        }
+      },
+      "description": "An item on a shopping or to-buy list"
+    },
+    "enabled": true
+  },
+  {
+    "type_name": "Company",
+    "description": "An organisation, company, or institution the user interacts with — employer, client, vendor, bank, utility, school.",
+    "json_schema": {
+      "label": "Company",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Company or organisation name"
+        },
+        "industry": {
+          "type": "string",
+          "description": "Industry or sector"
+        },
+        "website": {
+          "type": "string",
+          "description": "Website URL"
         },
         "contact_info": {
           "type": "string",
-          "description": "Contact information (address, website, etc.)"
+          "description": "Contact details (address, phone, email)"
+        },
+        "relationship": {
+          "type": "string",
+          "description": "Relationship: employer, client, vendor, bank, utility, school, partner, government",
+          "enum": ["employer", "client", "vendor", "bank", "utility", "school", "partner", "government"]
+        },
+        "notes": {
+          "type": "string",
+          "description": "Free-form notes"
+        },
+        "tags": {
+          "type": "string",
+          "description": "JSON array of tags"
         }
       },
-      "description": "A general contact record — company, organization, or service"
+      "description": "An organisation the user interacts with"
+    },
+    "enabled": true
+  },
+  {
+    "type_name": "Item",
+    "description": "A physical thing the user owns that does not run software — furniture, clothing, books, kitchen tools, hobby gear, collectibles, appliances.",
+    "json_schema": {
+      "label": "Item",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Item name"
+        },
+        "category": {
+          "type": "string",
+          "description": "Category: furniture, clothing, book, kitchen, tool, hobby, collectible, appliance, sports, music, other",
+          "enum": ["furniture", "clothing", "book", "kitchen", "tool", "hobby", "collectible", "appliance", "sports", "music", "other"]
+        },
+        "purchased_date": {
+          "type": "string",
+          "description": "Date purchased (YYYY-MM-DD)"
+        },
+        "location": {
+          "type": "string",
+          "description": "Physical location (home, office, garage, etc.)"
+        },
+        "condition": {
+          "type": "string",
+          "description": "Condition: mint, good, fair, worn, needs_repair, broken",
+          "enum": ["mint", "good", "fair", "worn", "needs_repair", "broken"]
+        },
+        "value": {
+          "type": "number",
+          "description": "Estimated value or purchase price"
+        },
+        "warranty_expiry": {
+          "type": "string",
+          "description": "Warranty expiration date (YYYY-MM-DD)"
+        },
+        "brand": {
+          "type": "string",
+          "description": "Brand or manufacturer"
+        },
+        "model": {
+          "type": "string",
+          "description": "Model name or number"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Free-form notes"
+        },
+        "tags": {
+          "type": "string",
+          "description": "JSON array of tags"
+        }
+      },
+      "description": "A physical thing the user owns"
+    },
+    "enabled": true
+  },
+  {
+    "type_name": "Device",
+    "description": "A tech device the user owns that runs software or connects to a network — computers, phones, tablets, servers, routers, smart home hubs.",
+    "json_schema": {
+      "label": "Device",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Device name or label"
+        },
+        "device_type": {
+          "type": "string",
+          "description": "Type: laptop, desktop, phone, tablet, server, router, smart_home, peripheral",
+          "enum": ["laptop", "desktop", "phone", "tablet", "server", "router", "smart_home", "peripheral"]
+        },
+        "manufacturer": {
+          "type": "string",
+          "description": "Manufacturer (Apple, Dell, Lenovo, etc.)"
+        },
+        "model": {
+          "type": "string",
+          "description": "Model name or number"
+        },
+        "os": {
+          "type": "string",
+          "description": "Operating system (macOS 14.5, Windows 11, iOS 18, etc.)"
+        },
+        "specs": {
+          "type": "string",
+          "description": "Specifications (RAM, CPU, storage) as free text"
+        },
+        "serial_number": {
+          "type": "string",
+          "description": "Serial number or service tag"
+        },
+        "purchased_date": {
+          "type": "string",
+          "description": "Date purchased (YYYY-MM-DD)"
+        },
+        "status": {
+          "type": "string",
+          "description": "Status: active, retired, broken, stored, loaned_out",
+          "enum": ["active", "retired", "broken", "stored", "loaned_out"]
+        },
+        "location": {
+          "type": "string",
+          "description": "Physical location"
+        },
+        "ip_address": {
+          "type": "string",
+          "description": "IP address on the local network"
+        },
+        "warranty_expiry": {
+          "type": "string",
+          "description": "Warranty expiration date (YYYY-MM-DD)"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Free-form notes"
+        }
+      },
+      "description": "A tech device the user owns"
+    },
+    "enabled": true
+  },
+  {
+    "type_name": "Service",
+    "description": "A website, app, or online platform the user interacts with. Can be free or have a paid Subscription linked via has_subscription relationship.",
+    "json_schema": {
+      "label": "Service",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Service name (GitHub, Spotify, Netflix, etc.)"
+        },
+        "category": {
+          "type": "string",
+          "description": "Category: cloud, streaming, productivity, dev_tools, ai, communication, finance, health, education, entertainment, shopping, social",
+          "enum": ["cloud", "streaming", "productivity", "dev_tools", "ai", "communication", "finance", "health", "education", "entertainment", "shopping", "social"]
+        },
+        "url": {
+          "type": "string",
+          "description": "Service website URL"
+        },
+        "account_handle": {
+          "type": "string",
+          "description": "Username or account identifier on this service"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Free-form notes"
+        }
+      },
+      "description": "A website, app, or online platform"
+    },
+    "enabled": true
+  },
+  {
+    "type_name": "Subscription",
+    "description": "A recurring payment plan for a Service. Linked to its Service via has_subscription relationship. Payments are tracked as FinancialTransaction records.",
+    "json_schema": {
+      "label": "Subscription",
+      "type": "object",
+      "properties": {
+        "plan": {
+          "type": "string",
+          "description": "Plan or tier name (Pro, Family, Enterprise, Free)"
+        },
+        "amount": {
+          "type": "number",
+          "description": "Billing amount per period (0 for free)"
+        },
+        "currency": {
+          "type": "string",
+          "description": "Currency code (EUR, USD, PLN)"
+        },
+        "period": {
+          "type": "string",
+          "description": "Billing period: monthly, yearly, weekly, quarterly",
+          "enum": ["monthly", "yearly", "weekly", "quarterly"]
+        },
+        "status": {
+          "type": "string",
+          "description": "Status: active, cancelled, paused, expired, trial",
+          "enum": ["active", "cancelled", "paused", "expired", "trial"]
+        },
+        "start_date": {
+          "type": "string",
+          "description": "Subscription start date (YYYY-MM-DD)"
+        },
+        "next_billing": {
+          "type": "string",
+          "description": "Next billing date (YYYY-MM-DD)"
+        },
+        "auto_renew": {
+          "type": "boolean",
+          "description": "Whether the subscription auto-renews"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Free-form notes"
+        }
+      },
+      "description": "A recurring payment plan for a service"
+    },
+    "enabled": true
+  },
+  {
+    "type_name": "Document",
+    "description": "A file or document — contracts, receipts, manuals, agreements, certificates, scanned documents. Tracks file reference, expiry, and category.",
+    "json_schema": {
+      "label": "Document",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Document title"
+        },
+        "type": {
+          "type": "string",
+          "description": "Type: contract, receipt, manual, certificate, tax, legal, insurance_policy, warranty, id, report, other",
+          "enum": ["contract", "receipt", "manual", "certificate", "tax", "legal", "insurance_policy", "warranty", "id", "report", "other"]
+        },
+        "file_url": {
+          "type": "string",
+          "description": "URL or file path to the document"
+        },
+        "date": {
+          "type": "string",
+          "description": "Document date or issue date (YYYY-MM-DD)"
+        },
+        "expiry_date": {
+          "type": "string",
+          "description": "Expiration or renewal date (YYYY-MM-DD)"
+        },
+        "issuer": {
+          "type": "string",
+          "description": "Issuing entity or organisation"
+        },
+        "tags": {
+          "type": "string",
+          "description": "JSON array of tags"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Free-form notes"
+        }
+      },
+      "description": "A file or document"
+    },
+    "enabled": true
+  },
+  {
+    "type_name": "Trip",
+    "description": "A planned or past trip — travel, vacation, business trip. Tracks dates, destination, purpose, and related documents and shopping.",
+    "json_schema": {
+      "label": "Trip",
+      "type": "object",
+      "properties": {
+        "destination": {
+          "type": "string",
+          "description": "Destination (city, country, or place name)"
+        },
+        "start_date": {
+          "type": "string",
+          "description": "Departure date (YYYY-MM-DD)"
+        },
+        "end_date": {
+          "type": "string",
+          "description": "Return date (YYYY-MM-DD)"
+        },
+        "purpose": {
+          "type": "string",
+          "description": "Purpose: vacation, business, family, medical, education, other",
+          "enum": ["vacation", "business", "family", "medical", "education", "other"]
+        },
+        "accommodation": {
+          "type": "string",
+          "description": "Accommodation details"
+        },
+        "transport": {
+          "type": "string",
+          "description": "Transport details (flight number, car rental, train)"
+        },
+        "status": {
+          "type": "string",
+          "description": "Status: planned, booked, in_progress, completed, cancelled",
+          "enum": ["planned", "booked", "in_progress", "completed", "cancelled"]
+        },
+        "budget": {
+          "type": "number",
+          "description": "Total budget for the trip"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Free-form notes and packing list"
+        }
+      },
+      "description": "A planned or past trip"
+    },
+    "enabled": true
+  },
+  {
+    "type_name": "Car",
+    "description": "A vehicle the user owns or leases — car, motorcycle, bike. Tracks service, insurance, registration, and ownership lifecycle.",
+    "json_schema": {
+      "label": "Car",
+      "type": "object",
+      "properties": {
+        "make": {
+          "type": "string",
+          "description": "Make (Toyota, BMW, Tesla, etc.)"
+        },
+        "model": {
+          "type": "string",
+          "description": "Model name"
+        },
+        "year": {
+          "type": "integer",
+          "description": "Year of manufacture"
+        },
+        "license_plate": {
+          "type": "string",
+          "description": "License plate number"
+        },
+        "vin": {
+          "type": "string",
+          "description": "VIN (Vehicle Identification Number)"
+        },
+        "fuel_type": {
+          "type": "string",
+          "description": "Fuel type: petrol, diesel, electric, hybrid, plugin_hybrid",
+          "enum": ["petrol", "diesel", "electric", "hybrid", "plugin_hybrid"]
+        },
+        "owner_status": {
+          "type": "string",
+          "description": "Owner: owned, leased, financed, company_car",
+          "enum": ["owned", "leased", "financed", "company_car"]
+        },
+        "status": {
+          "type": "string",
+          "description": "Status: active, in_service, stored, sold, scrapped",
+          "enum": ["active", "in_service", "stored", "sold", "scrapped"]
+        },
+        "last_service_date": {
+          "type": "string",
+          "description": "Date of last service (YYYY-MM-DD)"
+        },
+        "service_interval_km": {
+          "type": "integer",
+          "description": "Service interval in kilometers"
+        },
+        "next_service_date": {
+          "type": "string",
+          "description": "Estimated next service date (YYYY-MM-DD)"
+        },
+        "next_service_km": {
+          "type": "integer",
+          "description": "Odometer reading for next service"
+        },
+        "current_mileage": {
+          "type": "integer",
+          "description": "Current odometer reading in km"
+        },
+        "insurance_policy_number": {
+          "type": "string",
+          "description": "Insurance policy number"
+        },
+        "insurance_expiry": {
+          "type": "string",
+          "description": "Insurance expiry date (YYYY-MM-DD)"
+        },
+        "registration_expiry": {
+          "type": "string",
+          "description": "Registration/road tax expiry (YYYY-MM-DD)"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Free-form notes"
+        }
+      },
+      "description": "A vehicle the user owns or leases"
+    },
+    "enabled": true
+  },
+  {
+    "type_name": "Insurance",
+    "description": "An insurance policy — car, health, home, life, travel, liability. Tracks coverage, premium, expiry, and renewal. Linked to the insured asset via covered_by relationship.",
+    "json_schema": {
+      "label": "Insurance Policy",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Type: car, health, home, life, travel, liability, pet, other",
+          "enum": ["car", "health", "home", "life", "travel", "liability", "pet", "other"]
+        },
+        "provider": {
+          "type": "string",
+          "description": "Insurance company name"
+        },
+        "policy_number": {
+          "type": "string",
+          "description": "Policy number"
+        },
+        "coverage_amount": {
+          "type": "number",
+          "description": "Maximum coverage amount in currency"
+        },
+        "currency": {
+          "type": "string",
+          "description": "Currency code"
+        },
+        "premium_amount": {
+          "type": "number",
+          "description": "Premium payment amount"
+        },
+        "premium_period": {
+          "type": "string",
+          "description": "Premium period: monthly, quarterly, yearly, one_time",
+          "enum": ["monthly", "quarterly", "yearly", "one_time"]
+        },
+        "start_date": {
+          "type": "string",
+          "description": "Policy start date (YYYY-MM-DD)"
+        },
+        "expiry_date": {
+          "type": "string",
+          "description": "Policy expiry date (YYYY-MM-DD)"
+        },
+        "auto_renew": {
+          "type": "boolean",
+          "description": "Whether the policy auto-renews"
+        },
+        "deductible": {
+          "type": "number",
+          "description": "Deductible/excess amount"
+        },
+        "status": {
+          "type": "string",
+          "description": "Status: active, expired, cancelled, pending",
+          "enum": ["active", "expired", "cancelled", "pending"]
+        },
+        "notes": {
+          "type": "string",
+          "description": "Free-form notes"
+        }
+      },
+      "description": "An insurance policy"
     },
     "enabled": true
   }

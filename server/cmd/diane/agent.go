@@ -3,15 +3,19 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/Emergent-Comapny/diane/internal/agents"
 	"github.com/Emergent-Comapny/diane/internal/config"
+	"github.com/Emergent-Comapny/diane/internal/db"
 	"github.com/Emergent-Comapny/diane/internal/memory"
 	sdkagents "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agentdefinitions"
+	sdkagentrun "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agents"
 )
 
 func cmdAgent(args []string) {
@@ -21,14 +25,21 @@ func cmdAgent(args []string) {
 		fmt.Println("Commands:")
 		fmt.Println("  list            List agent definitions (built-in + MP)")
 		fmt.Println("  seed            Seed all built-in agents to Memory Platform")
+		fmt.Println("  seed-db         Seed all built-in agents to local SQLite database")
+		fmt.Println("  list-db         List agents from local SQLite database")
+		fmt.Println("  stats [name]    Show run stats for agents (from local DB)")
+		fmt.Println("  trace <runID>    Fetch full trace of an agent run (messages, tools, parent)")
+		fmt.Println("  runs [name] [--since <duration>]  List recent agent runs from Memory Platform")
 		fmt.Println("  define <name>   Create or update a user-defined agent")
-		fmt.Println("  show <name>     Show agent detail")
+		fmt.Println("  show <name>     Show agent detail (from local DB)")
+		fmt.Println("  route <name> <weight>  Set routing weight for A/B testing")
+		fmt.Println("  tag <name> <tags>      Set tags for agent (comma-separated)")
 		fmt.Println("  sync [name]     Sync one or all user agents to Memory Platform")
 		fmt.Println("  trigger <name> [prompt]  Trigger an agent run and show the result")
 		fmt.Println("  delete <name>   Delete a user agent (local + MP)")
 		fmt.Println("")
-		fmt.Println("Built-in agents are immutable and ship with Diane. User agents")
-		fmt.Println("are created dynamically and stored on Memory Platform.")
+		fmt.Println("Local SQLite database (~/.diane/cron.db) is the single source of truth.")
+		fmt.Println("Built-in agents are immutable and seeded from Go code on every startup.")
 		return
 	}
 
@@ -37,6 +48,34 @@ func cmdAgent(args []string) {
 		cmdAgentList()
 	case "seed":
 		cmdAgentSeed()
+	case "seed-db":
+		cmdAgentSeedDB()
+	case "list-db":
+		cmdAgentListDB()
+	case "stats":
+		name := ""
+		if len(args) >= 2 {
+			name = args[1]
+		}
+		cmdAgentStats(name)
+	case "trace":
+		runID := ""
+		if len(args) >= 2 {
+			runID = args[1]
+		}
+		cmdAgentTrace(runID)
+	case "runs":
+		name := ""
+		sinceDur := "24h"
+		for i := 1; i < len(args); i++ {
+			if args[i] == "--since" && i+1 < len(args) {
+				sinceDur = args[i+1]
+				i++
+			} else if !strings.HasPrefix(args[i], "--") {
+				name = args[i]
+			}
+		}
+		cmdAgentRuns(name, sinceDur)
 	case "define":
 		if len(args) < 2 {
 			fmt.Println("Usage: diane agent define <name>")
@@ -49,6 +88,18 @@ func cmdAgent(args []string) {
 			return
 		}
 		cmdAgentShow(args[1])
+	case "route":
+		if len(args) < 3 {
+			fmt.Println("Usage: diane agent route <name> <weight>")
+			return
+		}
+		cmdAgentRoute(args[1], args[2])
+	case "tag":
+		if len(args) < 3 {
+			fmt.Println("Usage: diane agent tag <name> <tag1,tag2,...>")
+			return
+		}
+		cmdAgentTag(args[1], args[2])
 	case "sync":
 		name := ""
 		if len(args) >= 2 {
@@ -825,6 +876,44 @@ func cmdAgentTrigger(name, prompt string) {
 					fmt.Printf("   %s(%v)\n", tc.ToolName, truncateStr(fmt.Sprintf("%v", tc.Input), 80))
 				}
 			}
+
+			// Record run stats to local DB
+			func() {
+				localDB, err := db.New("")
+				if err != nil {
+					return
+				}
+				defer localDB.Close()
+
+				toolCallCount := 0
+				if toolCalls != nil {
+					toolCallCount = len(toolCalls.Data)
+				}
+
+				durMs := 0
+				if run.Data.DurationMs != nil {
+					durMs = *run.Data.DurationMs
+				}
+				inTokens := 0
+				outTokens := 0
+				if run.Data.TokenUsage != nil {
+					inTokens = int(run.Data.TokenUsage.TotalInputTokens)
+					outTokens = int(run.Data.TokenUsage.TotalOutputTokens)
+				}
+
+				if err := localDB.RecordRunStat(&db.AgentRunStat{
+					AgentName:     name,
+					RunID:         runID,
+					DurationMs:    durMs,
+					StepCount:     run.Data.StepCount,
+					ToolCallCount: toolCallCount,
+					InputTokens:   inTokens,
+					OutputTokens:  outTokens,
+					Status:        "success",
+				}); err != nil {
+					fmt.Fprintf(os.Stderr, "\n⚠️  Stats recording: %v\n", err)
+				}
+			}()
 			return
 		}
 		if run.Data.Status == "failed" || run.Data.Status == "error" {
@@ -891,6 +980,555 @@ func cmdAgentDelete(name string) {
 		os.Exit(1)
 	}
 	fmt.Printf("✅ Agent '%s' deleted from local config\n", name)
+}
+
+// ============================================================================
+// Local SQLite Database Commands
+// ============================================================================
+
+// cmdAgentSeedDB seeds all built-in agents to the local SQLite database.
+func cmdAgentSeedDB() {
+	d, err := db.New("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Database: %v\n", err)
+		return
+	}
+	defer d.Close()
+
+	if err := agents.SeedToDB(d); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Seed: %v\n", err)
+		return
+	}
+	fmt.Println("✅ Built-in agents seeded to local SQLite database")
+
+	// Show what was seeded
+	all, err := d.ListAgentDefinitions("", nil)
+	if err != nil {
+		return
+	}
+	for _, a := range all {
+		tools, _ := db.ToolsFromJSON(a.ToolsJSON)
+		tags, _ := db.TagsFromJSON(a.TagsJSON)
+		def := ""
+		if a.IsDefault {
+			def = " [default]"
+		}
+		fmt.Printf("  • %s%s — %s (%d tools, tags: %v)\n",
+			a.Name, def, a.Status, len(tools), tags)
+	}
+}
+
+// cmdAgentListDB lists agents from the local SQLite database.
+func cmdAgentListDB() {
+	d, err := db.New("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Database: %v\n", err)
+		return
+	}
+	defer d.Close()
+
+	all, err := d.ListAgentDefinitions("", nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ List: %v\n", err)
+		return
+	}
+	if len(all) == 0 {
+		fmt.Println("No agents in local database. Run 'diane agent seed-db' first.")
+		return
+	}
+
+	fmt.Println("═══ Local Agent Definitions ═══\n")
+	for _, a := range all {
+		tools, _ := db.ToolsFromJSON(a.ToolsJSON)
+		tags, _ := db.TagsFromJSON(a.TagsJSON)
+		def := ""
+		if a.IsDefault {
+			def = " 👑 default"
+		}
+		exp := ""
+		if a.IsExperimental {
+			exp = " 🧪 experimental"
+		}
+		fmt.Printf("  %s%s%s\n", a.Name, def, exp)
+		fmt.Printf("    Source: %s | Status: %s | Weight: %.2f\n", a.Source, a.Status, a.RoutingWeight)
+		fmt.Printf("    Tools: %d | Flow: %s | Attempts: %d\n", len(tools), a.FlowType, a.MaxSteps)
+		if len(tags) > 0 {
+			fmt.Printf("    Tags: %v\n", tags)
+		}
+		if a.Description != "" {
+			fmt.Printf("    %s\n", a.Description)
+		}
+		fmt.Println()
+	}
+}
+
+// cmdAgentStats shows run statistics for agents from the local DB.
+func cmdAgentStats(name string) {
+	d, err := db.New("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Database: %v\n", err)
+		return
+	}
+	defer d.Close()
+
+	if name != "" {
+		// Show individual agent stats
+		stats, err := d.GetAgentRunStats(name, 24)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Stats: %v\n", err)
+			return
+		}
+		a, _ := d.GetAgentDefinition(name)
+		if a != nil {
+			tags, _ := db.TagsFromJSON(a.TagsJSON)
+			fmt.Printf("═══ Stats for %s ═══\n", name)
+			fmt.Printf("  Status: %s | Tags: %v | Weight: %.2f\n\n", a.Status, tags, a.RoutingWeight)
+		}
+		if len(stats) == 0 {
+			fmt.Println("  No runs recorded in the last 24 hours.")
+			return
+		}
+		var totalDur, totalInput, totalOutput, success int
+		for _, s := range stats {
+			totalDur += s.DurationMs
+			totalInput += s.InputTokens
+			totalOutput += s.OutputTokens
+			if s.Status == "success" || s.Status == "completed" {
+				success++
+			}
+		}
+		n := len(stats)
+		fmt.Printf("  Runs: %d | Success: %d | Failures: %d\n", n, success, n-success)
+		fmt.Printf("  Avg duration: %dms | Avg input: %d | Avg output: %d\n",
+			totalDur/n, totalInput/n, totalOutput/n)
+	} else {
+		// Show summary for all agents
+		summaries, err := d.GetAgentStatsSummary(24)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Stats summary: %v\n", err)
+			return
+		}
+		if len(summaries) == 0 {
+			fmt.Println("No runs recorded in the last 24 hours.")
+			return
+		}
+		fmt.Println("═══ Agent Stats (last 24h) ═══\n")
+		for _, s := range summaries {
+			successRate := float64(0)
+			if s.TotalRuns > 0 {
+				successRate = float64(s.SuccessRuns) / float64(s.TotalRuns) * 100
+			}
+			fmt.Printf("  %s\n", s.AgentName)
+			fmt.Printf("    Runs: %d | Success: %.0f%% | Avg: %dms | Avg tokens: %d in / %d out\n",
+				s.TotalRuns, successRate, int(s.AvgDurationMs),
+				int(s.AvgInputTokens), int(s.AvgOutputTokens))
+		}
+	}
+}
+
+// cmdAgentRoute sets the routing weight for an agent.
+func cmdAgentRoute(name, weightStr string) {
+	var weight float64
+	if _, err := fmt.Sscanf(weightStr, "%f", &weight); err != nil || weight < 0 || weight > 1 {
+		fmt.Fprintf(os.Stderr, "❌ Weight must be a float between 0.0 and 1.0\n")
+		return
+	}
+
+	d, err := db.New("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Database: %v\n", err)
+		return
+	}
+	defer d.Close()
+
+	a, err := d.GetAgentDefinition(name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Lookup: %v\n", err)
+		return
+	}
+	if a == nil {
+		fmt.Fprintf(os.Stderr, "❌ Agent '%s' not found\n", name)
+		return
+	}
+
+	a.RoutingWeight = weight
+	if err := d.UpsertAgentDefinition(a); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Update: %v\n", err)
+		return
+	}
+	fmt.Printf("✅ %s routing weight set to %.2f\n", name, weight)
+}
+
+// cmdAgentTag sets tags for an agent.
+func cmdAgentTag(name, tagsStr string) {
+	tagList := splitTrim(tagsStr)
+	tagsJSON, err := json.Marshal(tagList)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Marshal tags: %v\n", err)
+		return
+	}
+
+	d, err := db.New("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Database: %v\n", err)
+		return
+	}
+	defer d.Close()
+
+	a, err := d.GetAgentDefinition(name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Lookup: %v\n", err)
+		return
+	}
+	if a == nil {
+		fmt.Fprintf(os.Stderr, "❌ Agent '%s' not found\n", name)
+		return
+	}
+
+	a.TagsJSON = string(tagsJSON)
+	if err := d.UpsertAgentDefinition(a); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Update: %v\n", err)
+		return
+	}
+	fmt.Printf("✅ %s tags set to: %v\n", name, tagList)
+}
+
+// ============================================================================
+// Agent Run Trace & Inspect
+// ============================================================================
+
+// cmdAgentTrace fetches and displays the full trace of an agent run.
+func cmdAgentTrace(runID string) {
+	if runID == "" {
+		fmt.Println("Usage: diane agent trace <runID>")
+		return
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Config: %v\n", err)
+		return
+	}
+	pc := cfg.Active()
+	if pc == nil {
+		fmt.Fprintf(os.Stderr, "No project configured.\n")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	bridge, err := memory.New(memory.Config{
+		ServerURL: pc.ServerURL,
+		APIKey:    pc.Token,
+		ProjectID: pc.ProjectID,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Bridge: %v\n", err)
+		return
+	}
+	defer bridge.Close()
+
+	fmt.Println("═══ Agent Run Trace ═══\n")
+	fmt.Printf("Run ID: %s\n\n", runID)
+
+	// Fetch full trace
+	full, err := bridge.GetProjectRunFull(ctx, runID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Fetch: %v\n", err)
+		return
+	}
+
+	run := full.Data.Run
+	if run == nil {
+		fmt.Println("⚠️  No run data returned.")
+		return
+	}
+
+	// Run metadata
+	fmt.Println("── Run Metadata ──")
+	fmt.Printf("  Agent:        %s (%s)\n", run.AgentName, run.AgentID)
+	fmt.Printf("  Status:       %s\n", run.Status)
+	duration := "N/A"
+	if run.DurationMs != nil {
+		duration = fmt.Sprintf("%dms (%s)", *run.DurationMs, time.Duration(*run.DurationMs)*time.Millisecond)
+	}
+	fmt.Printf("  Duration:     %s\n", duration)
+	fmt.Printf("  Steps:        %d\n", run.StepCount)
+	fmt.Printf("  Started:      %s\n", run.StartedAt.Format(time.RFC3339))
+	if run.CompletedAt != nil {
+		fmt.Printf("  Completed:    %s\n", run.CompletedAt.Format(time.RFC3339))
+	}
+	if run.ErrorMessage != nil {
+		fmt.Printf("  Error:        %s\n", *run.ErrorMessage)
+	}
+	if run.Model != nil {
+		fmt.Printf("  Model:        %s\n", *run.Model)
+	}
+	if run.Provider != nil {
+		fmt.Printf("  Provider:     %s\n", *run.Provider)
+	}
+	if run.TraceID != nil {
+		fmt.Printf("  Trace ID:     %s\n", *run.TraceID)
+	}
+	if run.RootRunID != nil {
+		fmt.Printf("  Root Run ID:  %s\n", *run.RootRunID)
+	}
+	if run.ParentRunID != nil {
+		fmt.Printf("  Parent Run:   %s\n", *run.ParentRunID)
+	}
+	if run.TokenUsage != nil {
+		fmt.Printf("  Input Tokens: %d\n", run.TokenUsage.TotalInputTokens)
+		fmt.Printf("  Output Tokens: %d\n", run.TokenUsage.TotalOutputTokens)
+		fmt.Printf("  Cost:         $%.6f\n", run.TokenUsage.EstimatedCostUSD)
+	}
+	if len(run.Summary) > 0 {
+		fmt.Println("\n── Summary ──")
+		for k, v := range run.Summary {
+			fmt.Printf("  %s: %v\n", k, truncateStr(fmt.Sprintf("%v", v), 200))
+		}
+	}
+
+	// Messages
+	if len(full.Data.Messages) > 0 {
+		fmt.Printf("\n── Messages (%d) ──\n", len(full.Data.Messages))
+		for _, m := range full.Data.Messages {
+			content := ""
+			for _, key := range []string{"content", "text", "response"} {
+				if v, ok := m.Content[key]; ok {
+					content = truncateStr(fmt.Sprintf("%v", v), 200)
+					break
+				}
+			}
+			prefix := ""
+			switch m.Role {
+			case "user":
+				prefix = "👤"
+			case "assistant", "model":
+				prefix = "🤖"
+			case "tool", "function":
+				prefix = "🔧"
+			default:
+				prefix = "💬"
+			}
+			fmt.Printf("  %s [%s] (step %d): %s\n", prefix, m.Role, m.StepNumber, content)
+		}
+	}
+
+	// Tool calls
+	if len(full.Data.ToolCalls) > 0 {
+		fmt.Printf("\n── Tool Calls (%d) ──\n", len(full.Data.ToolCalls))
+		for _, tc := range full.Data.ToolCalls {
+			inputPreview := ""
+			for _, key := range []string{"query", "question", "name", "message", "url", "text"} {
+				if v, ok := tc.Input[key]; ok {
+					inputPreview = truncateStr(fmt.Sprintf("%v", v), 100)
+					break
+				}
+			}
+			status := "✅"
+			if tc.Status == "error" || tc.Status == "failed" {
+				status = "❌"
+			}
+			dur := ""
+			if tc.DurationMs != nil {
+				dur = fmt.Sprintf(" [%dms]", *tc.DurationMs)
+			}
+			fmt.Printf("  %s %s(%s)%s\n", status, tc.ToolName, inputPreview, dur)
+		}
+
+		// Search for search-knowledge calls and suggest trace inspection
+		for _, tc := range full.Data.ToolCalls {
+			if tc.ToolName == "search-knowledge" {
+				fmt.Println()
+				fmt.Println("  🔗 This run called search-knowledge.")
+				fmt.Println("     Each search-knowledge call creates an internal graph-query-agent run.")
+				fmt.Println("     To trace the internal cost, run: diane agent runs 'Chat session for graph-query-agent'")
+			}
+		}
+	}
+
+	// Parent run
+	if full.Data.ParentRun != nil {
+		pr := full.Data.ParentRun
+		fmt.Printf("\n── Parent Run ──\n")
+		fmt.Printf("  ID:       %s\n", pr.ID)
+		fmt.Printf("  Agent:    %s\n", pr.AgentName)
+		fmt.Printf("  Status:   %s\n", pr.Status)
+		if pr.DurationMs != nil {
+			fmt.Printf("  Duration: %dms\n", *pr.DurationMs)
+		}
+		if pr.TokenUsage != nil {
+			fmt.Printf("  Cost:     $%.6f\n", pr.TokenUsage.EstimatedCostUSD)
+		}
+		fmt.Printf("\n  To view parent run: diane agent trace %s\n", pr.ID)
+	}
+}
+
+// cmdAgentRuns lists recent agent runs from Memory Platform.
+func cmdAgentRuns(agentName, sinceStr string) {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Config: %v\n", err)
+		return
+	}
+	pc := cfg.Active()
+	if pc == nil {
+		fmt.Fprintf(os.Stderr, "No project configured.\n")
+		return
+	}
+
+	since, err := time.ParseDuration(sinceStr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Invalid duration: %s (use e.g. '24h', '1h', '7d')\n", sinceStr)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	bridge, err := memory.New(memory.Config{
+		ServerURL: pc.ServerURL,
+		APIKey:    pc.Token,
+		ProjectID: pc.ProjectID,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Bridge: %v\n", err)
+		return
+	}
+	defer bridge.Close()
+
+	// Try aggregate stats endpoint first
+	sinceTime := time.Now().Add(-since)
+	runsResp, err := bridge.GetProjectRunStats(ctx, &sdkagentrun.RunStatsOptions{
+		Since: &sinceTime,
+	})
+	if err == nil && runsResp != nil {
+		stats := runsResp.Data
+		fmt.Printf("═══ Agent Runs (last %s) ═══\n\n", sinceStr)
+
+		// Overview
+		o := stats.Overview
+		fmt.Printf("Total: %d | ✅ %d | ❌ %d | ⚠️  %d | Avg: %v | Cost: $%.4f\n\n",
+			o.TotalRuns, o.SuccessCount, o.FailedCount, o.ErrorCount,
+			time.Duration(o.AvgDurationMs)*time.Millisecond, o.TotalCostUSD)
+
+		// Per-agent breakdown
+		if len(stats.ByAgent) > 0 {
+			var names []string
+			for name := range stats.ByAgent {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+
+			filtered := names
+			if agentName != "" {
+				filtered = nil
+				for _, n := range names {
+					if strings.Contains(n, agentName) {
+						filtered = append(filtered, n)
+					}
+				}
+			}
+
+			for _, name := range filtered {
+				a := stats.ByAgent[name]
+				fmt.Printf("  %s\n", name)
+				fmt.Printf("    Runs: %d | ✅ %d | ❌ %d | Avg: %v | Cost: $%.4f | Tokens: %.0f in / %.0f out\n",
+					a.Total, a.Success, a.Failed,
+					time.Duration(a.AvgDurationMs)*time.Millisecond,
+					a.TotalCostUSD, a.AvgInputTokens, a.AvgOutputTokens)
+			}
+		}
+
+		// Tool stats
+		if stats.ToolStats.TotalToolCalls > 0 {
+			fmt.Printf("\n── Tool Calls: %d total ──\n", stats.ToolStats.TotalToolCalls)
+			type toolEntry struct {
+				name string
+				stat sdkagentrun.RunStatsTool
+			}
+			var tools []toolEntry
+			for name, stat := range stats.ToolStats.ByTool {
+				tools = append(tools, toolEntry{name, stat})
+			}
+			sort.Slice(tools, func(i, j int) bool {
+				return tools[i].stat.Total > tools[j].stat.Total
+			})
+			for _, t := range tools {
+				rate := float64(0)
+				if t.stat.Total > 0 {
+					rate = float64(t.stat.Success) / float64(t.stat.Total) * 100
+				}
+				fmt.Printf("  %s: %d calls (%d ✅, %.0f%%, avg %v)\n",
+					t.name, t.stat.Total, t.stat.Success, rate,
+					time.Duration(t.stat.AvgDurationMs)*time.Millisecond)
+			}
+		}
+
+		// Top errors
+		if len(stats.TopErrors) > 0 {
+			fmt.Println("\n── Top Errors ──")
+			for _, e := range stats.TopErrors {
+				fmt.Printf("  %d× %s\n", e.Count, e.Message)
+			}
+		}
+
+		// Hint to dig deeper
+		if agentName != "" {
+			fmt.Printf("\n💡 To see full details of a run: diane agent trace <runID>\n")
+		} else {
+			fmt.Printf("\n💡 To filter by agent: diane agent runs <agent-name>\n")
+			fmt.Printf("💡 To trace a specific run: diane agent trace <runID>\n")
+		}
+		return
+	}
+
+	// Fallback: list all project runs directly
+	fmt.Printf("═══ Recent Runs (last %s) — Legacy API ═══\n\n", sinceStr)
+	runs, err := bridge.Client().Agents.ListProjectRuns(ctx, pc.ProjectID, &sdkagentrun.ListRunsOptions{
+		Limit: 20,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ List runs: %v\n", err)
+		return
+	}
+
+	filtered := runs.Data.Items
+	if agentName != "" {
+		var match []sdkagentrun.AgentRun
+		for _, r := range filtered {
+			if strings.Contains(r.AgentName, agentName) {
+				match = append(match, r)
+			}
+		}
+		filtered = match
+	}
+
+	if len(filtered) == 0 {
+		fmt.Println("No runs found.")
+		return
+	}
+
+	for _, r := range filtered {
+		dur := "N/A"
+		if r.DurationMs != nil {
+			dur = fmt.Sprintf("%dms", *r.DurationMs)
+		}
+		fmt.Printf("  %s\n", r.ID)
+		fmt.Printf("    Agent: %s | Status: %s | Duration: %s | Steps: %d\n",
+			r.AgentName, r.Status, dur, r.StepCount)
+		if r.TokenUsage != nil {
+			fmt.Printf("    Cost: $%.6f | Tokens: %d in / %d out\n",
+				r.TokenUsage.EstimatedCostUSD, r.TokenUsage.TotalInputTokens, r.TokenUsage.TotalOutputTokens)
+		}
+		fmt.Printf("    Started: %s\n", r.StartedAt.Format(time.RFC3339))
+		if r.ErrorMessage != nil {
+			fmt.Printf("    Error: %s\n", *r.ErrorMessage)
+		}
+		fmt.Println()
+	}
+	fmt.Printf("💡 Full trace: diane agent trace <runID>\n")
 }
 
 // ─── Helpers ───

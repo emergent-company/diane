@@ -65,7 +65,8 @@ func cmdSchema(args []string) {
 
 	start := time.Now()
 	results, err := schema.Apply(ctx, bridge.Client(), pc.ProjectID, &schema.ApplyOptions{
-		DryRun: dryRun,
+		DryRun:    dryRun,
+		ServerURL: pc.ServerURL,
 	})
 	if err != nil {
 		log.Fatalf("Schema apply failed: %v", err)

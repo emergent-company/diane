@@ -293,10 +293,28 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.Message) {
 	// Stop typing indicator
 	b.stopTyping(responseChannel)
 
-	// Send response if we got one
+	// Phase 2: For new threads, extract [TITLE: ...] tag from response
+	// BEFORE sending to Discord so the tag never appears in chat.
+	var threadTitle string
+	if !isThread && strings.Contains(response, "[TITLE:") {
+		threadTitle = extractTitleFromResponse(&response)
+	}
+
+	// Send response if we got one (now with title stripped)
 	if response != "" {
 		b.sendMessage(s, responseChannel, response)
 		processingOK = true
+	}
+
+	// Rename thread if agent suggested a title
+	if threadTitle != "" {
+		if _, err := s.ChannelEdit(responseChannel, &discordgo.ChannelEdit{
+			Name: threadTitle,
+		}); err != nil {
+			log.Printf("[THR] Title update failed: %v", err)
+		} else {
+			log.Printf("[THR] Renamed thread to %q", threadTitle)
+		}
 	}
 
 	// Swap reactions: 👀 → ✅ on success, 👀 → ❌ on failure (Hermes pattern)
@@ -305,28 +323,6 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.Message) {
 		s.MessageReactionAdd(channelID, m.ID, "✅")
 	} else {
 		s.MessageReactionAdd(channelID, m.ID, "❌")
-	}
-
-	// Phase 2: If this was a new thread and the agent included a [TITLE: ...]
-	// tag, extract it, strip it from the visible response, and rename the thread.
-	if !isThread && processingOK && strings.Contains(response, "[TITLE:") {
-		newTitle := extractTitleFromResponse(&response)
-		if newTitle != "" {
-			// Re-send with title stripped
-			// (message was already sent above — edit it)
-			if _, err := s.ChannelEdit(responseChannel, &discordgo.ChannelEdit{
-				Name: newTitle,
-			}); err != nil {
-				log.Printf("[THR] Title update failed: %v", err)
-			} else {
-				log.Printf("[THR] Renamed thread to %q", newTitle)
-				// Re-send the stripped response (remove [TITLE:...] tag)
-				// We already sent the full response, so edit the last message
-				if msgs, err := s.ChannelMessages(responseChannel, 1, "", "", ""); err == nil && len(msgs) > 0 && msgs[0].Author.ID == botID {
-					s.ChannelMessageEdit(responseChannel, msgs[0].ID, response)
-				}
-			}
-		}
 	}
 
 	log.Printf("[RES] channel=%s duration=%v chars=%d", responseChannel, time.Since(start).Round(time.Millisecond), len(response))
@@ -796,6 +792,57 @@ fetchResponse:
 			defer cancel()
 			globalBridge.AppendMessage(storeCtx, cs.SessionID, "user", userMsg, 0)
 			globalBridge.AppendMessage(storeCtx, cs.SessionID, "assistant", responseText, 0)
+		}()
+	}
+
+	// Record run stats for A/B analytics (non-blocking)
+	if b.sqliteDB != nil {
+		go func() {
+			recordCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			// Fetch run details for token usage and step count
+			runDetail, err := globalBridge.GetProjectRun(recordCtx, runID)
+			if err != nil {
+				return
+			}
+
+			// Safely extract values from pointers
+			durMs := 0
+			if runDetail.Data.DurationMs != nil {
+				durMs = *runDetail.Data.DurationMs
+			}
+			inTokens := 0
+			if runDetail.Data.TokenUsage != nil {
+				inTokens = int(runDetail.Data.TokenUsage.TotalInputTokens)
+			}
+			outTokens := 0
+			if runDetail.Data.TokenUsage != nil {
+				outTokens = int(runDetail.Data.TokenUsage.TotalOutputTokens)
+			}
+
+			// Count tool calls from messages
+			toolCallCount := 0
+			if msgs != nil {
+				for _, m := range msgs.Data {
+					if _, hasFC := m.Content["function_calls"]; hasFC {
+						toolCallCount++
+					}
+				}
+			}
+
+			stat := &db.AgentRunStat{
+				AgentName:     agentName,
+				RunID:         runID,
+				SessionID:     cs.SessionID,
+				DurationMs:    durMs,
+				StepCount:     runDetail.Data.StepCount,
+				ToolCallCount: toolCallCount,
+				InputTokens:   inTokens,
+				OutputTokens:  outTokens,
+				Status:        "success",
+			}
+			b.sqliteDB.RecordRunStat(stat)
 		}()
 	}
 

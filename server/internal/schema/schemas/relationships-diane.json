@@ -1,0 +1,146 @@
+[
+  {
+    "name": "assigned_to",
+    "label": "Assigned To",
+    "inverse_label": "Has Tasks",
+    "description": "Links a task to the person responsible for completing it.",
+    "source_type": "Task",
+    "target_type": "Person"
+  },
+  {
+    "name": "belongs_to_project",
+    "label": "Belongs To Project",
+    "inverse_label": "Has Tasks",
+    "description": "Links a task to its parent project.",
+    "source_type": "Task",
+    "target_type": "Project"
+  },
+  {
+    "name": "involves_person",
+    "label": "Involves Person",
+    "inverse_label": "Has Events",
+    "description": "Links a calendar event to a person who attends or is involved.",
+    "source_type": "CalendarEvent",
+    "target_type": "Person"
+  },
+  {
+    "name": "located_at",
+    "label": "Located At",
+    "inverse_label": "Has Location",
+    "description": "Associates an entity with a physical place (calendar events, items, etc.).",
+    "source_type": "CalendarEvent",
+    "target_type": "Place"
+  },
+  {
+    "name": "related_to_contact",
+    "label": "Has Contact Record",
+    "inverse_label": "Linked Person",
+    "description": "Links a Person (enriched graph entity) to its raw Contact record.",
+    "source_type": "Person",
+    "target_type": "Contact"
+  },
+  {
+    "name": "triggered_task",
+    "label": "Triggered Task",
+    "inverse_label": "Triggered By",
+    "description": "Links a calendar event or note to a task it spawned as a follow-up.",
+    "source_type": "CalendarEvent",
+    "target_type": "Task"
+  },
+  {
+    "name": "works_at",
+    "label": "Works At",
+    "inverse_label": "Has Employees",
+    "description": "Links a person to the company they work for or contract with.",
+    "source_type": "Person",
+    "target_type": "Company"
+  },
+  {
+    "name": "uses_service",
+    "label": "Uses Service",
+    "inverse_label": "Used By",
+    "description": "Links a person to an online service or platform they use.",
+    "source_type": "Person",
+    "target_type": "Service"
+  },
+  {
+    "name": "has_subscription",
+    "label": "Has Plan",
+    "inverse_label": "Plan For",
+    "description": "Links a service to its recurring payment plan.",
+    "source_type": "Service",
+    "target_type": "Subscription"
+  },
+  {
+    "name": "has_transaction",
+    "label": "Has Transaction",
+    "inverse_label": "Transaction For",
+    "description": "Links a subscription, invoice, or project to an associated financial transaction.",
+    "source_type": "Subscription",
+    "target_type": "FinancialTransaction"
+  },
+  {
+    "name": "owns_device",
+    "label": "Owns Device",
+    "inverse_label": "Owned By",
+    "description": "Links a person to a tech device they own or use.",
+    "source_type": "Person",
+    "target_type": "Device"
+  },
+  {
+    "name": "owns_item",
+    "label": "Owns Item",
+    "inverse_label": "Owned By",
+    "description": "Links a person to a physical item they own.",
+    "source_type": "Person",
+    "target_type": "Item"
+  },
+  {
+    "name": "drives",
+    "label": "Drives",
+    "inverse_label": "Driven By",
+    "description": "Links a person to a vehicle they own or drive.",
+    "source_type": "Person",
+    "target_type": "Car"
+  },
+  {
+    "name": "tracks_habit",
+    "label": "Tracks Habit",
+    "inverse_label": "Tracked By",
+    "description": "Links a person to a habit they are tracking.",
+    "source_type": "Person",
+    "target_type": "Habit"
+  },
+  {
+    "name": "member_of",
+    "label": "Member Of",
+    "inverse_label": "Has Members",
+    "description": "Links a person to a project they participate in.",
+    "source_type": "Person",
+    "target_type": "Project"
+  },
+  {
+    "name": "covered_by",
+    "label": "Covered By",
+    "inverse_label": "Insures",
+    "description": "Links a car to its insurance policy.",
+    "source_type": "Car",
+    "target_type": "Insurance"
+  },
+  {
+    "name": "shopping_for",
+    "label": "Shopping For",
+    "inverse_label": "Has Shopping List",
+    "description": "Links a shopping item to the trip it is intended for.",
+    "source_type": "ShoppingItem",
+    "target_type": "Trip"
+  },
+  {
+    "name": "has_task",
+    "label": "Has Task",
+    "inverse_label": "Part Of",
+    "description": "Links a trip or project to a task that is part of its execution.",
+    "source_type": "Trip",
+    "target_type": "Task"
+  }
+]

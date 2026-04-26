@@ -401,6 +401,24 @@ func (b *Bridge) GetRunToolCalls(ctx context.Context, runID string) (*sdkagentru
 	return b.client.Agents.GetRunToolCalls(ctx, b.projectID, runID)
 }
 
+// GetProjectRunFull returns the full trace for a single run — run metadata,
+// messages, tool calls, and optional parent run — in one request.
+func (b *Bridge) GetProjectRunFull(ctx context.Context, runID string) (*sdkagentrun.APIResponse[sdkagentrun.AgentRunFull], error) {
+	return b.client.Agents.GetProjectRunFull(ctx, b.projectID, runID)
+}
+
+// GetProjectRunStats returns aggregate analytics for agent runs over a period
+// (overview, per-agent, top errors, tool stats, time series).
+func (b *Bridge) GetProjectRunStats(ctx context.Context, opts *sdkagentrun.RunStatsOptions) (*sdkagentrun.APIResponse[sdkagentrun.RunStats], error) {
+	return b.client.Agents.GetProjectRunStats(ctx, b.projectID, opts)
+}
+
+// GetProjectRunSessionStats returns session-level analytics — runs grouped by
+// (platform, channelId, threadId) from triggerMetadata.
+func (b *Bridge) GetProjectRunSessionStats(ctx context.Context, opts *sdkagentrun.RunStatsOptions) (*sdkagentrun.APIResponse[sdkagentrun.RunSessionStats], error) {
+	return b.client.Agents.GetProjectRunSessionStats(ctx, b.projectID, opts)
+}
+
 // ============================================================================
 // Internal helpers
 // ============================================================================
