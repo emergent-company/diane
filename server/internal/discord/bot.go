@@ -263,23 +263,35 @@ func (b *Bot) onReady(s *discordgo.Session, r *discordgo.Ready) {
 	log.Printf("Servers: %d — listening on %d channels", len(r.Guilds), len(b.config.AllowedChannels))
 }
 
-// onInteractionCreate handles Discord interaction events (button clicks, etc.).
+// onInteractionCreate handles Discord interaction events (button clicks, select menus, modal submits).
 func (b *Bot) onInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	switch i.Type {
 	case discordgo.InteractionMessageComponent:
 		b.handleComponentInteraction(s, i.Interaction)
+	case discordgo.InteractionModalSubmit:
+		b.handleModalSubmit(s, i.Interaction)
 	default:
 		log.Printf("[INT] Unhandled interaction type: %v", i.Type)
 	}
 }
 
-// handleComponentInteraction processes button clicks on agent question embeds.
+// handleComponentInteraction processes button clicks, select menu selections, and modal triggers
+// on agent question embeds.
 func (b *Bot) handleComponentInteraction(s *discordgo.Session, i *discordgo.Interaction) {
 	customID := i.MessageComponentData().CustomID
-	log.Printf("[INT] Button click: custom_id=%s user=%s", customID, i.Member.User.Username)
+	username := "(no member)"
+	if i.Member != nil && i.Member.User != nil {
+		username = i.Member.User.Username
+	}
+	log.Printf("[INT] Component interaction: custom_id=%s user=%s", customID, username)
 
-	// Custom ID format: "aq:<question_id>:<response_value>"
-	// e.g. "aq:abc-123:approve"
+	// Select menu interactions (aq-sel:<question_id> or aq-msel:<question_id>)
+	if strings.HasPrefix(customID, "aq-sel:") || strings.HasPrefix(customID, "aq-msel:") {
+		b.handleSelectMenu(s, i, customID)
+		return
+	}
+
+	// Button interactions: "aq:<question_id>:<response_value>"
 	if !strings.HasPrefix(customID, "aq:") {
 		log.Printf("[INT] Unknown custom_id format: %s", customID)
 		return
@@ -294,17 +306,115 @@ func (b *Bot) handleComponentInteraction(s *discordgo.Session, i *discordgo.Inte
 	questionID := parts[1]
 	responseValue := parts[2]
 
-	// Map response value to user-facing text
-	responseLabel := responseValue
-	labelMap := map[string]string{
-		"approve": "✅ Approve",
-		"modify":  "🔄 Modify",
-		"skip":    "❌ Skip",
-	}
-	if l, ok := labelMap[responseValue]; ok {
-		responseLabel = l
+	// Special value "__text__" triggers a modal for text input
+	if responseValue == "__text__" {
+		b.openTextModal(s, i, questionID)
+		return
 	}
 
+	// Standard button response
+	b.respondToQuestion(s, i, questionID, responseValue, responseValue)
+}
+
+// handleSelectMenu processes select menu (dropdown) selections on agent questions.
+func (b *Bot) handleSelectMenu(s *discordgo.Session, i *discordgo.Interaction, customID string) {
+	questionID := strings.TrimPrefix(customID, "aq-sel:")
+	questionID = strings.TrimPrefix(questionID, "aq-msel:")
+
+	vals := i.MessageComponentData().Values
+	if len(vals) == 0 {
+		log.Printf("[INT] Select menu with no values, skipping")
+		return
+	}
+
+	// Multi-select: join values with comma
+	responseValue := vals[0]
+	responseLabel := vals[0]
+	if len(vals) > 1 {
+		responseValue = strings.Join(vals, ",")
+		responseLabel = fmt.Sprintf("%s (+%d more)", vals[0], len(vals)-1)
+	}
+
+	b.respondToQuestion(s, i, questionID, responseValue, responseLabel)
+}
+
+// openTextModal shows a Discord modal for free-text input.
+func (b *Bot) openTextModal(s *discordgo.Session, i *discordgo.Interaction, questionID string) {
+	err := s.InteractionRespond(i, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseModal,
+		Data: &discordgo.InteractionResponseData{
+			CustomID: fmt.Sprintf("aq-modal:%s", questionID),
+			Title:    "Respond to Agent",
+			Components: []discordgo.MessageComponent{
+				discordgo.ActionsRow{
+					Components: []discordgo.MessageComponent{
+						discordgo.TextInput{
+							CustomID:    "response",
+							Label:       "Your response",
+							Style:       discordgo.TextInputParagraph,
+							Placeholder: "Type your response here...",
+							Required:    true,
+							MinLength:   1,
+							MaxLength:   1000,
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		log.Printf("[INT] Failed to open modal: %v", err)
+	}
+}
+
+// handleModalSubmit processes modal form submissions for agent questions.
+func (b *Bot) handleModalSubmit(s *discordgo.Session, i *discordgo.Interaction) {
+	customID := i.ModalSubmitData().CustomID
+	username := "(no member)"
+	if i.Member != nil && i.Member.User != nil {
+		username = i.Member.User.Username
+	}
+	log.Printf("[INT] Modal submit: custom_id=%s user=%s", customID, username)
+
+	if !strings.HasPrefix(customID, "aq-modal:") {
+		log.Printf("[INT] Unknown modal custom_id: %s", customID)
+		return
+	}
+
+	questionID := strings.TrimPrefix(customID, "aq-modal:")
+
+	// Extract text from the modal response.
+	// Components are []MessageComponent where each is an *ActionsRow
+	// containing *TextInput components.
+	var responseValue string
+	for _, row := range i.ModalSubmitData().Components {
+		actionRow, ok := row.(*discordgo.ActionsRow)
+		if !ok {
+			continue
+		}
+		for _, comp := range actionRow.Components {
+			if input, ok := comp.(*discordgo.TextInput); ok && input.CustomID == "response" {
+				responseValue = input.Value
+			}
+		}
+	}
+
+	if responseValue == "" {
+		log.Printf("[INT] Empty modal response, skipping")
+		return
+	}
+
+	// Use first 50 chars as the display label
+	responseLabel := responseValue
+	if len(responseLabel) > 50 {
+		responseLabel = responseLabel[:47] + "..."
+	}
+
+	b.respondToQuestion(s, i, questionID, responseValue, responseLabel)
+}
+
+// respondToQuestion sends the user's response to MP and updates the embed.
+func (b *Bot) respondToQuestion(s *discordgo.Session, i *discordgo.Interaction, questionID, responseValue, responseLabel string) {
 	log.Printf("[INT] Responding to question %s with %q", questionID[:12], responseValue)
 
 	// Acknowledge the interaction immediately (Discord requires this within 3s)
@@ -323,7 +433,6 @@ func (b *Bot) handleComponentInteraction(s *discordgo.Session, i *discordgo.Inte
 	notifResp, err := globalBridge.RespondToAgentQuestion(ctx, questionID, responseValue)
 	if err != nil {
 		log.Printf("[INT] Failed to respond to question %s: %v", questionID[:12], err)
-		// Edit the original embed to show error
 		_, editErr := s.InteractionResponseEdit(i, &discordgo.WebhookEdit{
 			Content: toPtr(fmt.Sprintf("❌ Failed to respond: %v", err)),
 		})
@@ -337,7 +446,7 @@ func (b *Bot) handleComponentInteraction(s *discordgo.Session, i *discordgo.Inte
 
 	// Update the original embed to show the response was submitted
 	_, editErr := s.InteractionResponseEdit(i, &discordgo.WebhookEdit{
-		Content: toPtr(fmt.Sprintf("🧠 **Agent Question**\nResponded: **%s**\n_Agent resuming..._ ✅", responseLabel)),
+		Content:    toPtr(fmt.Sprintf("🧠 **Agent Question**\nResponded: **%s**\n_Agent resuming..._ ✅", responseLabel)),
 		Components: &[]discordgo.MessageComponent{}, // remove buttons
 	})
 	if editErr != nil {
@@ -371,8 +480,9 @@ func (b *Bot) dispatchNotifications() {
 }
 
 // sendAgentQuestionToDiscord sends an agent_question notification to the
-// configured Discord channel as an embed with interactive buttons.
-// The data map contains: question_id, run_id, question, status.
+// configured Discord channel as an embed with interactive components.
+// The data map contains: question_id, run_id, question, options,
+// interaction_type, placeholder, max_length, status.
 func (b *Bot) sendAgentQuestionToDiscord(data map[string]interface{}) {
 	channelID := b.sendChannelID
 	if channelID == "" {
@@ -383,11 +493,21 @@ func (b *Bot) sendAgentQuestionToDiscord(data map[string]interface{}) {
 	questionID, _ := data["question_id"].(string)
 	question, _ := data["question"].(string)
 	status, _ := data["status"].(string)
+	_, _ = data["placeholder"].(string)
+	_, _ = data["max_length"].(float64)
+
+	interactionType, _ := data["interaction_type"].(string)
+	if interactionType == "" {
+		interactionType = "buttons"
+	}
 
 	if questionID == "" || question == "" {
 		log.Printf("[SSE] Incomplete agent_question event, skipping")
 		return
 	}
+
+	// Parse options array from data
+	options := parseQuestionOptions(data["options"])
 
 	// Truncate question for Discord embed
 	displayQuestion := question
@@ -405,39 +525,225 @@ func (b *Bot) sendAgentQuestionToDiscord(data map[string]interface{}) {
 		Timestamp: time.Now().Format(time.RFC3339),
 	}
 
-	// Build action buttons
-	buttons := []discordgo.MessageComponent{
-		discordgo.ActionsRow{
-			Components: []discordgo.MessageComponent{
-				discordgo.Button{
-					Label:    "✅ Approve",
-					Style:    discordgo.SuccessButton,
-					CustomID: fmt.Sprintf("aq:%s:approve", questionID),
+	var components []discordgo.MessageComponent
+
+	switch interactionType {
+	case "select":
+		if len(options) > 0 {
+			selectOpts := make([]discordgo.SelectMenuOption, len(options))
+			for i, opt := range options {
+				selectOpts[i] = discordgo.SelectMenuOption{
+					Label: opt.Label,
+					Value: opt.Value,
+				}
+				if opt.Description != "" {
+					selectOpts[i].Description = opt.Description
+				}
+			}
+			components = []discordgo.MessageComponent{
+				discordgo.ActionsRow{
+					Components: []discordgo.MessageComponent{
+						discordgo.SelectMenu{
+							CustomID:    fmt.Sprintf("aq-sel:%s", questionID),
+							Placeholder: "Select an option...",
+							Options:     selectOpts,
+						},
+					},
 				},
-				discordgo.Button{
-					Label:    "🔄 Modify",
-					Style:    discordgo.PrimaryButton,
-					CustomID: fmt.Sprintf("aq:%s:modify", questionID),
+			}
+		}
+
+	case "multi_select":
+		if len(options) > 0 {
+			selectOpts := make([]discordgo.SelectMenuOption, len(options))
+			for i, opt := range options {
+				selectOpts[i] = discordgo.SelectMenuOption{
+					Label: opt.Label,
+					Value: opt.Value,
+				}
+				if opt.Description != "" {
+					selectOpts[i].Description = opt.Description
+				}
+			}
+			components = []discordgo.MessageComponent{
+				discordgo.ActionsRow{
+					Components: []discordgo.MessageComponent{
+						discordgo.SelectMenu{
+							CustomID:    fmt.Sprintf("aq-msel:%s", questionID),
+							Placeholder: "Select options...",
+							Options:     selectOpts,
+							MaxValues:   len(options),
+						},
+					},
 				},
-				discordgo.Button{
-					Label:    "❌ Skip",
-					Style:    discordgo.DangerButton,
-					CustomID: fmt.Sprintf("aq:%s:skip", questionID),
+			}
+		}
+
+	case "text":
+		// Show a button that opens a modal for text input
+		components = []discordgo.MessageComponent{
+			discordgo.ActionsRow{
+				Components: []discordgo.MessageComponent{
+					discordgo.Button{
+						Label:    "✏️ Respond",
+						Style:    discordgo.PrimaryButton,
+						CustomID: fmt.Sprintf("aq:%s:__text__", questionID),
+					},
 				},
 			},
-		},
+		}
+
+	default: // "buttons" — one button per option, max 5 per row
+		components = buildQuestionButtons(questionID, options)
 	}
 
-	_, err := b.dg.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+	msgSend := &discordgo.MessageSend{
 		Embed:      embed,
-		Components: buttons,
-	})
+		Components: components,
+	}
+
+	_, err := b.dg.ChannelMessageSendComplex(channelID, msgSend)
 	if err != nil {
 		log.Printf("[SSE] Failed to send question to Discord: %v", err)
 		return
 	}
 
-	log.Printf("[SSE] Question %s sent to Discord channel %s", questionID[:12], channelID)
+	log.Printf("[SSE] Question %s sent to Discord (type=%s, %d options)", questionID[:12], interactionType, len(options))
+}
+
+// buildQuestionButtons creates button components from a list of options.
+// Discord allows max 5 buttons per row. Overflow goes into a select menu.
+func buildQuestionButtons(questionID string, options []QuestionOption) []discordgo.MessageComponent {
+	if len(options) == 0 {
+		// No options: show a "✏️ Respond" button that opens a modal
+		return []discordgo.MessageComponent{
+			discordgo.ActionsRow{
+				Components: []discordgo.MessageComponent{
+					discordgo.Button{
+						Label:    "✏️ Respond",
+						Style:    discordgo.PrimaryButton,
+						CustomID: fmt.Sprintf("aq:%s:__text__", questionID),
+					},
+				},
+			},
+		}
+	}
+
+	if len(options) <= 5 {
+		// Single row of buttons
+		buttons := make([]discordgo.MessageComponent, len(options))
+		for i, opt := range options {
+			buttons[i] = discordgo.Button{
+				Label:    opt.Label,
+				Style:    optionStyle(opt.Value),
+				CustomID: fmt.Sprintf("aq:%s:%s", questionID, opt.Value),
+			}
+		}
+		return []discordgo.MessageComponent{
+			discordgo.ActionsRow{Components: buttons},
+		}
+	}
+
+	// 6+ options: first 5 as buttons, rest in a dropdown "More..."
+	var components []discordgo.MessageComponent
+	buttons := make([]discordgo.MessageComponent, 5)
+	for i := 0; i < 5 && i < len(options); i++ {
+		buttons[i] = discordgo.Button{
+			Label:    options[i].Label,
+			Style:    optionStyle(options[i].Value),
+			CustomID: fmt.Sprintf("aq:%s:%s", questionID, options[i].Value),
+		}
+	}
+	components = append(components, discordgo.ActionsRow{Components: buttons})
+
+	// Remaining options in a dropdown
+	remaining := options[5:]
+	if len(remaining) > 0 {
+		selectOpts := make([]discordgo.SelectMenuOption, len(remaining))
+		for i, opt := range remaining {
+			selectOpts[i] = discordgo.SelectMenuOption{
+				Label: opt.Label,
+				Value: opt.Value,
+			}
+			if opt.Description != "" {
+				selectOpts[i].Description = opt.Description
+			}
+		}
+		components = append(components, discordgo.ActionsRow{
+			Components: []discordgo.MessageComponent{
+				discordgo.SelectMenu{
+					CustomID:    fmt.Sprintf("aq-sel:%s", questionID),
+					Placeholder: "More options...",
+					Options:     selectOpts,
+				},
+			},
+		})
+	}
+
+	return components
+}
+
+// optionStyle maps common response values to Discord button styles.
+func optionStyle(value string) discordgo.ButtonStyle {
+	switch value {
+	case "yes", "approve", "accept", "confirm", "true":
+		return discordgo.SuccessButton
+	case "no", "skip", "reject", "decline", "cancel", "false":
+		return discordgo.DangerButton
+	default:
+		return discordgo.PrimaryButton
+	}
+}
+
+// QuestionOption represents a parsed option from the SSE event data.
+type QuestionOption struct {
+	Label       string
+	Value       string
+	Description string
+}
+
+// parseQuestionOptions extracts the options array from the SSE data value.
+func parseQuestionOptions(raw interface{}) []QuestionOption {
+	if raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []interface{}:
+		var opts []QuestionOption
+		for _, item := range v {
+			m, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			label, _ := m["label"].(string)
+			val, _ := m["value"].(string)
+			if label == "" || val == "" {
+				continue
+			}
+			opt := QuestionOption{Label: label, Value: val}
+			if desc, ok := m["description"].(string); ok {
+				opt.Description = desc
+			}
+			opts = append(opts, opt)
+		}
+		return opts
+	case []map[string]interface{}:
+		var opts []QuestionOption
+		for _, m := range v {
+			label, _ := m["label"].(string)
+			val, _ := m["value"].(string)
+			if label == "" || val == "" {
+				continue
+			}
+			opt := QuestionOption{Label: label, Value: val}
+			if desc, ok := m["description"].(string); ok {
+				opt.Description = desc
+			}
+			opts = append(opts, opt)
+		}
+		return opts
+	}
+	return nil
 }
 
 // toPtr returns a pointer to a string (helper for Discord API calls).
