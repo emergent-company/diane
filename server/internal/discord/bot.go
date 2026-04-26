@@ -473,6 +473,20 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) 
 
 	log.Printf("[IN]  channel=%s author=%s#%s msg=%q (thread=%v)", m.ChannelID, m.Author.Username, m.Author.Discriminator, truncateStr(m.Content, 80), isThread)
 
+	// Quick /stop check — respond fast when nothing is running
+	if strings.TrimSpace(m.Content) == "/stop" {
+		b.activeMu.Lock()
+		_, hasActive := b.activeChans[m.ChannelID]
+		b.activeMu.Unlock()
+		if !hasActive {
+			log.Printf("[STOP] Nothing running for channel %s — replying idle", m.ChannelID)
+			s.MessageReactionAdd(m.ChannelID, m.ID, "🛑")
+			b.sendMessage(s, m.ChannelID, "Nothing is currently running.")
+			return
+		}
+		// Active — fall through to handleMessage which handles /stop in the guard
+	}
+
 	// React with 👀 to show we've seen it
 	if err := s.MessageReactionAdd(m.ChannelID, m.ID, "👀"); err != nil {
 		log.Printf("Reaction add error: %v", err)
@@ -564,7 +578,7 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.Message) {
 
 		// Non-stop message while busy — queue it
 		s.MessageReactionAdd(channelID, m.ID, "👀")
-		b.queueMessage(responseChannel, m.Message)
+		b.queueMessage(responseChannel, m)
 		log.Printf("[QUEUE] Channel %s busy, queued msg %s", responseChannel, m.ID[:8])
 		return
 	}
