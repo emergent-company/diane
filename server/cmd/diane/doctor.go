@@ -28,30 +28,9 @@ func cmdDoctor() {
 		return
 	}
 	fmt.Printf("✅ %s\n", config.Path())
-	fmt.Printf("   Active: %s\n", cfg.Default)
-	fmt.Printf("   Server: %s\n", pc.ServerURL)
-	fmt.Printf("   Mode:   %s\n", pc.ModeLabel())
-
-	// ── 2. Configured projects ──
-	fmt.Print("\n📋 Configured projects... ")
-	if len(cfg.Projects) == 0 {
-		fmt.Println("⚠️  None")
-	} else {
-		fmt.Printf("✅ %d project(s)\n", len(cfg.Projects))
-		for name, p := range cfg.Projects {
-			mark := " "
-			if name == cfg.Default {
-				mark = "*"
-			}
-			fmt.Printf("   %s %s\n", mark, name)
-			fmt.Printf("       Project: %s\n", p.ProjectID)
-			fmt.Printf("       Server:  %s\n", p.ServerURL)
-			fmt.Printf("       Mode:    %s\n", p.ModeLabel())
-			if p.DiscordBotToken != "" {
-				fmt.Printf("       Discord: ✓ (%d channel(s), %d thread channel(s))\n", len(p.DiscordChannelIDs), len(p.DiscordThreadChannelIDs))
-			}
-		}
-	}
+	fmt.Printf("   Project: %s\n", pc.ProjectID)
+	fmt.Printf("   Server:  %s\n", pc.ServerURL)
+	fmt.Printf("   Mode:    %s\n", pc.ModeLabel())
 
 	// ── 3. Project ID format ──
 	fmt.Print("\n🔢 Project ID... ")
@@ -175,6 +154,82 @@ func cmdDoctor() {
 			}
 			if a.Sandbox != nil && a.Sandbox.Enabled {
 				fmt.Printf("       Sandbox: %s\n", a.Sandbox.BaseImage)
+			}
+		}
+	}
+
+	// ── 7d. Agents on Memory Platform ──
+	fmt.Print("\n🧠 Agents on Memory Platform... ")
+	remoteDefs, err := bridge.ListAgentDefs(ctx)
+	if err != nil {
+		fmt.Printf("⚠️  %v\n", err)
+	} else if len(remoteDefs.Data) == 0 {
+		fmt.Println("⚠️  None")
+		fmt.Println("   Run 'diane agent seed' to sync local agents to the platform.")
+	} else {
+		fmt.Printf("✅ %d agent(s)\n", len(remoteDefs.Data))
+		for _, d := range remoteDefs.Data {
+			desc := ""
+			if d.Description != nil {
+				desc = *d.Description
+				if len(desc) > 60 {
+					desc = desc[:60] + "..."
+				}
+			}
+			toolInfo := ""
+			if d.ToolCount > 0 {
+				toolInfo = fmt.Sprintf(" (%d tools)", d.ToolCount)
+			}
+			fmt.Printf("   %s%s\n", d.Name, toolInfo)
+			if desc != "" {
+				fmt.Printf("       %s\n", desc)
+			}
+			fmt.Printf("       Flow: %s  Visibility: %s  Default: %v\n", d.FlowType, d.Visibility, d.IsDefault)
+		}
+	}
+
+	// ── 7e. Run stats from Memory Platform ──
+	fmt.Print("\n📊 Run stats... ")
+	stats, err := bridge.GetProjectRunStats(ctx, nil)
+	if err != nil {
+		fmt.Printf("⚠️  %v\n", err)
+	} else {
+		s := stats.Data
+		fmt.Printf("✅ %d runs total | %.1f%% success | $%.4f total\n", s.Overview.TotalRuns, s.Overview.SuccessRate*100, s.Overview.TotalCostUSD)
+		if len(s.ByAgent) > 0 {
+			// Show top 5 agents by run count
+			type agentStat struct {
+				name  string
+				total int64
+				succ  int64
+				fail  int64
+				avgMs float64
+			}
+			var sorted []agentStat
+			for name, a := range s.ByAgent {
+				sorted = append(sorted, agentStat{name, a.Total, a.Success, a.Failed + a.Errored, a.AvgDurationMs})
+			}
+			// Sort by total desc (simple bubble sort, small set)
+			for i := 0; i < len(sorted); i++ {
+				for j := i + 1; j < len(sorted); j++ {
+					if sorted[j].total > sorted[i].total {
+						sorted[i], sorted[j] = sorted[j], sorted[i]
+					}
+				}
+			}
+			limit := 5
+			if len(sorted) < limit {
+				limit = len(sorted)
+			}
+			for _, a := range sorted[:limit] {
+				rate := 0.0
+				if a.total > 0 {
+					rate = float64(a.succ) / float64(a.total) * 100
+				}
+				fmt.Printf("   %s — %d runs, %.0f%% ok, avg %.0fms\n", a.name, a.total, rate, a.avgMs)
+			}
+			if len(sorted) > limit {
+				fmt.Printf("   ... and %d more\n", len(sorted)-limit)
 			}
 		}
 	}
