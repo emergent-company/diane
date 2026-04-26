@@ -1,0 +1,231 @@
+[
+  {
+    "type_name": "MemoryFact",
+    "description": "Personal memory facts — preferences, decisions, patterns, corrections. Stores what the user has said, done, or preferred.",
+    "json_schema": {
+      "label": "Memory Fact",
+      "properties": {
+        "fact": {
+          "type": "string",
+          "description": "The memory fact content"
+        },
+        "category": {
+          "type": "string",
+          "description": "Category: user-preference, decision, pattern, entity, action-item"
+        },
+        "confidence": {
+          "type": "number",
+          "description": "Confidence 0.0-1.0. 0.9=stated, 0.7=inferred, 0.5=guessed"
+        },
+        "memory_tier": {
+          "type": "integer",
+          "description": "Memory tier: 1=per-turn, 2=session-end, 3=dreamed/consolidated"
+        },
+        "access_count": {
+          "type": "integer",
+          "description": "Number of times this fact was accessed for reinforcement"
+        },
+        "source_agent": {
+          "type": "string",
+          "description": "Creating agent name"
+        },
+        "source_session": {
+          "type": "string",
+          "description": "Session/run ID this fact was extracted from"
+        }
+      },
+      "description": "Personal memory facts — preferences, decisions, patterns, corrections"
+    },
+    "enabled": true
+  },
+  {
+    "type_name": "MCPProxyConfig",
+    "description": "MCP proxy server configuration synced from the graph to relay instances",
+    "json_schema": {
+      "label": "MCP Proxy Config",
+      "properties": {
+        "scope": {
+          "type": "string",
+          "description": "Which instance(s): 'all', 'master', 'slave', or specific name"
+        },
+        "config": {
+          "type": "string",
+          "description": "Full JSON content of mcp-servers.json"
+        },
+        "version": {
+          "type": "integer",
+          "description": "Config version — bump to signal instances to re-pull"
+        },
+        "instance_id": {
+          "type": "string",
+          "description": "Target instance name"
+        }
+      },
+      "description": "MCP proxy server configuration synced from graph to relay instances"
+    },
+    "enabled": true
+  },
+  {
+    "type_name": "MCPSecret",
+    "description": "API keys and credentials used by MCP servers registered in the proxy config",
+    "json_schema": {
+      "label": "MCP Secret",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Secret name / identifier"
+        },
+        "scope": {
+          "type": "string",
+          "description": "Which instance(s) this secret applies to"
+        },
+        "value": {
+          "type": "string",
+          "description": "The secret value (API key, token, etc.) — stored encrypted at rest"
+        },
+        "description": {
+          "type": "string",
+          "description": "What this secret is used for"
+        }
+      },
+      "description": "API keys and credentials for MCP servers"
+    },
+    "enabled": true
+  },
+  {
+    "type_name": "Person",
+    "description": "A person known to the user — contact, colleague, friend, or family",
+    "json_schema": {
+      "label": "Person",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Full name"
+        },
+        "role": {
+          "type": "string",
+          "description": "Relationship or role (friend, colleague, family, etc.)"
+        },
+        "email": {
+          "type": "string",
+          "description": "Email address"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Personal notes about this person"
+        },
+        "phone": {
+          "type": "string",
+          "description": "Phone number"
+        }
+      },
+      "description": "A person known to the user"
+    },
+    "enabled": true
+  },
+  {
+    "type_name": "Invoice",
+    "description": "A bill or invoice received or sent",
+    "json_schema": {
+      "label": "Invoice",
+      "properties": {
+        "amount": {
+          "type": "number",
+          "description": "Total amount"
+        },
+        "number": {
+          "type": "string",
+          "description": "Invoice number"
+        },
+        "status": {
+          "type": "string",
+          "description": "Status: pending, paid, overdue, cancelled"
+        },
+        "currency": {
+          "type": "string",
+          "description": "Currency code (e.g. PLN, USD, EUR)"
+        },
+        "due_date": {
+          "type": "string",
+          "description": "Payment due date"
+        },
+        "issue_date": {
+          "type": "string",
+          "description": "Date issued"
+        },
+        "description": {
+          "type": "string",
+          "description": "What this invoice is for"
+        }
+      },
+      "description": "A bill or invoice received or sent"
+    },
+    "enabled": true
+  },
+  {
+    "type_name": "Subscription",
+    "description": "A recurring subscription — services, memberships, recurring payments",
+    "json_schema": {
+      "label": "Subscription",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Service name"
+        },
+        "plan": {
+          "type": "string",
+          "description": "Plan or tier name"
+        },
+        "amount": {
+          "type": "number",
+          "description": "Billing amount per period"
+        },
+        "period": {
+          "type": "string",
+          "description": "Billing period: monthly, yearly, weekly"
+        },
+        "status": {
+          "type": "string",
+          "description": "active, cancelled, paused, expired"
+        },
+        "currency": {
+          "type": "string",
+          "description": "Currency code"
+        },
+        "next_billing": {
+          "type": "string",
+          "description": "Next billing date"
+        }
+      },
+      "description": "A recurring subscription"
+    },
+    "enabled": true
+  },
+  {
+    "type_name": "Contact",
+    "description": "A general contact record — company, organization, or service",
+    "json_schema": {
+      "label": "Contact",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Contact name / company name"
+        },
+        "type": {
+          "type": "string",
+          "description": "Type: company, organization, service, venue"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Personal notes"
+        },
+        "contact_info": {
+          "type": "string",
+          "description": "Contact information (address, website, etc.)"
+        }
+      },
+      "description": "A general contact record — company, organization, or service"
+    },
+    "enabled": true
+  }
+]
