@@ -44,8 +44,8 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
         run: |
-          cd server/mcp
-          go build -ldflags="-s -w -X main.Version=${{ github.ref_name }}" -o ../../dist/diane .
+          cd server/cmd/diane
+          go build -ldflags="-s -w -X main.Version=${{ github.ref_name }}" -o ../../../dist/diane .
 
       - name: Compress binary
         run: |

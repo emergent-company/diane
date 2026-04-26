@@ -1,6 +1,6 @@
 #!/bin/sh
 # DIANE Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/Emergent-Comapny/diane/main/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/emergent-company/diane/main/install.sh | sh
 #
 # Environment variables:
 #   DIANE_VERSION  - Specific version to install (default: latest)
@@ -9,7 +9,7 @@
 set -e
 
 # Configuration
-GITHUB_REPO="Emergent-Comapny/diane"
+GITHUB_REPO="emergent-company/diane"
 BINARY_NAME="diane"
 DEFAULT_INSTALL_DIR="${HOME}/.diane"
 
