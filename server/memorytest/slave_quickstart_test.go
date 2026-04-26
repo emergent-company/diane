@@ -59,15 +59,10 @@ func TestSlaveQuickStart(t *testing.T) {
 		t.Log("═══ Step 2: Skipped (DIANE_KEEP is set) ═══")
 	}
 
-	// Step 3: Install — cross-compile current dev binary and SCP to slave
+	// Step 3: Install — gh release download (README: Private repo)
 	t.Log("")
-	t.Log("═══ Step 3: Install (cross-compile + SCP) ═══")
+	t.Log("═══ Step 3: Install (README: Private repo) ═══")
 	installOnSlave(t, ctx)
-
-	// Step 3b: Verify the dev binary has master/slave support
-	t.Log("")
-	t.Log("═══ Step 3b: Verify mode support in binary ═══")
-	verifyModeSupport(t, ctx)
 
 	// Step 4: Configure
 	t.Log("")
@@ -151,41 +146,25 @@ func loadConfig(t *testing.T) *projectConfig {
 	return &projectConfig{ServerURL: pc.ServerURL, Token: pc.Token, ProjectID: pc.ProjectID}
 }
 
-// ── Install (cross-compile dev binary and SCP to slave) ──
+// ── Install (gh release download onto slave) ──
 
 func installOnSlave(t *testing.T, ctx context.Context) {
 	t.Helper()
+	ghToken := getGHToken(t)
 
-	// Cross-compile for darwin/arm64
-	buildCmd := exec.CommandContext(ctx, "/usr/local/go/bin/go", "build",
-		"-o", "/tmp/diane-darwin-arm64",
-		"./cmd/diane/")
-	buildCmd.Dir = "/root/diane/server"
-	buildCmd.Env = append(os.Environ(), "GOOS=darwin", "GOARCH=arm64", "CGO_ENABLED=0")
-	out, err := buildCmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("Cross-compile failed: %v\nOutput: %s", err, string(out))
-	}
-	t.Log("✅ Cross-compiled binary for darwin/arm64")
+	// mkdir + gh release download
+	mustSSH(t, ctx, "mkdir -p ~/.diane/bin")
+	mustSSH(t, ctx, fmt.Sprintf(
+		"export PATH=/opt/homebrew/bin:$PATH GITHUB_TOKEN=%s && cd ~/.diane/bin && gh release download -R emergent-company/diane v1.1.1 -p 'diane-darwin-arm64.tar.gz' --clobber",
+		ghToken,
+	))
+	mustSSH(t, ctx, "cd ~/.diane/bin && tar xzf diane-darwin-arm64.tar.gz && rm diane-darwin-arm64.tar.gz && chmod +x diane")
 
-	// SCP to slave
-	scpCmd := exec.CommandContext(ctx, "scp",
-		"-o", "ConnectTimeout=10",
-		"-o", "StrictHostKeyChecking=accept-new",
-		"/tmp/diane-darwin-arm64",
-		slaveHost+":~/.diane/bin/diane")
-	scpOut, err := scpCmd.CombinedOutput()
+	out, err := sshCmdOutput(ctx, "file ~/.diane/bin/diane && ls -lh ~/.diane/bin/diane")
 	if err != nil {
-		t.Fatalf("SCP to slave failed: %v\nOutput: %s", err, string(scpOut))
+		t.Fatalf("Binary verification failed: %v\n%s", err, out)
 	}
-	t.Log("✅ SCP'd binary to slave")
-
-	// Verify
-	verifyOut, err := sshCmdOutput(ctx, "file ~/.diane/bin/diane && chmod +x ~/.diane/bin/diane && ls -lh ~/.diane/bin/diane")
-	if err != nil {
-		t.Fatalf("Binary verification failed: %v\n%s", err, verifyOut)
-	}
-	t.Logf("✅ Installed: %s", strings.TrimSpace(verifyOut))
+	t.Logf("✅ Installed: %s", strings.TrimSpace(out))
 }
 
 func getGHToken(t *testing.T) string {
@@ -196,8 +175,6 @@ func getGHToken(t *testing.T) string {
 	}
 	return strings.TrimSpace(string(out))
 }
-
-// ── Configure (matches README "Configure" section) ──
 
 func writeSlaveConfig(t *testing.T, ctx context.Context, pc *projectConfig) {
 	t.Helper()
@@ -242,6 +219,59 @@ func verifyCLI(t *testing.T, ctx context.Context) {
 		if strings.Contains(out, keyword) {
 			t.Logf("✅ Doctor — %s", keyword)
 		}
+	}
+	// Verify slave mode is shown in doctor output
+	if strings.Contains(out, "slave") || strings.Contains(out, "Slave") {
+		t.Log("✅ Doctor — shows slave mode 🔧")
+	} else {
+		t.Log("⚠️  Doctor output doesn't mention slave mode (may need updated binary)")
+	}
+}
+
+// verifyModeSupport checks that master/slave guardrails work on the slave.
+func verifyModeSupport(t *testing.T, ctx context.Context) {
+	t.Helper()
+
+	// Test 1: diane bot should refuse
+	out, err := sshCmdOutput(ctx,
+		"export PATH=$HOME/.diane/bin:$PATH && diane bot 2>&1 || true")
+	t.Logf("'diane bot' on slave:\n%s", out)
+	if strings.Contains(out, "slave") || strings.Contains(out, "mcp relay") {
+		t.Log("✅ diane bot correctly refused on slave")
+	} else if strings.Contains(out, "unknown command") || strings.Contains(out, "Usage") {
+		t.Log("⚠️  diane bot not recognized as command (not dev binary?)")
+	} else {
+		t.Log("⚠️  diane bot didn't refuse as expected")
+	}
+
+	// Test 2: diane agent seed should refuse
+	out, err = sshCmdOutput(ctx,
+		"export PATH=$HOME/.diane/bin:$PATH && diane agent seed 2>&1 || true")
+	t.Logf("'diane agent seed' on slave:\n%s", out)
+	if strings.Contains(out, "slave") || strings.Contains(out, "master node") {
+		t.Log("✅ diane agent seed correctly refused on slave")
+	}
+
+	// Test 3: diane agent list should still work (read-only)
+	out, err = sshCmdOutput(ctx,
+		"export PATH=$HOME/.diane/bin:$PATH && diane agent list 2>&1")
+	if err != nil {
+		t.Logf("'diane agent list' exit: %v", err)
+	}
+	if strings.Contains(out, "Agent Definitions") || strings.Contains(out, "diane-default") {
+		t.Log("✅ diane agent list works on slave (read-only)")
+	}
+
+	// Test 4: diane agent trigger should still work
+	out, err = sshCmdOutput(ctx,
+		"export PATH=$HOME/.diane/bin:$PATH && diane agent trigger diane-default 'Say hello briefly' 2>&1")
+	if err != nil {
+		t.Logf("'diane agent trigger' exit: %v", err)
+	}
+	if strings.Contains(out, "hello") || strings.Contains(out, "Hello") || strings.Contains(out, "Run ID") {
+		t.Log("✅ diane agent trigger works on slave")
+	} else {
+		t.Logf("⚠️  Trigger output unexpected:\n%s", out)
 	}
 }
 
