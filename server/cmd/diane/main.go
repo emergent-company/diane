@@ -22,6 +22,10 @@ import (
 	"github.com/Emergent-Comapny/diane/internal/schema"
 )
 
+// Version is set at build time via -X main.Version=<tag>.
+// Defaults to "dev" for local builds.
+var Version = "dev"
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Println("Usage: diane <command>")
@@ -35,6 +39,8 @@ func main() {
 		fmt.Println("  doctor          Check connection with Memory Platform and run diagnostics")
 		fmt.Println("  monitor         Show bot status, sessions, recent activity")
 		fmt.Println("  nodes           List all connected MCP relay nodes")
+		fmt.Println("  upgrade         Upgrade Diane to the latest version")
+		fmt.Println("  service         Manage the MCP relay as a service (start|stop|status|restart)")
 		fmt.Println("  mcp relay       Connect MCP server to Memory Platform relay")
 		fmt.Println("  mcp serve       Run MCP JSON-RPC server (stdin/stdout)")
 		fmt.Println("  schema apply    Apply embedded schema definitions to Memory Platform")
@@ -58,6 +64,10 @@ func main() {
 		cmdMonitor()
 	case "nodes":
 		cmdNodes()
+	case "upgrade":
+		cmdUpgrade()
+	case "service":
+		cmdService(os.Args[2:])
 	case "schema":
 		cmdSchema(os.Args[2:])
 	case "mcp":
