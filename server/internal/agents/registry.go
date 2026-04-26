@@ -254,7 +254,6 @@ func buildAgentList() []BuiltInAgent {
 			Visibility: "project",
 			MaxSteps:   50,
 			Timeout:    300,
-			Model: &config.AgentModelConfig{Name: "deepseek/deepseek-v4-flash"},
 		},
 		{
 			Name:        "diane-researcher",
@@ -304,7 +303,7 @@ Be thorough and cite your sources.`,
 			Visibility: "project",
 			MaxSteps:   50,
 			Timeout:    300,
-			Model: &config.AgentModelConfig{Name: "deepseek/deepseek-v4-flash"},
+
 			Delegation: &config.DelegationHeuristics{
 				SpeedMultiplier:   1.5,
 				CostMultiplier:    1.0,
@@ -415,7 +414,7 @@ CRITICAL RULES:
 			Visibility: "project",
 			MaxSteps:   100,
 			Timeout:    600,
-			Model: &config.AgentModelConfig{Name: "deepseek/deepseek-v4-flash"},
+
 			Delegation: &config.DelegationHeuristics{
 				SpeedMultiplier:   1.0,
 				CostMultiplier:    1.0,
@@ -537,7 +536,7 @@ CRITICAL RULES:
 			Visibility: "project",
 			MaxSteps:   100,
 			Timeout:    600,
-			Model: &config.AgentModelConfig{Name: "deepseek/deepseek-v4-flash"},
+
 			Delegation: &config.DelegationHeuristics{
 				SpeedMultiplier:   0.8,
 				CostMultiplier:    1.0,
@@ -587,7 +586,7 @@ tool usage patterns, and decisions made.`,
 			Visibility: "project",
 			MaxSteps:   100,
 			Timeout:    600,
-			Model: &config.AgentModelConfig{Name: "deepseek/deepseek-v4-flash"},
+
 		},
 		{
 			Name:        "diane-codebase",
@@ -650,7 +649,7 @@ Store findings as Technology nodes in the graph when appropriate.`,
 			Visibility: "project",
 			MaxSteps:   100,
 			Timeout:    600,
-			Model: &config.AgentModelConfig{Name: "deepseek/deepseek-v4-flash"},
+
 			Delegation: &config.DelegationHeuristics{
 				SpeedMultiplier:   2.0,
 				CostMultiplier:    1.0,
@@ -706,7 +705,7 @@ Always start with memory_apply_decay, then memory_detect_patterns, then hallucin
 			Visibility: "project",
 			MaxSteps:   200,
 			Timeout:    900,
-			Model: &config.AgentModelConfig{Name: "deepseek/deepseek-v4-flash"},
+
 		},
 		{
 			Name:        "diane-skill-monitor",
@@ -759,7 +758,7 @@ Skills:     []string{},
 			Visibility: "project",
 			MaxSteps:   100,
 			Timeout:    600,
-			Model: &config.AgentModelConfig{Name: "deepseek/deepseek-v4-flash"},
+
 		},
 	}
 }
