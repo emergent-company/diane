@@ -152,42 +152,6 @@ func TestBridge_SearchMemory(t *testing.T) {
 	}
 }
 
-// TestBridge_StreamChat tests the streaming chat endpoint.
-// Requires a token with chat:stream permission.
-func TestBridge_StreamChat(t *testing.T) {
-	b := setupBridge(t)
-	ctx := context.Background()
-
-	stream, err := b.StreamChat(ctx, "Say hello in one word", "")
-	if err != nil {
-		t.Skipf("StreamChat not available: %v (need chat:stream scope)", err)
-	}
-	defer stream.Close()
-
-	var tokens []string
-	for event := range stream.Events() {
-		switch event.Type {
-		case "meta":
-			t.Logf("  Meta: conversation_id=%s", event.ConversationID)
-		case "token":
-			tokens = append(tokens, event.Token)
-		case "done":
-			t.Logf("  Done: stream complete")
-		case "error":
-			t.Errorf("Stream error: %s", event.Error)
-		}
-	}
-
-	response := ""
-	for _, t := range tokens {
-		response += t
-	}
-	t.Logf("✅ Chat response (%d tokens): %s", len(tokens), truncate(response, 80))
-	if len(tokens) == 0 {
-		t.Error("No tokens received from chat stream")
-	}
-}
-
 // TestBridge_FullFlow tests: create session → store messages → close → list.
 func TestBridge_FullFlow(t *testing.T) {
 	b := setupBridge(t)

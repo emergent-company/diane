@@ -1,0 +1,80 @@
+# DIANE Taskfile
+# https://taskfile.dev
+# Install: go install github.com/go-task/task/v3/cmd/task@latest
+
+version: "3"
+
+vars:
+  BINARY_NAME: diane
+  BUILD_DIR: dist
+  CMD_DIR: server/cmd/diane
+  INSTALL_DIR: "{{.HOME}}/.diane/bin"
+  GO: /usr/local/go/bin/go
+
+tasks:
+  default:
+    desc: Build for current platform
+    cmds:
+      - task: build
+
+  build:
+    desc: Build diane binary for current platform
+    cmds:
+      - "cd {{.CMD_DIR}} && {{.GO}} build -ldflags=\"-s -w -X main.Version=dev\" -o ../../../{{.BUILD_DIR}}/{{.BINARY_NAME}} ."
+      - "echo Built: {{.BUILD_DIR}}/{{.BINARY_NAME}}"
+
+  install:
+    desc: Build and install to ~/.diane/bin/
+    deps: [build]
+    cmds:
+      - "mkdir -p {{.INSTALL_DIR}}"
+      - "cp {{.BUILD_DIR}}/{{.BINARY_NAME}} {{.INSTALL_DIR}}/{{.BINARY_NAME}}"
+      - "chmod +x {{.INSTALL_DIR}}/{{.BINARY_NAME}}"
+      - "echo Installed: {{.INSTALL_DIR}}/{{.BINARY_NAME}}"
+
+  test:
+    desc: Run unit tests (no live API needed)
+    cmds:
+      - "cd server && {{.GO}} test -count=1 -timeout=60s ./internal/..."
+
+  integration-test:
+    desc: Run integration tests (requires MEMORY_TEST_TOKEN)
+    cmds:
+      - "if [ -z \"$MEMORY_TEST_TOKEN\" ]; then echo 'ERROR: MEMORY_TEST_TOKEN not set'; exit 1; fi"
+      - "cd server && {{.GO}} test -v -count=1 -timeout=300s ./memorytest/"
+
+  vet:
+    desc: Run go vet on all packages
+    cmds:
+      - "cd server && {{.GO}} vet ./..."
+
+  doctor:
+    desc: Run diane doctor against live Memory Platform
+    deps: [install]
+    cmds:
+      - "{{.INSTALL_DIR}}/{{.BINARY_NAME}} doctor"
+
+  check:
+    desc: Build + vet (quick smoke test)
+    cmds:
+      - task: build
+      - task: vet
+
+  check-full:
+    desc: Full verification pipeline
+    cmds:
+      - task: build
+      - task: vet
+      - task: test
+      - task: install
+      - task: doctor
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - "rm -rf {{.BUILD_DIR}}"
+
+  version:
+    desc: Show version
+    cmds:
+      - "cd server && {{.GO}} version"

@@ -106,6 +106,7 @@ const (
 type Config struct {
 	BotToken         string   // Discord bot token (required)
 	AllowedChannels  []string // Allowed channel IDs (empty = all)
+	ThreadChannels   []string // Channel IDs where auto-thread creation happens (empty = thread everywhere)
 	SystemPrompt     string   // System prompt for the bot
 	ContextMessages  int      // Max messages to include as context per turn
 	MemoryServerURL  string
@@ -486,7 +487,23 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.Message) {
 		responseChannel = channelID
 		log.Printf("[THR] Continuing in existing thread %s", channelID)
 	} else {
-		// Create a new thread for this conversation (Hermes-style)
+		// Check if auto-threading is enabled for this channel
+		shouldThread := len(b.config.ThreadChannels) == 0 // empty = thread everywhere
+		if !shouldThread {
+			for _, id := range b.config.ThreadChannels {
+				if id == channelID {
+					shouldThread = true
+					break
+				}
+			}
+		}
+
+		if !shouldThread {
+			// No threading for this channel — respond inline
+			log.Printf("[THR] Responding inline (no thread config for channel %s)", channelID)
+			responseChannel = channelID
+		} else {
+			// Create a new thread for this conversation (Hermes-style)
 		// Phase 1: Categorize message with emoji prefix based on content heuristics
 		emoji, category := categorizeMessage(m.Content)
 		cleanMsg := strings.TrimSpace(m.Content)
@@ -508,6 +525,7 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.Message) {
 		}
 		responseChannel = thread.ID
 		log.Printf("[THR] Created thread %s (%s) in channel %s", thread.ID, threadName, channelID)
+		}
 	}
 
 	// Start persistent typing indicator (Hermes pattern — loop every 8s)
@@ -889,11 +907,8 @@ func (b *Bot) triggerAgentWithContext(ctx context.Context, cs *ChannelSession, u
 		}
 	}()
 
-	// 3. Build trigger prompt with session context
+	// 3. Build trigger prompt (context is now provided via sessionId on the trigger request)
 	triggerPrompt := userMsg
-	if cs.SessionID != "" {
-		triggerPrompt = fmt.Sprintf("[Session: %s]\n%s", cs.SessionID, userMsg)
-	}
 
 	dlog("AGT", "action", "triggering", "prompt_chars", len(triggerPrompt))
 	triggerResp, err := globalBridge.TriggerAgentWithInput(ctx, agentID, triggerPrompt, cs.SessionID)

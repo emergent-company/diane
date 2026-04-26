@@ -257,6 +257,69 @@ func cmdMonitor() {
 						}
 					}
 
+					// Model stats — aggregate by provider/model from recent runs
+					fmt.Println("\n   🤖 Models used:")
+					modelRuns, modelErr := bridge.Client().Agents.ListProjectRuns(ctx, pc.ProjectID,
+						&sdkagentrun.ListRunsOptions{Limit: 100})
+					if modelErr != nil {
+						fmt.Printf("   ⚠️  %v\n", modelErr)
+					} else if len(modelRuns.Data.Items) == 0 {
+						fmt.Println("   (no runs)")
+					} else {
+						type modelStat struct {
+							total   int
+							success int
+							failed  int
+							durSum  int
+						}
+						byModel := map[string]*modelStat{}
+						for _, r := range modelRuns.Data.Items {
+							model := ""
+							provider := ""
+							if r.Model != nil {
+								model = *r.Model
+							}
+							if r.Provider != nil {
+								provider = *r.Provider
+							}
+							key := provider + "/" + model
+							if provider == "" {
+								key = model
+							}
+							ms, ok := byModel[key]
+							if !ok {
+								ms = &modelStat{}
+								byModel[key] = ms
+							}
+							ms.total++
+							if r.Status == "completed" || r.Status == "success" {
+								ms.success++
+							} else if r.Status == "error" || r.Status == "failed" {
+								ms.failed++
+							}
+							if r.DurationMs != nil {
+								ms.durSum += *r.DurationMs
+							}
+						}
+						var modelNames []string
+						for name := range byModel {
+							modelNames = append(modelNames, name)
+						}
+						sort.Slice(modelNames, func(i, j int) bool {
+							return byModel[modelNames[i]].total > byModel[modelNames[j]].total
+						})
+						for _, name := range modelNames {
+							ms := byModel[name]
+							avg := "0s"
+							if ms.total > 0 && ms.durSum > 0 {
+								avg = (time.Duration(ms.durSum/ms.total) * time.Millisecond).Round(100 * time.Millisecond).String()
+							}
+							rate := float64(ms.success) / float64(ms.total) * 100
+							fmt.Printf("     %s: %d runs (%d✅ %d❌, %.0f%%, avg %s)\n",
+								name, ms.total, ms.success, ms.failed, rate, avg)
+						}
+					}
+
 					// Session analytics
 					fmt.Println("\n   📊 Sessions (last 24h):")
 					sessionStats, err := bridge.GetProjectRunSessionStats(ctx, &sdkagentrun.RunStatsOptions{

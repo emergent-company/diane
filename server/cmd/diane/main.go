@@ -151,13 +151,23 @@ func cmdInit() {
 	discordToken := readLine(reader)
 
 	var channelIDs []string
+	var threadChannelIDs []string
 	if discordToken != "" {
-		fmt.Print("Allowed Discord channel IDs (comma-separated): ")
+		fmt.Print("Allowed Discord channel IDs (comma-separated, or empty for all): ")
 		ch := readLine(reader)
 		for _, id := range strings.Split(ch, ",") {
 			id = strings.TrimSpace(id)
 			if id != "" {
 				channelIDs = append(channelIDs, id)
+			}
+		}
+
+		fmt.Print("Thread channel IDs for auto-threading (comma-separated, empty = thread everywhere): ")
+		th := readLine(reader)
+		for _, id := range strings.Split(th, ",") {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				threadChannelIDs = append(threadChannelIDs, id)
 			}
 		}
 	}
@@ -171,6 +181,7 @@ func cmdInit() {
 	if discordToken != "" {
 		pc.DiscordBotToken = discordToken
 		pc.DiscordChannelIDs = channelIDs
+		pc.DiscordThreadChannelIDs = threadChannelIDs
 	}
 
 	cfg.AddProject(name, pc)

@@ -40,6 +40,7 @@ func runBotOnce(pc *config.ProjectConfig) error {
 	dc := discord.DefaultConfig()
 	dc.BotToken = pc.DiscordBotToken
 	dc.AllowedChannels = pc.DiscordChannelIDs
+	dc.ThreadChannels = pc.DiscordThreadChannelIDs
 	if pc.SystemPrompt != "" {
 		dc.SystemPrompt = pc.SystemPrompt
 	}
@@ -79,6 +80,11 @@ func runBotOnce(pc *config.ProjectConfig) error {
 	log.Printf("  Memory project:    %s", pc.ProjectID)
 	if len(dc.AllowedChannels) > 0 {
 		log.Printf("  Discord channels:  %v", dc.AllowedChannels)
+	}
+	if len(dc.ThreadChannels) > 0 {
+		log.Printf("  Thread channels:   %v (others respond inline)", dc.ThreadChannels)
+	} else {
+		log.Printf("  Thread channels:   all allowed (create threads everywhere)")
 	}
 
 	return bot.Start()

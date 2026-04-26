@@ -1037,7 +1037,7 @@ func cmdAgentListDB() {
 		return
 	}
 
-	fmt.Println("═══ Local Agent Definitions ═══\n")
+	fmt.Println("═══ Local Agent Definitions ═══")
 	for _, a := range all {
 		tools, _ := db.ToolsFromJSON(a.ToolsJSON)
 		tags, _ := db.TagsFromJSON(a.TagsJSON)
@@ -1112,7 +1112,7 @@ func cmdAgentStats(name string) {
 			fmt.Println("No runs recorded in the last 24 hours.")
 			return
 		}
-		fmt.Println("═══ Agent Stats (last 24h) ═══\n")
+		fmt.Println("═══ Agent Stats (last 24h) ═══")
 		for _, s := range summaries {
 			successRate := float64(0)
 			if s.TotalRuns > 0 {
@@ -1229,7 +1229,7 @@ func cmdAgentTrace(runID string) {
 	}
 	defer bridge.Close()
 
-	fmt.Println("═══ Agent Run Trace ═══\n")
+	fmt.Println("═══ Agent Run Trace ═══")
 	fmt.Printf("Run ID: %s\n\n", runID)
 
 	// Fetch full trace

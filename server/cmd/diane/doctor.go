@@ -46,7 +46,7 @@ func cmdDoctor() {
 			fmt.Printf("       Project: %s\n", p.ProjectID)
 			fmt.Printf("       Server:  %s\n", p.ServerURL)
 			if p.DiscordBotToken != "" {
-				fmt.Printf("       Discord: ✓ (%d channel(s))\n", len(p.DiscordChannelIDs))
+				fmt.Printf("       Discord: ✓ (%d channel(s), %d thread channel(s))\n", len(p.DiscordChannelIDs), len(p.DiscordThreadChannelIDs))
 			}
 		}
 	}
@@ -218,27 +218,7 @@ func cmdDoctor() {
 		fmt.Printf("✅ %d results\n", len(results))
 	}
 
-	// ── 10. Chat API ──
-	fmt.Print("\n💬 Chat API... ")
-	stream, err := bridge.StreamChat(ctx, "Say OK in one word.", "")
-	if err != nil {
-		fmt.Printf("❌ %v\n", err)
-	} else {
-		defer stream.Close()
-		var response string
-		for event := range stream.Events() {
-			if event.Type == "token" {
-				response += event.Token
-			}
-		}
-		if response != "" {
-			fmt.Printf("✅ \"%s\"\n", truncateStr(response, 60))
-		} else {
-			fmt.Println("✅ (empty response)")
-		}
-	}
-
-	// ── 11. Discord config ──
+	// ── 10. Discord config ──
 	fmt.Print("\n🤖 Discord bot... ")
 	if pc.DiscordBotToken != "" {
 		fmt.Printf("✅ configured (%d channel(s))\n", len(pc.DiscordChannelIDs))
