@@ -159,13 +159,50 @@ func cmdInit() {
 		log.Fatal("Project ID is required. Find it via 'memory projects list' or the Memory Platform UI.")
 	}
 
-	// ── Discord bot (optional) ──
-	fmt.Print("\nDiscord bot token (optional, press Enter to skip): ")
-	discordToken := readLine(reader)
+	// ── Check if agent definitions exist (for mode detection) ──
+	agentCount := 0
+	if bridge != nil {
+		bridge.Client().SetContext("", projectID)
+		defs, err := bridge.ListAgentDefs(context.Background())
+		if err == nil && defs != nil {
+			agentCount = len(defs.Data)
+			if agentCount > 0 {
+				fmt.Printf("  🤖 Project has %d agent definitions — a master node may already be running\n", agentCount)
+			}
+		}
+	}
 
-	var channelIDs []string
-	var threadChannelIDs []string
-	if discordToken != "" {
+	// ── Node mode: master or slave ──
+	// After connecting to MP, check if agent definitions already exist.
+	// If they do, there's already a master — suggest slave mode.
+	suggestedMode := "master"
+	if agentCount > 0 {
+		suggestedMode = "slave"
+	}
+
+	fmt.Print("\n🔧 Node mode (master/slave)")
+	if agentCount > 0 {
+		fmt.Printf(" [slave] (project has %d agents — looks like a master already exists): ", agentCount)
+	} else {
+		fmt.Print(" [master]: ")
+	}
+	mode := readLine(reader)
+	if mode == "" {
+		mode = suggestedMode
+	}
+	if mode != "master" && mode != "slave" {
+		fmt.Fprintf(os.Stderr, "Invalid mode: %s (must be 'master' or 'slave')\n", mode)
+		os.Exit(1)
+	}
+	isSlave := mode == "slave"
+
+	// ── Discord bot (only on master) ──
+	var discordToken string
+	var channelIDs, threadChannelIDs []string
+
+	if !isSlave {
+		fmt.Print("\nDiscord bot token (optional, press Enter to skip): ")
+		discordToken = readLine(reader)
 		fmt.Print("Allowed Discord channel IDs (comma-separated, or empty for all): ")
 		ch := readLine(reader)
 		for _, id := range strings.Split(ch, ",") {
@@ -187,9 +224,10 @@ func cmdInit() {
 
 	// ── Create project config ──
 	pc := &config.ProjectConfig{
-		ServerURL: serverURL,
-		Token:     token,
-		ProjectID: projectID,
+		ServerURL:  serverURL,
+		Token:      token,
+		ProjectID:  projectID,
+		Mode:       mode,
 	}
 	if discordToken != "" {
 		pc.DiscordBotToken = discordToken
@@ -207,18 +245,28 @@ func cmdInit() {
 	fmt.Printf("   Project: %s\n", name)
 	fmt.Printf("   Server:  %s\n", serverURL)
 	fmt.Printf("   Project: %s\n", projectID)
+	fmt.Printf("   Mode:    %s\n", pc.ModeLabel())
 	if discordToken != "" {
 		fmt.Printf("   Discord: bot configured, %d channel(s)\n", len(channelIDs))
 	}
 
 	// Offer to apply embedded schemas
-	fmt.Print("\n📦 Apply embedded schema definitions to this project? [Y/n]: ")
-	applySchemas := readLine(reader)
-	if applySchemas == "" || strings.ToLower(applySchemas) == "y" || strings.ToLower(applySchemas) == "yes" {
-		doApplySchemas(pc)
+	// Offer to apply embedded schemas (only on master, or if user wants to)
+	if isSlave {
+		fmt.Println("\n📦 Slave nodes don't manage schemas — skip schema apply.")
+	} else {
+		fmt.Print("\n📦 Apply embedded schema definitions to this project? [Y/n]: ")
+		applySchemas := readLine(reader)
+		if applySchemas == "" || strings.ToLower(applySchemas) == "y" || strings.ToLower(applySchemas) == "yes" {
+			doApplySchemas(pc)
+		}
 	}
 
-	fmt.Println("\nRun 'diane bot' to start the Discord bot.")
+	if isSlave {
+		fmt.Println("\nRun 'diane mcp relay' to connect this slave node to the Memory Platform.")
+	} else {
+		fmt.Println("\nRun 'diane bot' to start the Discord bot.")
+	}
 }
 
 // cmdBot starts the Discord bot using config.

@@ -30,13 +30,13 @@ func cmdAgent(args []string) {
 		fmt.Println("  stats [name]    Show run stats for agents (from local DB)")
 		fmt.Println("  trace <runID>    Fetch full trace of an agent run (messages, tools, parent)")
 		fmt.Println("  runs [name] [--since <duration>]  List recent agent runs from Memory Platform")
-		fmt.Println("  define <name>   Create or update a user-defined agent")
+		fmt.Println("  define <name>   Create or update a user-defined agent  [master only]")
 		fmt.Println("  show <name>     Show agent detail (from local DB)")
-		fmt.Println("  route <name> <weight>  Set routing weight for A/B testing")
-		fmt.Println("  tag <name> <tags>      Set tags for agent (comma-separated)")
-		fmt.Println("  sync [name]     Sync one or all user agents to Memory Platform")
+		fmt.Println("  route <name> <weight>  Set routing weight for A/B testing  [master only]")
+		fmt.Println("  tag <name> <tags>      Set tags for agent (comma-separated)  [master only]")
+		fmt.Println("  sync [name]     Sync one or all user agents to Memory Platform  [master only]")
 		fmt.Println("  trigger <name> [prompt]  Trigger an agent run and show the result")
-		fmt.Println("  delete <name>   Delete a user agent (local + MP)")
+		fmt.Println("  delete <name>   Delete a user agent (local + MP)  [master only]")
 		fmt.Println("")
 		fmt.Println("Local SQLite database (~/.diane/cron.db) is the single source of truth.")
 		fmt.Println("Built-in agents are immutable and seeded from Go code on every startup.")
@@ -47,8 +47,10 @@ func cmdAgent(args []string) {
 	case "list":
 		cmdAgentList()
 	case "seed":
+		requireMaster("agent seed")
 		cmdAgentSeed()
 	case "seed-db":
+		requireMaster("agent seed-db")
 		cmdAgentSeedDB()
 	case "list-db":
 		cmdAgentListDB()
@@ -77,6 +79,7 @@ func cmdAgent(args []string) {
 		}
 		cmdAgentRuns(name, sinceDur)
 	case "define":
+		requireMaster("agent define")
 		if len(args) < 2 {
 			fmt.Println("Usage: diane agent define <name>")
 			return
@@ -89,18 +92,21 @@ func cmdAgent(args []string) {
 		}
 		cmdAgentShow(args[1])
 	case "route":
+		requireMaster("agent route")
 		if len(args) < 3 {
 			fmt.Println("Usage: diane agent route <name> <weight>")
 			return
 		}
 		cmdAgentRoute(args[1], args[2])
 	case "tag":
+		requireMaster("agent tag")
 		if len(args) < 3 {
 			fmt.Println("Usage: diane agent tag <name> <tag1,tag2,...>")
 			return
 		}
 		cmdAgentTag(args[1], args[2])
 	case "sync":
+		requireMaster("agent sync")
 		name := ""
 		if len(args) >= 2 {
 			name = args[1]
@@ -117,6 +123,7 @@ func cmdAgent(args []string) {
 		}
 		cmdAgentTrigger(name, prompt)
 	case "delete":
+		requireMaster("agent delete")
 		if len(args) < 2 {
 			fmt.Println("Usage: diane agent delete <name>")
 			return
@@ -1606,4 +1613,21 @@ func safeDeref[T int | int64](p *T) T {
 		return 0
 	}
 	return *p
+}
+
+// requireMaster checks that the active project is a master node.
+// Slaves cannot manage agent definitions — this is the master's job.
+// Prints an error and exits if called on a slave node.
+func requireMaster(command string) {
+	cfg, err := config.Load()
+	if err != nil {
+		return // let the actual command handle config errors
+	}
+	pc := cfg.Active()
+	if pc != nil && pc.IsSlave() {
+		fmt.Fprintf(os.Stderr, "❌ 'diane %s' is not available on slave nodes.\n", command)
+		fmt.Fprintf(os.Stderr, "   Agent management is the master node's responsibility.\n")
+		fmt.Fprintf(os.Stderr, "   Run this command on the master node, or change mode in ~/.config/diane.yml.\n")
+		os.Exit(1)
+	}
 }

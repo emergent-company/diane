@@ -30,6 +30,11 @@ type ProjectConfig struct {
 	ProjectID string `yaml:"project_id"`
 	OrgID     string `yaml:"org_id,omitempty"`
 
+	// Node mode: "master" (default, runs Discord + manages agents) or
+	// "slave" (MCP relay only — no Discord, no agent management).
+	// Empty defaults to "master" for backward compatibility.
+	Mode string `yaml:"mode,omitempty"`
+
 	// Discord Bot (optional, per project)
 	DiscordBotToken      string   `yaml:"discord_bot_token,omitempty"`
 	DiscordChannelIDs    []string `yaml:"discord_channel_ids,omitempty"`
@@ -50,6 +55,29 @@ type ProjectConfig struct {
 
 	// Agent Definitions (synced to Memory Platform as AgentDefinitions)
 	Agents map[string]*AgentConfig `yaml:"agents,omitempty"`
+}
+
+// IsMaster returns true if this node is the master (default, backward-compatible).
+// Master runs the Discord bot, manages agent definitions, and syncs to MP.
+func (p *ProjectConfig) IsMaster() bool {
+	return p.Mode == "" || p.Mode == "master"
+}
+
+// IsSlave returns true if this node is a slave (MCP relay only).
+// Slaves provide tools via the MCP relay but don't run Discord or manage agents.
+func (p *ProjectConfig) IsSlave() bool {
+	return p.Mode == "slave"
+}
+
+// ModeLabel returns a human-readable label for the node mode.
+func (p *ProjectConfig) ModeLabel() string {
+	if p == nil {
+		return "unknown"
+	}
+	if p.IsMaster() {
+		return "master 🏰"
+	}
+	return "slave 🔧"
 }
 
 // ProviderConfig holds credentials for a single LLM provider.

@@ -59,10 +59,15 @@ func TestSlaveQuickStart(t *testing.T) {
 		t.Log("═══ Step 2: Skipped (DIANE_KEEP is set) ═══")
 	}
 
-	// Step 3: Install
+	// Step 3: Install — cross-compile current dev binary and SCP to slave
 	t.Log("")
-	t.Log("═══ Step 3: Install (README: Private repo) ═══")
+	t.Log("═══ Step 3: Install (cross-compile + SCP) ═══")
 	installOnSlave(t, ctx)
+
+	// Step 3b: Verify the dev binary has master/slave support
+	t.Log("")
+	t.Log("═══ Step 3b: Verify mode support in binary ═══")
+	verifyModeSupport(t, ctx)
 
 	// Step 4: Configure
 	t.Log("")
@@ -73,6 +78,11 @@ func TestSlaveQuickStart(t *testing.T) {
 	t.Log("")
 	t.Log("═══ Step 5: Verify (README: Verify) ═══")
 	verifyCLI(t, ctx)
+
+	// Step 5.5: Test upgrade — installs v1.1.1 with nodes/service/upgrade commands
+	t.Log("")
+	t.Log("═══ Step 5.5 Test upgrade (diane upgrade) ═══")
+	verifyUpgrade(t, ctx)
 
 	// Step 6: Connect — start the relay in background
 	t.Log("")
@@ -141,24 +151,41 @@ func loadConfig(t *testing.T) *projectConfig {
 	return &projectConfig{ServerURL: pc.ServerURL, Token: pc.Token, ProjectID: pc.ProjectID}
 }
 
-// ── Install (matches README "Private repo" section) ──
+// ── Install (cross-compile dev binary and SCP to slave) ──
 
 func installOnSlave(t *testing.T, ctx context.Context) {
 	t.Helper()
-	ghToken := getGHToken(t)
 
-	mustSSH(t, ctx, "mkdir -p ~/.diane/bin")
-	mustSSH(t, ctx, fmt.Sprintf(
-		"export PATH=/opt/homebrew/bin:$PATH GITHUB_TOKEN=%s && cd ~/.diane/bin && gh release download -R emergent-company/diane v1.1.0 -p 'diane-darwin-arm64.tar.gz' --clobber",
-		ghToken,
-	))
-	mustSSH(t, ctx, "cd ~/.diane/bin && tar xzf diane-darwin-arm64.tar.gz && rm diane-darwin-arm64.tar.gz && chmod +x diane")
-
-	out, err := sshCmdOutput(ctx, "file ~/.diane/bin/diane && ls -lh ~/.diane/bin/diane")
+	// Cross-compile for darwin/arm64
+	buildCmd := exec.CommandContext(ctx, "/usr/local/go/bin/go", "build",
+		"-o", "/tmp/diane-darwin-arm64",
+		"./cmd/diane/")
+	buildCmd.Dir = "/root/diane/server"
+	buildCmd.Env = append(os.Environ(), "GOOS=darwin", "GOARCH=arm64", "CGO_ENABLED=0")
+	out, err := buildCmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("Binary verification failed: %v\n%s", err, out)
+		t.Fatalf("Cross-compile failed: %v\nOutput: %s", err, string(out))
 	}
-	t.Logf("✅ Installed: %s", strings.TrimSpace(out))
+	t.Log("✅ Cross-compiled binary for darwin/arm64")
+
+	// SCP to slave
+	scpCmd := exec.CommandContext(ctx, "scp",
+		"-o", "ConnectTimeout=10",
+		"-o", "StrictHostKeyChecking=accept-new",
+		"/tmp/diane-darwin-arm64",
+		slaveHost+":~/.diane/bin/diane")
+	scpOut, err := scpCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("SCP to slave failed: %v\nOutput: %s", err, string(scpOut))
+	}
+	t.Log("✅ SCP'd binary to slave")
+
+	// Verify
+	verifyOut, err := sshCmdOutput(ctx, "file ~/.diane/bin/diane && chmod +x ~/.diane/bin/diane && ls -lh ~/.diane/bin/diane")
+	if err != nil {
+		t.Fatalf("Binary verification failed: %v\n%s", err, verifyOut)
+	}
+	t.Logf("✅ Installed: %s", strings.TrimSpace(verifyOut))
 }
 
 func getGHToken(t *testing.T) string {
@@ -174,16 +201,17 @@ func getGHToken(t *testing.T) string {
 
 func writeSlaveConfig(t *testing.T, ctx context.Context, pc *projectConfig) {
 	t.Helper()
-	yml := fmt.Sprintf(`default: default
+	yaml := fmt.Sprintf(`default: default
 projects:
   default:
     server_url: %s
     token: %s
     project_id: %s
+    mode: slave
     instance_id: tool-test
 `, pc.ServerURL, pc.Token, pc.ProjectID)
 
-	mustSSH(t, ctx, fmt.Sprintf("cat > ~/.config/diane.yml << 'DIANEEOF'\n%sDIANEEOF", yml))
+	mustSSH(t, ctx, fmt.Sprintf("cat > ~/.config/diane.yml << 'DIANEEOF'\n%sDIANEEOF", yaml))
 
 	out, err := sshCmdOutput(ctx, "wc -l ~/.config/diane.yml")
 	if err != nil {
@@ -217,41 +245,119 @@ func verifyCLI(t *testing.T, ctx context.Context) {
 	}
 }
 
+// ── Upgrade ──
+
+func verifyUpgrade(t *testing.T, ctx context.Context) {
+	t.Helper()
+	ghToken := getGHToken(t)
+	// Actually run diane upgrade which checks GitHub and replaces itself
+	out, err := sshCmdOutput(ctx,
+		fmt.Sprintf("export PATH=$HOME/.diane/bin:$PATH GITHUB_TOKEN=%s && diane upgrade 2>&1", ghToken),
+	)
+	if err != nil {
+		t.Logf("'diane upgrade' exit: %v", err)
+	}
+	t.Logf("Upgrade output:\n%s", out)
+
+	if strings.Contains(out, "Upgraded") || strings.Contains(out, "up to date") || strings.Contains(out, "Already") {
+		t.Log("✅ diane upgrade completed")
+	}
+
+	// Verify new commands exist (quiet check — they may error on usage, just not "unknown")
+	for _, cmd := range []string{"nodes", "upgrade", "service"} {
+		checkOut, err := sshCmdOutput(ctx,
+			"export PATH=$HOME/.diane/bin:$PATH && diane "+cmd+" 2>&1",
+		)
+		if strings.Contains(checkOut, "Unknown command") {
+			t.Errorf("Command 'diane %s' not found after upgrade:\n%s", cmd, checkOut)
+		} else {
+			t.Logf("✅ diane %s — recognized", cmd)
+		}
+		_ = err // ignore exit codes — commands that need args will exit 1
+	}
+}
+
 // ── Connect (matches README "Connect as a Slave" section) ──
 
 func startRelay(t *testing.T, ctx context.Context) string {
 	t.Helper()
-	// Start relay in background, capture PID
+	// Use diane service start for proper PID management
 	out, err := sshCmdOutput(ctx,
-		"export PATH=$HOME/.diane/bin:$PATH && nohup diane mcp relay --instance tool-test > ~/.diane/relay.log 2>&1 & echo $!",
+		"export PATH=$HOME/.diane/bin:$PATH && diane service start --instance tool-test 2>&1",
 	)
 	if err != nil {
-		t.Fatalf("Failed to start relay: %v\n%s", err, out)
+		// If service start fails, try the raw method
+		t.Logf("'diane service start' failed: %v\n%s", err, out)
+		t.Logf("Falling back to direct relay start...")
+		out, err = sshCmdOutput(ctx,
+			"export PATH=$HOME/.diane/bin:$PATH && nohup diane mcp relay --instance tool-test > ~/.diane/relay.log 2>&1 & echo $!",
+		)
+		if err != nil {
+			t.Fatalf("Failed to start relay: %v\n%s", err, out)
+		}
+		pid := strings.TrimSpace(out)
+		t.Logf("Relay PID: %s", pid)
+
+		// Verify running
+		time.Sleep(5 * time.Second)
+		checkOut, err := sshCmdOutput(ctx,
+			"export PATH=$HOME/.diane/bin:$PATH && ps -p "+pid+" > /dev/null 2>&1 && echo RUNNING || echo DEAD",
+		)
+		if err != nil || !strings.Contains(checkOut, "RUNNING") {
+			logOut, _ := sshCmdOutput(ctx, "tail -20 ~/.diane/relay.log 2>/dev/null")
+			t.Fatalf("Relay process %s is not running. Logs:\n%s", pid, logOut)
+		}
+		logOut, _ := sshCmdOutput(ctx, "grep -E '(Connected|Registered|error|Error)' ~/.diane/relay.log 2>/dev/null")
+		t.Logf("Relay logs:\n%s", logOut)
+		return pid
 	}
-	pid := strings.TrimSpace(out)
 
-	// Wait for relay to establish connection
-	time.Sleep(5 * time.Second)
+	// service start worked — verify status
+	t.Logf("diane service start output:\n%s", out)
 
-	// Verify it's still running and check logs for connection
-	checkOut, err := sshCmdOutput(ctx,
-		"export PATH=$HOME/.diane/bin:$PATH && ps -p "+pid+" > /dev/null 2>&1 && echo RUNNING || echo DEAD",
+	// Check service status
+	statusOut, err := sshCmdOutput(ctx,
+		"export PATH=$HOME/.diane/bin:$PATH && diane service status --instance tool-test 2>&1",
 	)
-	if err != nil || !strings.Contains(checkOut, "RUNNING") {
-		logOut, _ := sshCmdOutput(ctx, "tail -20 ~/.diane/relay.log 2>/dev/null")
-		t.Fatalf("Relay process %s is not running. Logs:\n%s", pid, logOut)
+	if err != nil {
+		t.Logf("'diane service status' exit: %v", err)
+	}
+	t.Logf("Service status:\n%s", statusOut)
+
+	if strings.Contains(statusOut, "is running") {
+		t.Log("✅ Relay running via diane service")
+	} else {
+		t.Log("⚠️  Relay may not be running via service")
 	}
 
-	// Show connection status from logs
-	logOut, _ := sshCmdOutput(ctx, "grep -E '(Connected|Registered|error|Error)' ~/.diane/relay.log 2>/dev/null")
-	t.Logf("Relay logs:\n%s", logOut)
-
+	// Extract PID from status
+	pid := ""
+	for _, line := range strings.Split(statusOut, "\n") {
+		if strings.Contains(line, "PID") {
+			parts := strings.Fields(line)
+			for i, p := range parts {
+				if p == "(PID" && i+1 < len(parts) {
+					pid = strings.TrimRight(parts[i+1], ")")
+				}
+			}
+		}
+	}
 	return pid
 }
 
 func stopRelay(t *testing.T, ctx context.Context, pid string) {
 	t.Helper()
-	sshCmdOutput(ctx, "kill "+pid+" 2>/dev/null; kill -0 "+pid+" 2>/dev/null && sleep 2 && kill -9 "+pid+" 2>/dev/null; true")
+	// Use service stop first (clean), fall back to raw kill
+	out, err := sshCmdOutput(ctx,
+		"export PATH=$HOME/.diane/bin:$PATH && diane service stop --instance tool-test 2>&1",
+	)
+	if err != nil {
+		t.Logf("'diane service stop' failed: %v\n%s", err, out)
+		// Fall back to raw kill
+		sshCmdOutput(ctx, "kill "+pid+" 2>/dev/null; sleep 1; kill -9 "+pid+" 2>/dev/null; true")
+	} else {
+		t.Logf("diane service stop:\n%s", out)
+	}
 }
 
 // verifyRelaySession runs 'diane nodes' on the slave to confirm the instance

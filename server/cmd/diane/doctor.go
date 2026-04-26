@@ -30,6 +30,7 @@ func cmdDoctor() {
 	fmt.Printf("✅ %s\n", config.Path())
 	fmt.Printf("   Active: %s\n", cfg.Default)
 	fmt.Printf("   Server: %s\n", pc.ServerURL)
+	fmt.Printf("   Mode:   %s\n", pc.ModeLabel())
 
 	// ── 2. Configured projects ──
 	fmt.Print("\n📋 Configured projects... ")
@@ -45,6 +46,7 @@ func cmdDoctor() {
 			fmt.Printf("   %s %s\n", mark, name)
 			fmt.Printf("       Project: %s\n", p.ProjectID)
 			fmt.Printf("       Server:  %s\n", p.ServerURL)
+			fmt.Printf("       Mode:    %s\n", p.ModeLabel())
 			if p.DiscordBotToken != "" {
 				fmt.Printf("       Discord: ✓ (%d channel(s), %d thread channel(s))\n", len(p.DiscordChannelIDs), len(p.DiscordThreadChannelIDs))
 			}

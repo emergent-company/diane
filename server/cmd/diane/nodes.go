@@ -59,26 +59,31 @@ func cmdNodes() {
 		os.Exit(1)
 	}
 
-	// Parse response — could be array or object wrapper
+	// Parse response — could be array, {"items": [...]}, {"data": [...]}, or {"sessions": [...]}
 	var sessions []relaySession
 	if err := json.Unmarshal(body, &sessions); err != nil {
-		// Try wrapped response: {"items": [...]}
-		var wrapped struct {
-			Items []relaySession `json:"items"`
+		// Try wrapped response formats
+		for _, key := range []string{"items", "data", "sessions"} {
+			var wrapped struct {
+				Items []relaySession `json:"items"`
+				Data  []relaySession `json:"data"`
+				Sessions []relaySession `json:"sessions"`
+			}
+			if err2 := json.Unmarshal(body, &wrapped); err2 == nil {
+				switch key {
+				case "items":
+					if wrapped.Items != nil { sessions = wrapped.Items; break }
+				case "data":
+					if wrapped.Data != nil { sessions = wrapped.Data; break }
+				case "sessions":
+					if wrapped.Sessions != nil { sessions = wrapped.Sessions; break }
+				}
+			}
+			if sessions != nil { break }
 		}
-		if err2 := json.Unmarshal(body, &wrapped); err2 != nil || wrapped.Items == nil {
-			// Try data wrapper: {"data": [...]}
-			var dataWrap struct {
-				Data []relaySession `json:"data"`
-			}
-			if err3 := json.Unmarshal(body, &dataWrap); err3 != nil || dataWrap.Data == nil {
-				fmt.Fprintf(os.Stderr, "❌ Failed to parse relay sessions response: %v\n", err)
-				fmt.Fprintf(os.Stderr, "   Raw: %s\n", string(body))
-				os.Exit(1)
-			}
-			sessions = dataWrap.Data
-		} else {
-			sessions = wrapped.Items
+		if sessions == nil {
+			fmt.Fprintf(os.Stderr, "❌ Failed to parse relay sessions response\n   Raw: %s\n", string(body))
+			os.Exit(1)
 		}
 	}
 

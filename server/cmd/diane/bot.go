@@ -24,8 +24,14 @@ func startBot(pc *config.ProjectConfig) {
 // Unlike startBot, it returns errors instead of calling log.Fatalf,
 // so the caller can decide whether to restart.
 func runBotOnce(pc *config.ProjectConfig) error {
+	// Slave nodes don't run the Discord bot.
+	if pc.IsSlave() {
+		return fmt.Errorf("this is a slave node (mode=slave) — run 'diane mcp relay' instead of 'diane bot'")
+	}
+
 	// Seed built-in agents to local SQLite database on every startup.
 	// This ensures the local DB is always in sync with the Go code.
+	// On slave nodes, skip seeding — no agent management needed.
 	if localDB, err := db.New(""); err == nil {
 		if err := agents.SeedToDB(localDB); err != nil {
 			log.Printf("[WARN] Failed to seed agents to local DB: %v", err)
