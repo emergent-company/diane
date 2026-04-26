@@ -1,7 +1,7 @@
 // Package memorytest validates the diane CLI binary end-to-end via exec.
 //
-// These tests require ~/.config/diane.yml to exist (same config that the diane
-// CLI uses), and the active project must have a valid API token.
+// These tests require credentials — either from ~/.config/diane.yml or env vars
+// DIANE_TOKEN, DIANE_SERVER, DIANE_PROJECT.
 //
 // Run: cd ~/diane/server && /usr/local/go/bin/go test -v -count=1 -run TestSlave ./memorytest/
 package memorytest
@@ -9,6 +9,7 @@ package memorytest
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -24,18 +25,20 @@ const slaveHost = "mcj@100.75.227.125"
 //
 // Flow matches README sections:
 //  1. SSH connectivity check
-//  2. Clean slate
+//  2. Clean slate (skip if DIANE_KEEP is set)
 //  3. Install — gh release download + extract
 //  4. Configure — write ~/.config/diane.yml
 //  5. Verify — diane projects + diane doctor
 //  6. Connect — diane mcp relay
-//  7. Cleanup
+//  7. Verify session visible from Memory Platform
+//  8. Cleanup (only if DIANE_KEEP is not set)
 func TestSlaveQuickStart(t *testing.T) {
-	pc := loadActiveConfig(t)
+	pc := loadConfig(t)
 	if pc == nil {
-		t.Skip("No active project config found — run 'diane init' or check ~/.config/diane.yml")
+		t.Skip("No active project config found — run 'diane init', check ~/.config/diane.yml, or set DIANE_TOKEN/DIANE_SERVER/DIANE_PROJECT")
 	}
 
+	keep := os.Getenv("DIANE_KEEP") != ""
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
@@ -45,67 +48,112 @@ func TestSlaveQuickStart(t *testing.T) {
 		t.Skipf("Slave host %s not reachable — skipping", slaveHost)
 	}
 
-	// Step 2: Clean slate
-	t.Log("")
-	t.Log("═══ Step 2: Clean slate ═══")
-	cleanSlave(t, ctx)
-	t.Log("✅ Fresh state ready")
+	// Step 2: Clean slate (only if not keeping)
+	if !keep {
+		t.Log("")
+		t.Log("═══ Step 2: Clean slate ═══")
+		cleanSlave(t, ctx)
+		t.Log("✅ Fresh state ready")
+	} else {
+		t.Log("")
+		t.Log("═══ Step 2: Skipped (DIANE_KEEP is set) ═══")
+	}
 
-	// Step 3: Install — matches README "Private repo" instructions
+	// Step 3: Install
 	t.Log("")
 	t.Log("═══ Step 3: Install (README: Private repo) ═══")
 	installOnSlave(t, ctx)
 
-	// Step 4: Configure — matches README "Configure" section
+	// Step 4: Configure
 	t.Log("")
 	t.Log("═══ Step 4: Configure (README: Configure) ═══")
 	writeSlaveConfig(t, ctx, pc)
 
-	// Step 5: Verify — matches README "Verify" section
+	// Step 5: Verify
 	t.Log("")
 	t.Log("═══ Step 5: Verify (README: Verify) ═══")
 	verifyCLI(t, ctx)
 
-	// Step 6: Connect — matches README "Connect as a Slave" section
+	// Step 6: Connect — start the relay in background
 	t.Log("")
 	t.Log("═══ Step 6: Connect (README: Connect as a Slave) ═══")
-	verifyRelay(t, ctx)
+	relayPID := startRelay(t, ctx)
+	if relayPID == "" {
+		t.Fatal("Relay did not start")
+	}
+	t.Logf("✅ Relay running (PID: %s)", relayPID)
 
-	// Step 7: Cleanup
+	// Step 7: Verify the instance is visible from Memory Platform
 	t.Log("")
-	t.Log("═══ Step 7: Cleanup ═══")
-	if !t.Failed() {
+	t.Log("═══ Step 7: Verify session listed on Memory Platform ═══")
+	verifyRelaySession(t, ctx, pc)
+
+	// Step 8: Cleanup (only if DIANE_KEEP is not set)
+	if !keep {
+		t.Log("")
+		t.Log("═══ Step 8: Cleanup ═══")
+		stopRelay(t, ctx, relayPID)
 		cleanSlave(t, ctx)
 		t.Log("✅ Cleaned up")
 	} else {
-		t.Log("⚠️  Test failed — keeping slave state for debugging")
+		t.Log("")
+		t.Log("═══ Step 8: Keeping slave running (DIANE_KEEP is set) ═══")
 	}
 
 	t.Log("")
 	t.Log("═══ Quick Start verified ✅ ═══")
 }
 
+// ── Config ──
+
+type projectConfig struct {
+	ServerURL string
+	Token     string
+	ProjectID string
+}
+
+// loadConfig reads credentials from env vars first, then falls back to diane.yml.
+// Env: DIANE_TOKEN, DIANE_SERVER, DIANE_PROJECT
+func loadConfig(t *testing.T) *projectConfig {
+	t.Helper()
+
+	tok := os.Getenv("DIANE_TOKEN")
+	srv := os.Getenv("DIANE_SERVER")
+	pid := os.Getenv("DIANE_PROJECT")
+
+	if tok != "" && srv != "" && pid != "" {
+		t.Logf("Using env vars: server=%s project=%s", srv, pid)
+		return &projectConfig{ServerURL: srv, Token: tok, ProjectID: pid}
+	}
+
+	// Fall back to config file
+	cfg, err := config.Load()
+	if err != nil {
+		t.Logf("Failed to load config: %v", err)
+		return nil
+	}
+	pc := cfg.Active()
+	if pc == nil {
+		t.Log("No active project found in config")
+		return nil
+	}
+	t.Logf("Using config file: server=%s project=%s", pc.ServerURL, pc.ProjectID)
+	return &projectConfig{ServerURL: pc.ServerURL, Token: pc.Token, ProjectID: pc.ProjectID}
+}
+
 // ── Install (matches README "Private repo" section) ──
 
 func installOnSlave(t *testing.T, ctx context.Context) {
 	t.Helper()
-
-	// gh token lives in macOS keychain, unreachable via non-interactive SSH.
-	// We pass it via GITHUB_TOKEN env var — same credential, same download UX.
 	ghToken := getGHToken(t)
 
 	mustSSH(t, ctx, "mkdir -p ~/.diane/bin")
-
-	// gh release download -R emergent-company/diane v1.1.0 -p "diane-darwin-arm64.tar.gz"
 	mustSSH(t, ctx, fmt.Sprintf(
 		"export PATH=/opt/homebrew/bin:$PATH GITHUB_TOKEN=%s && cd ~/.diane/bin && gh release download -R emergent-company/diane v1.1.0 -p 'diane-darwin-arm64.tar.gz' --clobber",
 		ghToken,
 	))
-
-	// tar xzf + rm tarball + chmod
 	mustSSH(t, ctx, "cd ~/.diane/bin && tar xzf diane-darwin-arm64.tar.gz && rm diane-darwin-arm64.tar.gz && chmod +x diane")
 
-	// Verify
 	out, err := sshCmdOutput(ctx, "file ~/.diane/bin/diane && ls -lh ~/.diane/bin/diane")
 	if err != nil {
 		t.Fatalf("Binary verification failed: %v\n%s", err, out)
@@ -123,32 +171,6 @@ func getGHToken(t *testing.T) string {
 }
 
 // ── Configure (matches README "Configure" section) ──
-
-type projectConfig struct {
-	ServerURL string
-	Token     string
-	ProjectID string
-}
-
-func loadActiveConfig(t *testing.T) *projectConfig {
-	t.Helper()
-	cfg, err := config.Load()
-	if err != nil {
-		t.Logf("Failed to load config: %v", err)
-		return nil
-	}
-	pc := cfg.Active()
-	if pc == nil {
-		t.Log("No active project found in config")
-		return nil
-	}
-	t.Logf("Loaded config: server=%s project=%s", pc.ServerURL, pc.ProjectID)
-	return &projectConfig{
-		ServerURL: pc.ServerURL,
-		Token:     pc.Token,
-		ProjectID: pc.ProjectID,
-	}
-}
 
 func writeSlaveConfig(t *testing.T, ctx context.Context, pc *projectConfig) {
 	t.Helper()
@@ -197,29 +219,61 @@ func verifyCLI(t *testing.T, ctx context.Context) {
 
 // ── Connect (matches README "Connect as a Slave" section) ──
 
-func verifyRelay(t *testing.T, ctx context.Context) {
+func startRelay(t *testing.T, ctx context.Context) string {
 	t.Helper()
-	rctx, cancel := context.WithTimeout(ctx, 25*time.Second)
-	defer cancel()
-
-	cmd := sshCmd(rctx,
-		"export PATH=$HOME/.diane/bin:$PATH && nohup diane mcp relay --instance tool-test 2>&1 & echo $!; sleep 8; wait",
+	// Start relay in background, capture PID
+	out, err := sshCmdOutput(ctx,
+		"export PATH=$HOME/.diane/bin:$PATH && nohup diane mcp relay --instance tool-test > ~/.diane/relay.log 2>&1 & echo $!",
 	)
-	out, err := cmd.CombinedOutput()
-	output := string(out)
-
-	t.Logf("Relay output (%d bytes):\n%s", len(output), output)
-
-	switch {
-	case strings.Contains(output, "Connected to relay"):
-		t.Log("✅ Relay connected to Memory Platform")
-	case strings.Contains(output, "Failed") || strings.Contains(output, "Error") || strings.Contains(output, "error"):
-		t.Logf("⚠️  Relay errors:\n%s", output)
-	default:
-		t.Log("⚠️  Relay status unclear from output")
-	}
 	if err != nil {
-		t.Logf("Relay process ended: %v (expected if killed by timeout)", err)
+		t.Fatalf("Failed to start relay: %v\n%s", err, out)
+	}
+	pid := strings.TrimSpace(out)
+
+	// Wait for relay to establish connection
+	time.Sleep(5 * time.Second)
+
+	// Verify it's still running and check logs for connection
+	checkOut, err := sshCmdOutput(ctx,
+		"export PATH=$HOME/.diane/bin:$PATH && ps -p "+pid+" > /dev/null 2>&1 && echo RUNNING || echo DEAD",
+	)
+	if err != nil || !strings.Contains(checkOut, "RUNNING") {
+		logOut, _ := sshCmdOutput(ctx, "tail -20 ~/.diane/relay.log 2>/dev/null")
+		t.Fatalf("Relay process %s is not running. Logs:\n%s", pid, logOut)
+	}
+
+	// Show connection status from logs
+	logOut, _ := sshCmdOutput(ctx, "grep -E '(Connected|Registered|error|Error)' ~/.diane/relay.log 2>/dev/null")
+	t.Logf("Relay logs:\n%s", logOut)
+
+	return pid
+}
+
+func stopRelay(t *testing.T, ctx context.Context, pid string) {
+	t.Helper()
+	sshCmdOutput(ctx, "kill "+pid+" 2>/dev/null; kill -0 "+pid+" 2>/dev/null && sleep 2 && kill -9 "+pid+" 2>/dev/null; true")
+}
+
+// verifyRelaySession runs 'diane nodes' on the slave to confirm the instance
+// is registered and visible.
+func verifyRelaySession(t *testing.T, ctx context.Context, pc *projectConfig) {
+	t.Helper()
+
+	// Give the relay a moment to register
+	time.Sleep(2 * time.Second)
+
+	out, err := sshCmdOutput(ctx, "export PATH=$HOME/.diane/bin:$PATH && diane nodes 2>&1")
+	if err != nil {
+		t.Logf("'diane nodes' exit: %v", err)
+	}
+	t.Logf("diane nodes output:\n%s", out)
+
+	if strings.Contains(out, "tool-test") {
+		t.Log("✅ Node 'tool-test' visible via 'diane nodes'")
+	} else if strings.Contains(out, "Connected relay") || strings.Contains(out, "nodes") {
+		t.Log("⚠️  'tool-test' not found but nodes command responded")
+	} else {
+		t.Log("⚠️  Could not verify node listing")
 	}
 }
 

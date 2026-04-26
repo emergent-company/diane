@@ -429,10 +429,8 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.Message) {
         _, active := b.activeChans[responseChannel]
         b.activeMu.Unlock()
         if !active {
-            s.MessageReactionAdd(channelID, m.ID, "👀")
+            s.MessageReactionAdd(channelID, m.ID, "🛑")
             b.sendMessage(s, responseChannel, "Nothing is currently running.")
-            s.MessageReactionRemove(channelID, m.ID, "👀", botID)
-            s.MessageReactionAdd(channelID, m.ID, "✅")
             log.Printf("[STOP] Nothing running — replied idle")
             return
         }
@@ -445,10 +443,8 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.Message) {
         // Channel is busy with another message
         if strings.TrimSpace(m.Content) == "/stop" {
             // /stop bypasses the queue — cancel the active run
-            s.MessageReactionAdd(channelID, m.ID, "👀")
+            s.MessageReactionAdd(channelID, m.ID, "🛑")
             b.stopActiveRun(responseChannel)
-            s.MessageReactionRemove(channelID, m.ID, "👀", botID)
-            s.MessageReactionAdd(channelID, m.ID, "✅")
             b.sendMessage(s, responseChannel, "🛑 **Stopped**")
             log.Printf("[STOP] Stopped active run for channel %s", responseChannel)
             return

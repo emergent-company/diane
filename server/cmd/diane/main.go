@@ -34,6 +34,7 @@ func main() {
 		fmt.Println("  agent           Manage agent definitions (list, define, show, sync, delete)")
 		fmt.Println("  doctor          Check connection with Memory Platform and run diagnostics")
 		fmt.Println("  monitor         Show bot status, sessions, recent activity")
+		fmt.Println("  nodes           List all connected MCP relay nodes")
 		fmt.Println("  mcp relay       Connect MCP server to Memory Platform relay")
 		fmt.Println("  mcp serve       Run MCP JSON-RPC server (stdin/stdout)")
 		fmt.Println("  schema apply    Apply embedded schema definitions to Memory Platform")
@@ -55,6 +56,8 @@ func main() {
 		cmdDoctor()
 	case "monitor":
 		cmdMonitor()
+	case "nodes":
+		cmdNodes()
 	case "schema":
 		cmdSchema(os.Args[2:])
 	case "mcp":

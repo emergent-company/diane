@@ -8,6 +8,7 @@ package discord
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -77,12 +78,24 @@ type Bot struct {
 	dedupMu     sync.RWMutex
 	dedupCache  map[string]time.Time // messageID → timestamp (for dedup on reconnect)
 
+	activeMu     sync.Mutex
+	activeChans  map[string]*ActiveChannel // responseChannel → active processing
+
 	sseClient        *events.Client
 	sseNotifications chan map[string]interface{} // buffered channel for all SSE notification events
 	sendChannelID    string                      // pre-configured channel ID for notifications
 }
 
 const dedupTTL = 5 * time.Minute // keep dedup entries for 5 minutes
+
+// ActiveChannel tracks an in-progress agent run for a channel.
+// Used for concurrency guard, interrupt support, and /stop.
+type ActiveChannel struct {
+	Cancel  context.CancelFunc    // cancels the poll loop in triggerAgentWithContext
+	AgentID string                // runtime agent ID (for CancelRun API)
+	RunID   string                // current run ID (for CancelRun API)
+	Pending []*discordgo.Message  // queued messages waiting to be processed
+}
 
 // ChannelSession tracks a Discord channel's conversation in the graph.
 // JSON-serializable for persistence across bot restarts.
@@ -157,6 +170,7 @@ func New(cfg Config) (*Bot, error) {
 
 		typingCancel:  make(map[string]context.CancelFunc),
 		dedupCache:    make(map[string]time.Time),
+		activeChans:   make(map[string]*ActiveChannel),
 		sseNotifications: make(chan map[string]interface{}, 100),
 		sendChannelID: notifChannel,
 	}
@@ -476,18 +490,16 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.Message) {
 	channelID := m.ChannelID
 	botID := s.State.User.ID
 
-	// Check if we're already in a thread
+	// ── Determine response channel (thread or inline) ──
 	ch, err := s.Channel(channelID)
 	isThread := err == nil && ch.IsThread()
-
 	var responseChannel string
+	var createdNewThread bool
 
 	if isThread {
-		// Already in a thread — respond here directly, continue the session
 		responseChannel = channelID
 		log.Printf("[THR] Continuing in existing thread %s", channelID)
 	} else {
-		// Check if auto-threading is enabled for this channel
 		shouldThread := len(b.config.ThreadChannels) == 0 // empty = thread everywhere
 		if !shouldThread {
 			for _, id := range b.config.ThreadChannels {
@@ -497,76 +509,130 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.Message) {
 				}
 			}
 		}
-
 		if !shouldThread {
-			// No threading for this channel — respond inline
-			log.Printf("[THR] Responding inline (no thread config for channel %s)", channelID)
+			log.Printf("[THR] Responding inline (no thread config)")
 			responseChannel = channelID
 		} else {
-			// Create a new thread for this conversation (Hermes-style)
-		// Phase 1: Categorize message with emoji prefix based on content heuristics
-		emoji, category := categorizeMessage(m.Content)
-		cleanMsg := strings.TrimSpace(m.Content)
-		// Remove any existing emoji prefix from the message content to avoid double-emoji
-		cleanMsg = regexp.MustCompile(`^[\p{So}\p{Sk}\p{Sc}\p{Sm}]\s*`).ReplaceAllString(cleanMsg, "")
-		threadName := emoji + " " + category + ": " + truncateStr(cleanMsg, 40)
-		if len(threadName) > 100 {
-			threadName = threadName[:100]
+			emoji, category := categorizeMessage(m.Content)
+			cleanMsg := strings.TrimSpace(m.Content)
+			cleanMsg = regexp.MustCompile(`^[\p{So}\p{Sk}\p{Sc}\p{Sm}]\s*`).ReplaceAllString(cleanMsg, "")
+			threadName := emoji + " " + category + ": " + truncateStr(cleanMsg, 40)
+			if len(threadName) > 100 {
+				threadName = threadName[:100]
+			}
+			if threadName == "" || threadName == emoji+" "+category+": " {
+				threadName = emoji + " " + category
+			}
+			thread, err := s.MessageThreadStart(channelID, m.ID, threadName, 60*24)
+			if err != nil {
+				log.Printf("[WARN] Thread creation failed: %v", err)
+				b.sendResponse(s, channelID, m, start)
+				return
+			}
+			responseChannel = thread.ID
+			createdNewThread = true
+			log.Printf("[THR] Created thread %s (%s)", thread.ID, threadName)
 		}
-		if threadName == "" || threadName == emoji+" "+category+": " {
-			threadName = emoji + " " + category
-		}
-		thread, err := s.MessageThreadStart(channelID, m.ID, threadName, 60*24) // auto-archive after 24h
-		if err != nil {
-			log.Printf("[WARN] Thread creation failed: %v", err)
-			// Fall back to responding in the channel
-			b.sendResponse(s, channelID, m, start)
+	}
+
+	// ── Handle /stop when nothing is active ──
+	if strings.TrimSpace(m.Content) == "/stop" {
+		b.activeMu.Lock()
+		_, active := b.activeChans[responseChannel]
+		b.activeMu.Unlock()
+		if !active {
+			s.MessageReactionAdd(channelID, m.ID, "🛑")
+			b.sendMessage(s, responseChannel, "Nothing is currently running.")
+			log.Printf("[STOP] Nothing running — replied idle")
 			return
 		}
-		responseChannel = thread.ID
-		log.Printf("[THR] Created thread %s (%s) in channel %s", thread.ID, threadName, channelID)
+		// Active — fall through to acquire guard below
+	}
+
+	// ── Acquire channel (active guard) ──
+	ctx, cancel, acquired := b.acquireChannel(responseChannel)
+	if !acquired {
+		// Channel is busy with another message
+		if strings.TrimSpace(m.Content) == "/stop" {
+			// /stop bypasses the queue — cancel the active run
+			s.MessageReactionAdd(channelID, m.ID, "🛑")
+			b.stopActiveRun(responseChannel)
+			b.sendMessage(s, responseChannel, "🛑 **Stopped**")
+			log.Printf("[STOP] Stopped active run for channel %s", responseChannel)
+			return
 		}
+
+		// Non-stop message while busy — queue it
+		s.MessageReactionAdd(channelID, m.ID, "👀")
+		b.queueMessage(responseChannel, m.Message)
+		log.Printf("[QUEUE] Channel %s busy, queued msg %s", responseChannel, m.ID[:8])
+		return
 	}
 
-	// Start persistent typing indicator (Hermes pattern — loop every 8s)
-	b.startTyping(s, responseChannel)
+	// ── Process loop: drain messages until queue empty or cancelled ──
 	processingOK := false
+	currentMsg := m
 
-	// Process the message through buildAndSendResponse
-	response := b.buildAndSendResponse(m, responseChannel)
+	for {
+		// Log queue state
+		queueSize := 0
+		b.activeMu.Lock()
+		if ac, ok := b.activeChans[responseChannel]; ok {
+			queueSize = len(ac.Pending)
+		}
+		b.activeMu.Unlock()
+		dlog("PRC", "channel", responseChannel, "msg", currentMsg.ID[:8], "queue_size", queueSize)
 
-	// Stop typing indicator
-	b.stopTyping(responseChannel)
+		b.startTyping(s, responseChannel)
+		response := b.buildAndSendResponse(ctx, currentMsg, responseChannel)
+		b.stopTyping(responseChannel)
 
-	// Send response if we got one
-	if response != "" {
-		b.sendMessage(s, responseChannel, response)
-		processingOK = true
-	}
+		// Check if cancelled by /stop
+		if ctx.Err() != nil {
+			b.sendMessage(s, responseChannel, "🛑 **Stopped**")
+			processingOK = true
+			break
+		}
 
-	// Phase 2: For new threads, check if the agent updated the session title
-	// via the set_session_title built-in tool. This is a clean, interface-agnostic
-	// approach — the title lives in session metadata, and each interface reads
-	// it independently (Discord renames threads, CLI renames tabs, etc.).
-	if !isThread && processingOK {
-		b.mu.RLock()
-		cs, exists := b.sessions[responseChannel]
-		b.mu.RUnlock()
-		if exists && cs.SessionID != "" {
-			sd, err := globalBridge.GetSession(context.Background(), cs.SessionID)
-			if err == nil && sd.Title != "" && !strings.HasPrefix(sd.Title, "Discord #") {
-				if _, err := s.ChannelEdit(responseChannel, &discordgo.ChannelEdit{
-					Name: sd.Title,
-				}); err != nil {
-					log.Printf("[THR] Title update failed: %v", err)
-				} else {
-					log.Printf("[THR] Renamed thread to %q", sd.Title)
+		// Send response
+		if response != "" {
+			b.sendMessage(s, responseChannel, response)
+			processingOK = true
+
+			// For new threads, check for session title update
+			if createdNewThread && !isThread {
+				b.mu.RLock()
+				cs, exists := b.sessions[responseChannel]
+				b.mu.RUnlock()
+				if exists && cs.SessionID != "" {
+					sd, sdErr := globalBridge.GetSession(context.Background(), cs.SessionID)
+					if sdErr == nil && sd.Title != "" && !strings.HasPrefix(sd.Title, "Discord #") {
+						if _, editErr := s.ChannelEdit(responseChannel, &discordgo.ChannelEdit{
+							Name: sd.Title,
+						}); editErr != nil {
+							log.Printf("[THR] Title update failed: %v", editErr)
+						} else {
+							log.Printf("[THR] Renamed thread to %q", sd.Title)
+						}
+					}
 				}
 			}
 		}
+
+		// Check queue for next message
+		nextMsg := b.popPending(responseChannel)
+		if nextMsg == nil {
+			break // queue empty, done
+		}
+		currentMsg = nextMsg
+		log.Printf("[QUEUE] Processing queued msg %s (channel %s)", currentMsg.ID[:8], responseChannel)
 	}
 
-	// Swap reactions: 👀 → ✅ on success, 👀 → ❌ on failure (Hermes pattern)
+	// ── Cleanup ──
+	cancel()
+	b.releaseChannel(responseChannel)
+
+	// Swap reactions on ORIGINAL message only
 	s.MessageReactionRemove(channelID, m.ID, "👀", botID)
 	if processingOK {
 		s.MessageReactionAdd(channelID, m.ID, "✅")
@@ -574,22 +640,20 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.Message) {
 		s.MessageReactionAdd(channelID, m.ID, "❌")
 	}
 
-	log.Printf("[RES] channel=%s duration=%v chars=%d", responseChannel, time.Since(start).Round(time.Millisecond), len(response))
+	log.Printf("[RES] channel=%s duration=%v chars=%d", responseChannel, time.Since(start).Round(time.Millisecond), len(m.Content))
 }
 
-// sendResponse handles the full response flow and sends to a channel.
+// sendResponse handles the full response flow (fallback path, no active guard).
+// Uses a plain background context since this path doesn't support /stop.
 func (b *Bot) sendResponse(s *discordgo.Session, channelID string, m *discordgo.Message, start time.Time) {
-	response := b.buildAndSendResponse(m, channelID)
+	response := b.buildAndSendResponse(context.Background(), m, channelID)
 	b.sendMessage(s, channelID, response)
 	log.Printf("[RES] channel=%s duration=%v chars=%d", channelID, time.Since(start).Round(time.Millisecond), len(response))
 }
 
 // buildAndSendResponse does the actual work: session management + MP agent call.
-// responseChannel is the channel where the response will be sent (used as session key).
-// No fallback — if the agent fails, the user sees the error.
-func (b *Bot) buildAndSendResponse(m *discordgo.Message, responseChannel string) string {
-	ctx := context.Background()
-
+// ctx must be a cancellable context passed down from the active guard.
+func (b *Bot) buildAndSendResponse(ctx context.Context, m *discordgo.Message, responseChannel string) string {
 	// Get or create session for this response channel (thread or parent channel)
 	cs := b.getOrCreateSession(responseChannel, b.detectAgentType(m.Content))
 	log.Printf("[SES] response_channel=%s session=%s agent=%s", responseChannel, cs.SessionID, cs.AgentType)
@@ -597,12 +661,16 @@ func (b *Bot) buildAndSendResponse(m *discordgo.Message, responseChannel string)
 	// Determine which MP agent to use
 	agentName := cs.AgentType
 	if agentName == AgentTypeDefault {
-		agentName = "diane-default" // Route through MP agent for tool access (web-fetch, etc.)
+		agentName = "diane-default"
 	}
 
 	log.Printf("[AGT] Routing to agent: %s", agentName)
 	response, err := b.triggerAgentWithContext(ctx, cs, m.Content, agentName)
 	if err != nil {
+		// Check if cancelled — suppress noisy error message for stop
+		if ctx.Err() != nil {
+			return "" // caller handles the "Stopped" message
+		}
 		errMsg := fmt.Sprintf("❌ Agent %s failed: %v", agentName, err)
 		log.Printf("[AGT] %s", errMsg)
 		return errMsg
@@ -682,6 +750,95 @@ func (b *Bot) saveSession(cs *ChannelSession) {
 		AgentType:    cs.AgentType,
 	}); err != nil {
 		log.Printf("[SES] Error persisting session: %v", err)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Channel Concurrency Guard
+// ─────────────────────────────────────────────────────────────────────
+
+// acquireChannel marks a channel as busy and returns a cancellable context.
+// Returns nil, nil, false if the channel is already busy.
+func (b *Bot) acquireChannel(channelID string) (context.Context, context.CancelFunc, bool) {
+	b.activeMu.Lock()
+	defer b.activeMu.Unlock()
+	if _, exists := b.activeChans[channelID]; exists {
+		return nil, nil, false
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	b.activeChans[channelID] = &ActiveChannel{Cancel: cancel}
+	return ctx, cancel, true
+}
+
+// releaseChannel removes the channel from active state.
+// Must be called when the processing loop exits.
+func (b *Bot) releaseChannel(channelID string) {
+	b.activeMu.Lock()
+	defer b.activeMu.Unlock()
+	delete(b.activeChans, channelID)
+}
+
+// setActiveAgentRun stores the runtime agent and run IDs for CancelRun.
+// Called from triggerAgentWithContext after the run starts.
+func (b *Bot) setActiveAgentRun(channelID, agentID, runID string) {
+	b.activeMu.Lock()
+	defer b.activeMu.Unlock()
+	if ac, exists := b.activeChans[channelID]; exists {
+		ac.AgentID = agentID
+		ac.RunID = runID
+	}
+}
+
+// queueMessage adds a message to the pending queue for a busy channel.
+func (b *Bot) queueMessage(channelID string, msg *discordgo.Message) {
+	b.activeMu.Lock()
+	defer b.activeMu.Unlock()
+	if ac, exists := b.activeChans[channelID]; exists {
+		ac.Pending = append(ac.Pending, msg)
+		log.Printf("[QUEUE] Queued msg %s for channel %s (size=%d)", msg.ID[:8], channelID, len(ac.Pending))
+	}
+}
+
+// popPending removes and returns the next queued message, or nil if empty.
+func (b *Bot) popPending(channelID string) *discordgo.Message {
+	b.activeMu.Lock()
+	defer b.activeMu.Unlock()
+	ac, exists := b.activeChans[channelID]
+	if !exists || len(ac.Pending) == 0 {
+		return nil
+	}
+	msg := ac.Pending[0]
+	ac.Pending = ac.Pending[1:]
+	return msg
+}
+
+// stopActiveRun cancels the current agent run for a channel.
+// Called from the /stop handler on a different goroutine.
+func (b *Bot) stopActiveRun(channelID string) {
+	b.activeMu.Lock()
+	ac, exists := b.activeChans[channelID]
+	b.activeMu.Unlock()
+	if !exists {
+		log.Printf("[STOP] No active run for channel %s", channelID)
+		return
+	}
+
+	log.Printf("[STOP] Cancelling run %s for channel %s", truncateStr(ac.RunID, 12), channelID)
+
+	// Cancel the context first — the poll loop picks this up
+	ac.Cancel()
+
+	// Cancel the run on MP (best-effort, non-blocking)
+	if ac.AgentID != "" && ac.RunID != "" {
+		go func(aID, rID string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := globalBridge.Client().Agents.CancelRun(ctx, aID, rID); err != nil {
+				log.Printf("[STOP] CancelRun error: %v", err)
+			} else {
+				log.Printf("[STOP] Run %s cancelled on MP", rID[:12])
+			}
+		}(ac.AgentID, ac.RunID)
 	}
 }
 
@@ -927,15 +1084,35 @@ func (b *Bot) triggerAgentWithContext(ctx context.Context, cs *ChannelSession, u
 	runID := *triggerResp.RunID
 	dlog("AGT", "action", "run_started", "run_id", runID[:12], "agent", agentName)
 
-	// 4. Poll for completion (max 120s, poll every 2s)
+	// Store agent/run IDs for CancelRun (used by /stop and interrupt)
+	b.setActiveAgentRun(cs.ChannelID, agentID, runID)
+
+	// 4. Poll for completion (cancellable via ctx)
 	pollStart := time.Now()
-	timeout := 120 * time.Second
 	pollInterval := 2 * time.Second
+	pollTimeout := 120 * time.Second
 	var runStatus string
-	for time.Since(pollStart) < timeout {
-		time.Sleep(pollInterval)
+pollLoop:
+	for {
+		select {
+		case <-ctx.Done():
+			// Cancelled by /stop or interrupt
+			dlog("POLL", "event", "cancelled", "elapsed", time.Since(pollStart).Round(time.Second).String())
+			return "", fmt.Errorf("run %s: cancelled by user", runID[:12])
+		case <-time.After(pollInterval):
+		}
+
+		// Check timeout separately
+		if time.Since(pollStart) >= pollTimeout {
+			dlog("POLL", "event", "timeout", "elapsed", pollTimeout.String())
+			return "", fmt.Errorf("run %s: timeout after %v (last status: %s)", runID[:12], pollTimeout, runStatus)
+		}
+
 		runResp, err := globalBridge.GetProjectRun(ctx, runID)
 		if err != nil {
+			if errors.Is(ctx.Err(), context.Canceled) {
+				return "", fmt.Errorf("run %s: cancelled by user", runID[:12])
+			}
 			dlog("POLL", "err", err.Error(), "elapsed", time.Since(pollStart).Round(time.Second).String())
 			continue
 		}
@@ -944,8 +1121,7 @@ func (b *Bot) triggerAgentWithContext(ctx context.Context, cs *ChannelSession, u
 
 		switch runStatus {
 		case "completed", "success", "completed_with_warnings":
-			// Done!
-			goto fetchResponse
+			break pollLoop
 		case "error", "failed", "cancelled", "timeout":
 			errMsg := ""
 			if runResp.Data.ErrorMessage != nil {
@@ -954,11 +1130,7 @@ func (b *Bot) triggerAgentWithContext(ctx context.Context, cs *ChannelSession, u
 			dlog("AGT", "err", "run_"+runStatus, "run", runID[:12], "error", errMsg)
 			return "", fmt.Errorf("run %s: status=%s, error=%s", runID[:12], runStatus, errMsg)
 		}
-		// "pending", "running", "queued" → keep polling
 	}
-	return "", fmt.Errorf("run %s: timeout after %v (last status: %s)", runID[:12], timeout, runStatus)
-
-fetchResponse:
 	// 5. Get the final response from messages
 	msgs, err := globalBridge.GetRunMessages(ctx, runID)
 	if err != nil {
