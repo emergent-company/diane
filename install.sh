@@ -5,6 +5,7 @@
 # Environment variables:
 #   DIANE_VERSION  - Specific version to install (default: latest)
 #   DIANE_DIR      - Installation directory (default: ~/.diane)
+#   GITHUB_TOKEN   - GitHub token for private repos (optional)
 
 set -e
 
@@ -12,6 +13,20 @@ set -e
 GITHUB_REPO="emergent-company/diane"
 BINARY_NAME="diane"
 DEFAULT_INSTALL_DIR="${HOME}/.diane"
+
+# Auth setup: use GITHUB_TOKEN or gh CLI for private repos
+CURL_AUTH=""
+AUTH_HEADER=""
+if [ -n "$GITHUB_TOKEN" ]; then
+    AUTH_HEADER="Authorization: Bearer ${GITHUB_TOKEN}"
+    CURL_AUTH="-H '${AUTH_HEADER}'"
+elif command -v gh >/dev/null 2>&1; then
+    GH_TOKEN=$(gh auth token 2>/dev/null) || true
+    if [ -n "$GH_TOKEN" ]; then
+        AUTH_HEADER="Authorization: Bearer ${GH_TOKEN}"
+        CURL_AUTH="-H '${AUTH_HEADER}'"
+    fi
+fi
 
 # Colors (if terminal supports them)
 if [ -t 1 ]; then
@@ -80,16 +95,24 @@ detect_platform() {
     info "Detected platform: ${PLATFORM}"
 }
 
+# curl wrapper with auth
+github_curl() {
+    if [ -n "$AUTH_HEADER" ]; then
+        curl -fsSL -H "${AUTH_HEADER}" "$@"
+    else
+        curl -fsSL "$@"
+    fi
+}
+
 # Get latest version from GitHub releases
 get_latest_version() {
-    # Note: info messages go to stderr to avoid polluting the version output
     printf "${BLUE}==>${NC} Fetching latest version...\n" >&2
-    LATEST=$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
-    
+    LATEST=$(github_curl "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+
     if [ -z "$LATEST" ]; then
         error "Failed to get latest version. Check your internet connection."
     fi
-    
+
     echo "$LATEST"
 }
 
@@ -98,7 +121,7 @@ get_installed_version() {
     INSTALL_DIR="${DIANE_DIR:-$DEFAULT_INSTALL_DIR}"
     BINARY_PATH="${INSTALL_DIR}/bin/diane"
     OLD_BINARY_PATH="${INSTALL_DIR}/bin/diane-mcp"
-    
+
     # Check new binary first, then fall back to old name
     if [ ! -x "$BINARY_PATH" ]; then
         if [ -x "$OLD_BINARY_PATH" ]; then
@@ -108,15 +131,13 @@ get_installed_version() {
             return
         fi
     fi
-    
+
     # Send MCP initialize request and extract version from response
     # The server responds with serverInfo.version in the initialize response
-    # Version is returned with 'v' prefix (e.g., v1.0.1), possibly with git suffix
     INSTALLED=$(echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"installer","version":"1.0.0"}}}' | \
         timeout 2 "$BINARY_PATH" 2>/dev/null | \
         grep -o '"version":"[^"]*"' | head -1 | sed 's/"version":"//;s/"//;s/-.*//')
-    
-    # INSTALLED now contains version like "v1.0.1" (stripped git suffix like "-1-gabcdef")
+
     echo "$INSTALLED"
 }
 
@@ -125,26 +146,26 @@ check_version() {
     INSTALL_DIR="${DIANE_DIR:-$DEFAULT_INSTALL_DIR}"
     BINARY_PATH="${INSTALL_DIR}/bin/diane"
     OLD_BINARY_PATH="${INSTALL_DIR}/bin/diane-mcp"
-    
+
     # Check if either binary exists
     if [ ! -x "$BINARY_PATH" ] && [ ! -x "$OLD_BINARY_PATH" ]; then
         return 0  # Not installed, proceed with installation
     fi
-    
+
     INSTALLED_VERSION=$(get_installed_version)
-    
+
     if [ -z "$INSTALLED_VERSION" ]; then
     info "DIANE is installed but version could not be determined. Reinstalling..."
         return 0
     fi
-    
+
     # If specific version requested, compare with that
     if [ -n "$DIANE_VERSION" ]; then
         TARGET_VERSION="$DIANE_VERSION"
     else
         TARGET_VERSION="$VERSION"
     fi
-    
+
     if [ "$INSTALLED_VERSION" = "$TARGET_VERSION" ]; then
         # Check if we need to migrate from old binary name
         if [ -x "$OLD_BINARY_PATH" ] && [ ! -x "$BINARY_PATH" ]; then
@@ -154,7 +175,7 @@ check_version() {
         success "DIANE ${INSTALLED_VERSION} is already installed and up to date"
         exit 0
     fi
-    
+
     info "${MUTED}Installed version:${NC} ${INSTALLED_VERSION}"
     info "${MUTED}Available version:${NC} ${TARGET_VERSION}"
     info "Upgrading..."
@@ -165,33 +186,33 @@ check_version() {
 install() {
     INSTALL_DIR="${DIANE_DIR:-$DEFAULT_INSTALL_DIR}"
     VERSION="${DIANE_VERSION:-$(get_latest_version)}"
-    
+
     # Check if already up to date
     check_version
-    
+
     info "Installing DIANE ${VERSION}..."
-    
+
     # Create installation directory
     mkdir -p "${INSTALL_DIR}/bin"
     mkdir -p "${INSTALL_DIR}/secrets"
     mkdir -p "${INSTALL_DIR}/tools"
     mkdir -p "${INSTALL_DIR}/data"
     mkdir -p "${INSTALL_DIR}/logs"
-    
+
     # Construct download URL
     DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/${BINARY_NAME}-${PLATFORM}.tar.gz"
-    
+
     info "Downloading from: ${DOWNLOAD_URL}"
-    
+
     # Download and extract
     TMP_DIR=$(mktemp -d)
     trap "rm -rf ${TMP_DIR}" EXIT
-    
-    curl -fsSL "${DOWNLOAD_URL}" -o "${TMP_DIR}/diane.tar.gz" || error "Download failed. Check if version ${VERSION} exists."
-    
+
+    github_curl "${DOWNLOAD_URL}" -o "${TMP_DIR}/diane.tar.gz" || error "Download failed. Check if version ${VERSION} exists."
+
     # Verify checksum if available
     CHECKSUM_URL="${DOWNLOAD_URL}.sha256"
-    if curl -fsSL "${CHECKSUM_URL}" -o "${TMP_DIR}/diane.tar.gz.sha256" 2>/dev/null; then
+    if github_curl "${CHECKSUM_URL}" -o "${TMP_DIR}/diane.tar.gz.sha256" 2>/dev/null; then
         info "Verifying checksum..."
         cd "${TMP_DIR}"
         if command -v sha256sum >/dev/null 2>&1; then
@@ -203,23 +224,23 @@ install() {
         fi
         cd - >/dev/null
     fi
-    
+
     # Extract
     tar -xzf "${TMP_DIR}/diane.tar.gz" -C "${TMP_DIR}"
-    
+
     # Clean up old binary name if exists (migration from diane-mcp to diane)
     OLD_BINARY_PATH="${INSTALL_DIR}/bin/diane-mcp"
     if [ -f "$OLD_BINARY_PATH" ]; then
         info "Removing old binary (diane-mcp)..."
         rm -f "$OLD_BINARY_PATH"
     fi
-    
+
     # Install binary (tarball contains diane directly)
     mv "${TMP_DIR}/diane" "${INSTALL_DIR}/bin/diane"
     chmod +x "${INSTALL_DIR}/bin/diane"
-    
+
     success "DIANE installed to ${INSTALL_DIR}/bin/diane"
-    
+
     # Check if bin is in PATH
     case ":${PATH}:" in
         *":${INSTALL_DIR}/bin:"*)
@@ -233,7 +254,7 @@ install() {
             echo ""
             ;;
     esac
-    
+
     # Print version
     echo ""
     success "Installation complete!"
@@ -264,17 +285,17 @@ upgrade() {
 # Uninstall
 uninstall() {
     INSTALL_DIR="${DIANE_DIR:-$DEFAULT_INSTALL_DIR}"
-    
+
     if [ ! -d "${INSTALL_DIR}" ]; then
         error "DIANE is not installed at ${INSTALL_DIR}"
     fi
-    
+
     info "Uninstalling DIANE from ${INSTALL_DIR}..."
-    
+
     # Remove both old and new binary names
     rm -f "${INSTALL_DIR}/bin/diane"
     rm -f "${INSTALL_DIR}/bin/diane-mcp"
-    
+
     success "DIANE uninstalled"
     warn "Data directory preserved at ${INSTALL_DIR}/data"
     echo "  To remove completely: rm -rf ${INSTALL_DIR}"
@@ -284,7 +305,7 @@ uninstall() {
 version() {
     INSTALL_DIR="${DIANE_DIR:-$DEFAULT_INSTALL_DIR}"
     INSTALLED_VERSION=$(get_installed_version)
-    
+
     if [ -n "$INSTALLED_VERSION" ]; then
         echo "DIANE ${INSTALLED_VERSION}"
         echo "Installed at: ${INSTALL_DIR}/bin/diane"
@@ -312,7 +333,7 @@ main() {
             version
             ;;
         --version|-v)
-            echo "DIANE Installer v1.1.0"
+            echo "DIANE Installer v1.2.0"
             ;;
         --help|-h)
             echo "DIANE Installer"
@@ -328,10 +349,12 @@ main() {
             echo "Environment variables:"
             echo "  DIANE_VERSION  Specific version to install (default: latest)"
             echo "  DIANE_DIR      Installation directory (default: ~/.diane)"
+            echo "  GITHUB_TOKEN   GitHub token for private repos (optional)"
             echo ""
             echo "Examples:"
             echo "  curl -fsSL https://raw.githubusercontent.com/Emergent-Comapny/diane/main/install.sh | sh"
             echo "  DIANE_VERSION=v1.0.0 ./install.sh"
+            echo "  GITHUB_TOKEN=ghp_... ./install.sh"
             echo "  ./install.sh upgrade"
             echo "  ./install.sh uninstall"
             ;;
