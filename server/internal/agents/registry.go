@@ -698,8 +698,11 @@ After merging, query all remaining active MemoryFacts via entity-query(type=Memo
 
 Frequency score: normalize access_count to 0-1 (cap at 10: min(access_count, 10) / 10)
 Recency score: max(0, 1 - days_unused/30)
-Diversity score: unique_query_count / 5 (cap at 1.0)
-Consolidation score: 0.3 if no prior dreams, 0.7 if found once, 1.0 if found 2+
+Diversity score: min(query_diversity_count, 5) / 5
+Consolidation score: 
+  - dreaming_cycle_count == 0: 0.3 (first cycle)
+  - dreaming_cycle_count == 1: 0.7 (second cycle — survived once)
+  - dreaming_cycle_count >= 2: 1.0 (mature — survived 2+ cycles)
 Richness score: concept_count / 5 (cap at 1.0)
 
 ### Promotion Gates
@@ -711,6 +714,14 @@ A fact MUST pass ALL three gates to be eligible for hallucination:
 ### Phase Reinforcement
 Add a small boost to facts that survived both DECAY and PATTERNS phases:
 - Survived both: +0.05 bonus to final_score (capped at 1.0)
+
+### Consolidation Tracking
+After scoring, for EVERY scored candidate (whether promoted or not), update the fact's consolidation metadata so the next dreaming cycle can use it:
+
+1. Increment dreaming_cycle_count by 1
+2. Set last_promoted_date to the current UTC timestamp
+3. For facts that passed all promotion gates and were selected for hallucination, also set access_count += 1 (promotion reinforces the fact)
+Use: entity-update(entity_id=<fact_id>, properties={dreaming_cycle_count: N, last_promoted_date: "2026-04-26T22:00:00Z", access_count: M})
 
 From the eligible candidates, select the TOP 10 by final_score for hallucination.
 

@@ -195,8 +195,13 @@ func DefaultConfig() *Config {
 	}
 }
 
-// Path returns the path to the Diane config file.
+// Path returns the path to the config file.
+// If the DIANE_CONFIG environment variable is set, it is used directly.
+// Otherwise defaults to ~/.config/diane.yml.
 func Path() string {
+	if p := os.Getenv("DIANE_CONFIG"); p != "" {
+		return p
+	}
 	return filepath.Join(DefaultDir, "diane.yml")
 }
 
