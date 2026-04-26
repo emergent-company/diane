@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
+	"github.com/Emergent-Comapny/diane/internal/agents"
 	"github.com/Emergent-Comapny/diane/internal/config"
 	"github.com/Emergent-Comapny/diane/internal/memory"
+	sdkagents "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agentdefinitions"
 )
 
 func cmdDoctor() {
@@ -140,51 +143,181 @@ func cmdDoctor() {
 		}
 	}
 
-	// ── 7c. Local agent definitions ──
-	fmt.Print("\n🧠 Agent definitions (local)... ")
-	if len(pc.Agents) == 0 {
-		fmt.Println("⚠️  None configured")
-		fmt.Println("   Run 'diane agent define <name>' to create one")
-	} else {
-		fmt.Printf("✅ %d agent(s)\n", len(pc.Agents))
-		for name, a := range pc.Agents {
-			fmt.Printf("   %s — %s\n", name, a.Description)
-			if len(a.Tools) > 0 {
-				fmt.Printf("       Tools: %d\n", len(a.Tools))
-			}
-			if a.Sandbox != nil && a.Sandbox.Enabled {
-				fmt.Printf("       Sandbox: %s\n", a.Sandbox.BaseImage)
-			}
+	// ── 7c. Agent Definitions (merged: config + MP) ──
+	remoteDefs, err := bridge.ListAgentDefs(ctx)
+	remoteNameSet := map[string]*sdkagents.AgentDefinitionSummary{}
+	if err == nil && remoteDefs != nil {
+		for i := range remoteDefs.Data {
+			d := remoteDefs.Data[i]
+			remoteNameSet[d.Name] = &d
 		}
 	}
 
-	// ── 7d. Agents on Memory Platform ──
-	fmt.Print("\n🧠 Agents on Memory Platform... ")
-	remoteDefs, err := bridge.ListAgentDefs(ctx)
-	if err != nil {
-		fmt.Printf("⚠️  %v\n", err)
-	} else if len(remoteDefs.Data) == 0 {
-		fmt.Println("⚠️  None")
-		fmt.Println("   Run 'diane agent seed' to sync local agents to the platform.")
+	totalRemote := len(remoteNameSet)
+	totalLocal := len(pc.Agents)
+	deployed := 0
+	for name := range pc.Agents {
+		if remoteNameSet[name] != nil {
+			deployed++
+		}
+	}
+
+	// Build set of built-in agent names (seeded from Go code)
+	builtInSet := map[string]bool{}
+	for _, ba := range agents.BuiltInAgents() {
+		builtInSet[ba.Name] = true
+	}
+
+	fmt.Print("\n🧠 Agent Definitions")
+	if totalLocal == 0 && totalRemote == 0 {
+		fmt.Println(" — none configured")
+		fmt.Println("   Run 'diane agent define <name>' or 'diane agent seed' to get started.")
 	} else {
-		fmt.Printf("✅ %d agent(s)\n", len(remoteDefs.Data))
-		for _, d := range remoteDefs.Data {
-			desc := ""
-			if d.Description != nil {
-				desc = *d.Description
-				if len(desc) > 60 {
-					desc = desc[:60] + "..."
+		fmt.Printf(" — %d in config", totalLocal)
+		if err != nil {
+			fmt.Printf(", ⚠️  (MP: %v)", err)
+		} else {
+			builtInOnMP := 0
+			orphaned := 0
+			for name := range remoteNameSet {
+				if _, local := pc.Agents[name]; !local {
+					if builtInSet[name] {
+						builtInOnMP++
+					} else {
+						orphaned++
+					}
 				}
 			}
-			toolInfo := ""
-			if d.ToolCount > 0 {
-				toolInfo = fmt.Sprintf(" (%d tools)", d.ToolCount)
+			fmt.Printf(", %d on MP", totalRemote)
+			if builtInOnMP > 0 {
+				fmt.Printf(" (%d built-in", builtInOnMP)
+				if orphaned > 0 {
+					fmt.Printf(", %d orphaned", orphaned)
+				}
+				fmt.Printf(")")
+			} else if orphaned > 0 {
+				fmt.Printf(" (%d orphaned)", orphaned)
 			}
-			fmt.Printf("   %s%s\n", d.Name, toolInfo)
-			if desc != "" {
-				fmt.Printf("       %s\n", desc)
+		}
+		if totalLocal > 0 {
+			if deployed == totalLocal {
+				fmt.Printf(" — all deployed ✅\n")
+			} else {
+				fmt.Printf(" — %d deployed, %d pending 🕐\n", deployed, totalLocal-deployed)
 			}
-			fmt.Printf("       Flow: %s  Visibility: %s  Default: %v\n", d.FlowType, d.Visibility, d.IsDefault)
+		} else {
+			fmt.Println("")
+		}
+
+		// Local agents first (config-defined), with deploy status
+		if totalLocal > 0 {
+			// Sort local names for stable output
+			localNames := make([]string, 0, totalLocal)
+			for name := range pc.Agents {
+				localNames = append(localNames, name)
+			}
+			sort.Strings(localNames)
+
+			for _, name := range localNames {
+				a := pc.Agents[name]
+				rd := remoteNameSet[name]
+
+				status := "🕐  Not deployed"
+				if rd != nil {
+					status = "✅ Deployed"
+				}
+
+				desc := a.Description
+				if len(desc) > 55 {
+					desc = desc[:55] + "..."
+				}
+				toolCount := len(a.Tools)
+				fmt.Printf("   📄 %-25s %s  — %s", name, status, desc)
+				if toolCount > 0 {
+					fmt.Printf(" [%d tools]", toolCount)
+				}
+				fmt.Println()
+
+				if rd != nil {
+					fmt.Printf("       Flow: %s  Visibility: %s  Default: %v\n", rd.FlowType, rd.Visibility, rd.IsDefault)
+				}
+				if a.Sandbox != nil && a.Sandbox.Enabled {
+					fmt.Printf("       Sandbox: %s\n", a.Sandbox.BaseImage)
+				}
+			}
+		}
+
+		// Then remaining agents on MP (not in local config)
+		if err == nil && totalRemote > deployed {
+			mpOnlyCount := totalRemote - deployed
+			mpOnlyNames := make([]string, 0, mpOnlyCount)
+			builtInAmongMpOnly := 0
+			for name := range remoteNameSet {
+				if _, local := pc.Agents[name]; !local {
+					mpOnlyNames = append(mpOnlyNames, name)
+					if builtInSet[name] {
+						builtInAmongMpOnly++
+					}
+				}
+			}
+			sort.Strings(mpOnlyNames)
+
+			if mpOnlyCount <= 5 || totalLocal == 0 {
+				// Show all when few enough, or when there are no local agents to anchor
+				for _, name := range mpOnlyNames {
+					d := remoteNameSet[name]
+					desc := ""
+					if d.Description != nil {
+						desc = *d.Description
+						if len(desc) > 50 {
+							desc = desc[:50] + "..."
+						}
+					}
+					toolInfo := ""
+					if d.ToolCount > 0 {
+						toolInfo = fmt.Sprintf(" [%d tools]", d.ToolCount)
+					}
+					label := "🔧 built-in"
+					if !builtInSet[name] {
+						label = "☁️  orphaned"
+					}
+					fmt.Printf("   %-25s %s%s", name, label, toolInfo)
+					if desc != "" {
+						fmt.Printf(" — %s", desc)
+					}
+					fmt.Println()
+				}
+			} else {
+				// Compact summary when many
+				limit := 3
+				for _, name := range mpOnlyNames[:limit] {
+					d := remoteNameSet[name]
+					desc := ""
+					if d.Description != nil {
+						desc = *d.Description
+						if len(desc) > 50 {
+							desc = desc[:50] + "..."
+						}
+					}
+					toolInfo := ""
+					if d.ToolCount > 0 {
+						toolInfo = fmt.Sprintf(" [%d tools]", d.ToolCount)
+					}
+					label := "🔧 built-in"
+					if !builtInSet[name] {
+						label = "☁️  orphaned"
+					}
+					fmt.Printf("   %-25s %s%s", name, label, toolInfo)
+					if desc != "" {
+						fmt.Printf(" — %s", desc)
+					}
+					fmt.Println()
+				}
+				remaining := mpOnlyCount - limit
+				builtInRemaining := builtInAmongMpOnly - min(builtInAmongMpOnly, limit)
+				fmt.Printf("   … and %d more (%d built-in, %d orphaned — run 'diane agent list' for all)\n",
+					remaining, builtInRemaining, remaining-builtInRemaining)
+			}
 		}
 	}
 

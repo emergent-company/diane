@@ -219,6 +219,12 @@ func (db *DB) migrate() error {
 
 	CREATE INDEX IF NOT EXISTS idx_agent_run_stats_agent ON agent_run_stats(agent_name);
 	CREATE INDEX IF NOT EXISTS idx_agent_run_stats_created ON agent_run_stats(created_at);
+
+	CREATE TABLE IF NOT EXISTS bot_config (
+		key TEXT PRIMARY KEY,
+		value TEXT NOT NULL,
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
 	`
 
 	_, err := db.conn.Exec(schema)
@@ -609,6 +615,34 @@ func (db *DB) GetAllDiscordSessions() ([]*DiscordSession, error) {
 		sessions = append(sessions, s)
 	}
 	return sessions, rows.Err()
+}
+
+// ============================================================================
+// Bot Config
+// ============================================================================
+
+// GetConfig returns a bot config value by key.
+func (db *DB) GetConfig(key string) (string, error) {
+	var value string
+	err := db.conn.QueryRow(
+		"SELECT value FROM bot_config WHERE key = ?", key,
+	).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return value, err
+}
+
+// SetConfig sets a bot config value by key (upsert).
+func (db *DB) SetConfig(key, value string) error {
+	_, err := db.conn.Exec(`
+		INSERT INTO bot_config (key, value, updated_at)
+		VALUES (?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(key) DO UPDATE SET
+			value = excluded.value,
+			updated_at = CURRENT_TIMESTAMP
+	`, key, value)
+	return err
 }
 
 // ============================================================================

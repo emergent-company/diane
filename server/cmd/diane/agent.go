@@ -37,6 +37,7 @@ func cmdAgent(args []string) {
 		fmt.Println("  sync [name]     Sync one or all user agents to Memory Platform  [master only]")
 		fmt.Println("  trigger <name> [prompt]  Trigger an agent run and show the result")
 		fmt.Println("  delete <name>   Delete a user agent (local + MP)  [master only]")
+		fmt.Println("  prune [--force] Remove orphaned agents from MP (dry-run without --force)  [master only]")
 		fmt.Println("")
 		fmt.Println("Local SQLite database (~/.diane/cron.db) is the single source of truth.")
 		fmt.Println("Built-in agents are immutable and seeded from Go code on every startup.")
@@ -129,6 +130,15 @@ func cmdAgent(args []string) {
 			return
 		}
 		cmdAgentDelete(args[1])
+	case "prune":
+		requireMaster("agent prune")
+		force := false
+		for _, a := range args[1:] {
+			if a == "--force" {
+				force = true
+			}
+		}
+		cmdAgentPrune(force)
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown agent command: %s\n", args[0])
 		os.Exit(1)
@@ -987,6 +997,118 @@ func cmdAgentDelete(name string) {
 		os.Exit(1)
 	}
 	fmt.Printf("✅ Agent '%s' deleted from local config\n", name)
+}
+
+// cmdAgentPrune removes orphaned agent definitions from Memory Platform.
+// Orphaned = on MP but not in local config and not a built-in agent.
+// Without --force, runs in dry-run mode (lists only).
+func cmdAgentPrune(force bool) {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+	pc := cfg.Active()
+	if pc == nil {
+		fmt.Println("No project configured.")
+		return
+	}
+
+	ctx := context.Background()
+	bridge, err := memory.New(memory.Config{
+		ServerURL: pc.ServerURL,
+		APIKey:    pc.Token,
+		ProjectID: pc.ProjectID,
+		OrgID:     pc.OrgID,
+	})
+	if err != nil {
+		fmt.Printf("❌ Connection: %v\n", err)
+		return
+	}
+	defer bridge.Close()
+
+	// Fetch all agents on MP
+	defs, err := bridge.ListAgentDefs(ctx)
+	if err != nil {
+		fmt.Printf("❌ Failed to list agent definitions: %v\n", err)
+		return
+	}
+
+	// Build built-in name set
+	builtInSet := map[string]bool{}
+	for _, ba := range agents.BuiltInAgents() {
+		builtInSet[ba.Name] = true
+	}
+
+	// Find orphans
+	type orphan struct {
+		ID          string
+		Name        string
+		Description string
+		ToolCount   int
+	}
+	var orphans []orphan
+	for _, d := range defs.Data {
+		_, inConfig := pc.Agents[d.Name]
+		if !inConfig && !builtInSet[d.Name] {
+			desc := ""
+			if d.Description != nil {
+				desc = *d.Description
+			}
+			orphans = append(orphans, orphan{
+				ID:          d.ID,
+				Name:        d.Name,
+				Description: desc,
+				ToolCount:   d.ToolCount,
+			})
+		}
+	}
+
+	if len(orphans) == 0 {
+		fmt.Println("✅ No orphaned agents found — MP is clean.")
+		return
+	}
+
+	fmt.Printf("🧹 Found %d orphaned agent(s) on Memory Platform:\n\n", len(orphans))
+	for _, o := range orphans {
+		fmt.Printf("   %s", o.Name)
+		if o.ToolCount > 0 {
+			fmt.Printf(" (%d tools)", o.ToolCount)
+		}
+		if o.Description != "" {
+			desc := o.Description
+			if len(desc) > 55 {
+				desc = desc[:55] + "..."
+			}
+			fmt.Printf(" — %s", desc)
+		}
+		fmt.Println()
+	}
+
+	if !force {
+		fmt.Println("\n⚠️  This is a dry-run. Nothing was deleted.")
+		fmt.Println("   Run 'diane agent prune --force' to delete these agents.")
+		return
+	}
+
+	fmt.Println()
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Printf("Delete %d orphaned agent(s) from Memory Platform? [y/N]: ", len(orphans))
+	if yn := readLine(reader); strings.ToLower(yn) != "y" && strings.ToLower(yn) != "yes" {
+		fmt.Println("Aborted.")
+		return
+	}
+
+	deleted := 0
+	for _, o := range orphans {
+		if delErr := bridge.DeleteAgentDef(ctx, o.ID); delErr != nil {
+			fmt.Printf("   ❌ %s — %v\n", o.Name, delErr)
+		} else {
+			fmt.Printf("   🗑️  %s\n", o.Name)
+			deleted++
+		}
+	}
+	fmt.Printf("\n✅ Deleted %d/%d orphaned agents.\n", deleted, len(orphans))
 }
 
 // ============================================================================

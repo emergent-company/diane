@@ -84,6 +84,15 @@ type Bot struct {
 	sseClient        *events.Client
 	sseNotifications chan map[string]interface{} // buffered channel for all SSE notification events
 	sendChannelID    string                      // pre-configured channel ID for notifications
+
+	// runChannels maps agent run IDs to Discord channel/thread IDs for thread-local
+	// agent question delivery. Populated when a run starts, cleaned up on release.
+	runChannels   map[string]string // runID → channelID
+	runChannelsMu sync.RWMutex
+
+	// questionChannelID is the persistent channel for agent questions, set via
+	// /set_ask_channel command. Gets priority after thread-local routing.
+	questionChannelID string
 }
 
 const dedupTTL = 5 * time.Minute // keep dedup entries for 5 minutes
@@ -173,6 +182,7 @@ func New(cfg Config) (*Bot, error) {
 		activeChans:   make(map[string]*ActiveChannel),
 		sseNotifications: make(chan map[string]interface{}, 100),
 		sendChannelID: notifChannel,
+		runChannels:    make(map[string]string),
 	}
 
 	// Initialize SQLite for session persistence
@@ -230,6 +240,14 @@ func (b *Bot) Start() error {
 	b.loadSessionsFromDB()
 	if len(b.sessions) > 0 {
 		log.Printf("[SES] %d session(s) restored from disk", len(b.sessions))
+	}
+
+	// Load persisted ask_channel config
+	if b.sqliteDB != nil {
+		if chID, err := b.sqliteDB.GetConfig("ask_channel"); err == nil && chID != "" {
+			b.questionChannelID = chID
+			log.Printf("[CFG] Loaded ask_channel: %s", chID)
+		}
 	}
 
 	// Start SSE listener for Notification Platform events
@@ -480,13 +498,16 @@ func (b *Bot) dispatchNotifications() {
 }
 
 // sendAgentQuestionToDiscord sends an agent_question notification to the
-// configured Discord channel as an embed with interactive components.
+// appropriate Discord channel — thread-local if the run is associated with
+// a channel, otherwise the configured /set_ask_channel channel, falling back
+// to the default notification channel.
 // The data map contains: question_id, run_id, question, options,
 // interaction_type, placeholder, max_length, status.
 func (b *Bot) sendAgentQuestionToDiscord(data map[string]interface{}) {
-	channelID := b.sendChannelID
+	runID, _ := data["run_id"].(string)
+	channelID := b.resolveQuestionChannel(runID)
 	if channelID == "" {
-		log.Printf("[SSE] No notification channel configured, skipping question")
+		log.Printf("[SSE] No target channel configured for question (run=%s)", runID[:12])
 		return
 	}
 
@@ -793,6 +814,25 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) 
 		// Active — fall through to handleMessage which handles /stop in the guard
 	}
 
+	// /set_ask_channel — set this channel as the destination for agent questions
+	if strings.HasPrefix(strings.TrimSpace(m.Content), "/set_ask_channel") {
+		b.questionChannelID = m.ChannelID
+		if b.sqliteDB != nil {
+			if err := b.sqliteDB.SetConfig("ask_channel", m.ChannelID); err != nil {
+				log.Printf("[CFG] Failed to persist ask_channel: %v", err)
+			}
+		}
+		// Fetch channel name for confirmation
+		chName := m.ChannelID
+		if ch, err := s.Channel(m.ChannelID); err == nil {
+			chName = "#" + ch.Name
+		}
+		s.MessageReactionAdd(m.ChannelID, m.ID, "✅")
+		b.sendMessage(s, m.ChannelID, fmt.Sprintf("✅ Agent questions will now be sent to %s", chName))
+		log.Printf("[CFG] ask_channel set to %s (%s)", m.ChannelID, chName)
+		return
+	}
+
 	// React with 👀 to show we've seen it
 	if err := s.MessageReactionAdd(m.ChannelID, m.ID, "👀"); err != nil {
 		log.Printf("Reaction add error: %v", err)
@@ -836,6 +876,9 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.Message) {
 			emoji, category := categorizeMessage(m.Content)
 			cleanMsg := strings.TrimSpace(m.Content)
 			cleanMsg = regexp.MustCompile(`^[\p{So}\p{Sk}\p{Sc}\p{Sm}]\s*`).ReplaceAllString(cleanMsg, "")
+			// Strip Discord mentions (<@!123>, <@&123>, <#123>, <:emoji:123>) from thread title
+			cleanMsg = regexp.MustCompile(`<[@#][^>]*\d+>`).ReplaceAllString(cleanMsg, "")
+			cleanMsg = strings.TrimSpace(cleanMsg)
 			threadName := emoji + " " + category + ": " + truncateStr(cleanMsg, 40)
 			if len(threadName) > 100 {
 				threadName = threadName[:100]
@@ -1094,18 +1137,32 @@ func (b *Bot) acquireChannel(channelID string) (context.Context, context.CancelF
 // Must be called when the processing loop exits.
 func (b *Bot) releaseChannel(channelID string) {
 	b.activeMu.Lock()
-	defer b.activeMu.Unlock()
+	// Clean up reverse mappings for all runs associated with this channel
+	b.runChannelsMu.Lock()
+	for runID, ch := range b.runChannels {
+		if ch == channelID {
+			delete(b.runChannels, runID)
+		}
+	}
+	b.runChannelsMu.Unlock()
 	delete(b.activeChans, channelID)
+	b.activeMu.Unlock()
 }
 
 // setActiveAgentRun stores the runtime agent and run IDs for CancelRun.
 // Called from triggerAgentWithContext after the run starts.
 func (b *Bot) setActiveAgentRun(channelID, agentID, runID string) {
 	b.activeMu.Lock()
-	defer b.activeMu.Unlock()
 	if ac, exists := b.activeChans[channelID]; exists {
 		ac.AgentID = agentID
 		ac.RunID = runID
+	}
+	b.activeMu.Unlock()
+	// Store reverse mapping: runID → channel for thread-local question delivery
+	if runID != "" {
+		b.runChannelsMu.Lock()
+		b.runChannels[runID] = channelID
+		b.runChannelsMu.Unlock()
 	}
 }
 
@@ -1176,6 +1233,28 @@ func (b *Bot) isChannelAllowed(channelID string) bool {
 		}
 	}
 	return false
+}
+
+// resolveQuestionChannel determines where to send an agent question.
+// Priority: 1) thread-local (runID maps to a Discord channel/thread)
+//           2) configured question channel (/set_ask_channel)
+//           3) default notification channel (first allowed channel)
+func (b *Bot) resolveQuestionChannel(runID string) string {
+	// 1. Thread-local — if this run is associated with a Discord thread/channel
+	if runID != "" {
+		b.runChannelsMu.RLock()
+		ch, ok := b.runChannels[runID]
+		b.runChannelsMu.RUnlock()
+		if ok {
+			return ch
+		}
+	}
+	// 2. Configured question channel
+	if b.questionChannelID != "" {
+		return b.questionChannelID
+	}
+	// 3. Default notification channel
+	return b.sendChannelID
 }
 
 func (b *Bot) sendMessage(s *discordgo.Session, channelID, content string) {
@@ -1411,7 +1490,9 @@ func (b *Bot) triggerAgentWithContext(ctx context.Context, cs *ChannelSession, u
 	pollStart := time.Now()
 	pollInterval := 2 * time.Second
 	pollTimeout := 120 * time.Second
+	pausedTimeout := 10 * time.Minute // extended timeout when agent asks a question
 	var runStatus string
+	var wasPaused bool
 pollLoop:
 	for {
 		select {
@@ -1422,10 +1503,14 @@ pollLoop:
 		case <-time.After(pollInterval):
 		}
 
-		// Check timeout separately
-		if time.Since(pollStart) >= pollTimeout {
-			dlog("POLL", "event", "timeout", "elapsed", pollTimeout.String())
-			return "", fmt.Errorf("run %s: timeout after %v (last status: %s)", runID[:12], pollTimeout, runStatus)
+		// Check timeout — use extended timeout if agent asked a question
+		effectiveTimeout := pollTimeout
+		if wasPaused {
+			effectiveTimeout = pausedTimeout
+		}
+		if time.Since(pollStart) >= effectiveTimeout {
+			dlog("POLL", "event", "timeout", "elapsed", effectiveTimeout.String(), "was_paused", wasPaused)
+			return "", fmt.Errorf("run %s: timeout after %v (last status: %s)", runID[:12], effectiveTimeout, runStatus)
 		}
 
 		runResp, err := globalBridge.GetProjectRun(ctx, runID)
@@ -1442,6 +1527,14 @@ pollLoop:
 		switch runStatus {
 		case "completed", "success", "completed_with_warnings":
 			break pollLoop
+		case "paused":
+			// Agent asked a question — mark and continue polling.
+			// The timeout is extended to pausedTimeout automatically.
+			if !wasPaused {
+				wasPaused = true
+				dlog("POLL", "event", "paused", "run", runID[:12], "extending_timeout", pausedTimeout.String())
+			}
+			continue
 		case "error", "failed", "cancelled", "timeout":
 			errMsg := ""
 			if runResp.Data.ErrorMessage != nil {
