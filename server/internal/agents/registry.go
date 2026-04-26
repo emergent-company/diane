@@ -684,10 +684,10 @@ After merging, query all remaining active MemoryFacts via entity-query(type=Memo
 
 | Signal | Weight | Source | What to measure |
 |--------|--------|--------|-----------------|
-| Relevance | 0.30 | memory_recall score | Search for this fact's content via memory_recall — the returned score is its retrieval relevance |
-| Frequency | 0.24 | fact.access_count | Higher access_count = more durable knowledge |
-| Recency | 0.15 | fact timestamps | Compute days since last_accessed: score = max(0, 1 - days/30) |
-| Diversity | 0.15 | entity-query searches | Search for the fact from 3 different angles — count how many distinct queries returned it as a top result |
+| Relevance | 0.30 | memory_recall score | Use memory_recall(search_this_fact's content) which returns a relevance score AND automatically updates the fact's avg_retrieval_score |
+| Frequency | 0.24 | MemoryFact.access_count | Higher access_count = more durable knowledge |
+| Recency | 0.15 | MemoryFact timestamps | Compute days since last_accessed: score = max(0, 1 - days/30) |
+| Diversity | 0.15 | MemoryFact.query_diversity_count | How many distinct search queries have returned this fact (updated by memory_recall) |
 | Consolidation | 0.10 | entity history | Check if this fact has survived previous dreaming cycles: look for existing "dreamed" facts with derived_from pointing to it |
 | Conceptual richness | 0.06 | fact.content | Evaluate how many distinct concepts/topics the fact covers (more = more valuable) |
 

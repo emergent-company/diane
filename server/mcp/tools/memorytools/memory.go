@@ -103,18 +103,19 @@ func (p *Provider) Tools() []Tool {
 				"type":     "object",
 				"required": []string{"content"},
 				"properties": map[string]interface{}{
-					"content":       strProp("The fact text to save"),
-					"confidence":    numProp("Confidence 0.0-1.0 (0.9=stated, 0.7=inferred)", 0.7),
-					"category":      strPropDef("Fact category", "user-preference"),
+					"content":        strProp("The fact text to save"),
+					"confidence":     numProp("Confidence 0.0-1.0 (0.9=stated, 0.7=inferred)", 0.7),
+					"category":       strPropDef("Fact category", "user-preference"),
 					"source_session": strProp("Session/run ID this fact was extracted from"),
-					"source_agent":  strPropDef("Creating agent name", "diane-default"),
-					"memory_tier":   intProp("Memory tier (1=per-turn, 2=session-end, 3=dreamed)", 1),
+					"source_agent":   strPropDef("Creating agent name", "diane-default"),
+					"memory_tier":    intProp("Memory tier (1=per-turn, 2=session-end, 3=dreamed)", 1),
+					"derived_from":   strProp("Key of the source fact this was derived from (for dreamed/hallucinated facts)"),
 				},
 			},
 		},
 		{
 			Name:        "memory_recall",
-			Description: "Search MemoryFact objects using hybrid semantic+keyword search. Returns facts sorted by relevance with confidence scores. Use BEFORE answering questions to recall past context.",
+			Description: "Search MemoryFact objects using hybrid semantic+keyword search. Returns facts sorted by relevance with confidence scores. Use BEFORE answering questions to recall past context. Automatically tracks retrieval scores.",
 			InputSchema: map[string]interface{}{
 				"type":     "object",
 				"required": []string{"query"},
@@ -123,6 +124,7 @@ func (p *Provider) Tools() []Tool {
 					"limit":          intProp("Max results (default 5, max 20)", 5),
 					"min_confidence": numProp("Min confidence threshold (default 0.3)", 0.3),
 					"category":       strProp("Optional: filter by category"),
+					"dry_run":        boolProp("Report without updating retrieval scores", false),
 				},
 			},
 		},
@@ -222,6 +224,9 @@ func (p *Provider) memorySave(args map[string]interface{}) (interface{}, error) 
 	if ss := getString(args, "source_session", ""); ss != "" {
 		props["source_session"] = ss
 	}
+	if df := getString(args, "derived_from", ""); df != "" {
+		props["derived_from"] = df
+	}
 
 	key := fmt.Sprintf("fact-%d", time.Now().UnixMilli())
 	propsJSON := mustJSON(props)
@@ -260,32 +265,81 @@ func (p *Provider) memoryRecall(args map[string]interface{}) (interface{}, error
 		return nil, fmt.Errorf("memory_recall: %w", err)
 	}
 
-	// Also list recent MemoryFacts as a fallback
 	allResults := extractResults(result)
+
 	filtered := make([]map[string]interface{}, 0)
 
 	for _, item := range allResults {
-		_type := getString(item, "type", "")
-		if _type != "MemoryFact" {
+		objType := getString(item, "object_type", "")
+		if objType != "MemoryFact" {
 			continue
 		}
-		conf := getFloat(item, "confidence", 1.0)
+
+		// Fields are nested under "fields" sub-map
+		fields := getMap(item, "fields")
+		if fields == nil {
+			continue
+		}
+
+		conf := getFloat(fields, "confidence", 1.0)
 		if conf < minConf {
 			continue
 		}
-		cat := getString(item, "category", "")
+		cat := getString(fields, "category", "")
 		if category != "" && cat != category {
 			continue
 		}
+
+		objID := getString(item, "object_id", "")
+
 		filtered = append(filtered, map[string]interface{}{
-			"content":    item["content"],
+			"id":         objID,
+			"content":    getString(fields, "content", ""),
 			"confidence": conf,
 			"category":   cat,
-			"tier":       item["memory_tier"],
-			"agent":      item["source_agent"],
-			"created":    item["created_at"],
-			"score":      item["score"],
+			"tier":       getInt(fields, "memory_tier", 1),
+			"agent":      getString(fields, "source_agent", ""),
+			"created":    getString(fields, "created_at", ""),
+			"score":      getFloat(item, "score", 0),
 		})
+
+		// ── Persist retrieval score ──
+		// Update avg_retrieval_score, retrieval_count, last_retrieval_score
+		if objID != "" {
+			score := getFloat(item, "score", 0)
+			curRetCount := getInt(fields, "retrieval_count", 0)
+			curAvgScore := getFloat(fields, "avg_retrieval_score", 0)
+			curDivCount := getInt(fields, "query_diversity_count", 0)
+
+			newRetCount := curRetCount + 1
+			newAvg := score
+			if curRetCount > 0 && curAvgScore > 0 {
+				newAvg = ((curAvgScore * float64(curRetCount)) + score) / float64(newRetCount)
+			}
+
+			// Track query diversity: compare this query hash against stored queries
+			newDivCount := curDivCount
+			lastQuery := getString(fields, "last_query_hash", "")
+			queryHash := simpleHash(query)
+			if queryHash != lastQuery {
+				newDivCount = curDivCount + 1
+			}
+
+			updateProps := map[string]interface{}{
+				"avg_retrieval_score":  newAvg,
+				"retrieval_count":      newRetCount,
+				"last_retrieval_score": score,
+				"last_accessed":        time.Now().UTC().Format(time.RFC3339),
+				"last_query_hash":      queryHash,
+				"query_diversity_count": newDivCount,
+			}
+
+			if !isDryRun(args) {
+				p.mem("graph", "objects", "update", objID,
+					"--properties", mustJSON(updateProps),
+				)
+			}
+		}
 	}
 
 	return map[string]interface{}{
@@ -566,4 +620,25 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// isDryRun checks if the caller requested a dry run (no mutations).
+func isDryRun(args map[string]interface{}) bool {
+	if v, ok := args["dry_run"].(bool); ok {
+		return v
+	}
+	if v, ok := args["dryRun"].(bool); ok {
+		return v
+	}
+	return false
+}
+
+// simpleHash produces a deterministic short hash for query diversity tracking.
+// Uses a simplified approach: lowercases and trims the input, takes first 40 chars.
+func simpleHash(s string) string {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if len(s) > 40 {
+		s = s[:40]
+	}
+	return s
 }

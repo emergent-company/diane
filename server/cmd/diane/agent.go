@@ -1091,12 +1091,14 @@ func cmdAgentPrune(force bool) {
 		return
 	}
 
-	fmt.Println()
-	reader := bufio.NewReader(os.Stdin)
-	fmt.Printf("Delete %d orphaned agent(s) from Memory Platform? [y/N]: ", len(orphans))
-	if yn := readLine(reader); strings.ToLower(yn) != "y" && strings.ToLower(yn) != "yes" {
-		fmt.Println("Aborted.")
-		return
+	if !force {
+		fmt.Println()
+		reader := bufio.NewReader(os.Stdin)
+		fmt.Printf("Delete %d orphaned agent(s) from Memory Platform? [y/N]: ", len(orphans))
+		if yn := readLine(reader); strings.ToLower(yn) != "y" && strings.ToLower(yn) != "yes" {
+			fmt.Println("Aborted.")
+			return
+		}
 	}
 
 	deleted := 0
