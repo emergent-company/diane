@@ -43,6 +43,11 @@ func runBotOnce(pc *config.ProjectConfig) error {
 	if pc.SystemPrompt != "" {
 		dc.SystemPrompt = pc.SystemPrompt
 	}
+	dc.MemoryServerURL = pc.ServerURL
+	dc.MemoryAPIKey = pc.Token
+	dc.MemoryProjectID = pc.ProjectID
+	dc.MemoryOrgID = pc.OrgID
+	dc.SSEEventStream = true
 
 	if dc.BotToken == "" {
 		return fmt.Errorf("discord bot token not configured — run 'diane init'")

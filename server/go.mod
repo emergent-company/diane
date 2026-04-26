@@ -4,7 +4,7 @@ go 1.25.5
 
 require (
 	github.com/bwmarrin/discordgo v0.29.0
-	github.com/emergent-company/emergent.memory/apps/server/pkg/sdk v0.40.5
+	github.com/emergent-company/emergent.memory/apps/server/pkg/sdk v0.40.9
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/gorilla/websocket v1.4.2
 	github.com/mattn/go-sqlite3 v1.14.33

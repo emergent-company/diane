@@ -11,7 +11,9 @@
 package memory
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -29,6 +31,8 @@ import (
 // Each Bridge is scoped to a single Memory project.
 type Bridge struct {
 	client    *sdk.Client
+	serverURL string
+	apiKey    string
 	projectID string
 }
 
@@ -88,12 +92,25 @@ func New(cfg Config) (*Bridge, error) {
 		return nil, fmt.Errorf("memory bridge: sdk.New: %w", err)
 	}
 	client.SetContext(cfg.OrgID, cfg.ProjectID)
-	return &Bridge{client: client, projectID: cfg.ProjectID}, nil
+	return &Bridge{client: client, serverURL: cfg.ServerURL, apiKey: cfg.APIKey, projectID: cfg.ProjectID}, nil
 }
 
 // Client returns the raw SDK client for advanced operations.
 func (b *Bridge) Client() *sdk.Client {
 	return b.client
+}
+
+// RespondToAgentQuestion submits a response to a pending agent question
+// and triggers the agent resume. Returns the updated question object.
+func (b *Bridge) RespondToAgentQuestion(ctx context.Context, questionID, response string) (*sdkagentrun.AgentQuestion, error) {
+	req := &sdkagentrun.RespondToQuestionRequest{
+		Response: response,
+	}
+	resp, err := b.client.Agents.RespondToQuestion(ctx, b.projectID, questionID, req)
+	if err != nil {
+		return nil, fmt.Errorf("respond to question: %w", err)
+	}
+	return &resp.Data, nil
 }
 
 // Close releases idle connections.
@@ -375,10 +392,42 @@ func (b *Bridge) CreateScheduledRuntimeAgent(ctx context.Context, name, defID, c
 }
 
 // TriggerAgentWithInput triggers a runtime agent with a prompt.
-func (b *Bridge) TriggerAgentWithInput(ctx context.Context, agentID, prompt string) (*sdkagentrun.TriggerResponse, error) {
-	return b.client.Agents.TriggerWithInput(ctx, agentID, sdkagentrun.TriggerRequest{
-		Input: prompt,
-	})
+// sessionID, if non-empty, ties this trigger to a persistent ADK conversation session
+// so successive triggers share conversation history (requires MP server >= v0.40.15).
+// Uses raw HTTP because the SDK's TriggerRequest struct may not have the SessionID field.
+func (b *Bridge) TriggerAgentWithInput(ctx context.Context, agentID, prompt, sessionID string) (*sdkagentrun.TriggerResponse, error) {
+	// Build request body with optional sessionId
+	body := map[string]any{
+		"prompt": prompt,
+	}
+	if sessionID != "" {
+		body["sessionId"] = sessionID
+	}
+
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal trigger body: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/api/projects/%s/agents/%s/trigger", b.serverURL, b.projectID, agentID)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("create trigger request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+b.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	httpResp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("trigger http: %w", err)
+	}
+	defer httpResp.Body.Close()
+
+	var triggerResp sdkagentrun.TriggerResponse
+	if err := json.NewDecoder(httpResp.Body).Decode(&triggerResp); err != nil {
+		return nil, fmt.Errorf("decode trigger response: %w", err)
+	}
+	return &triggerResp, nil
 }
 
 // GetAgentRuns returns recent runs for a runtime agent.

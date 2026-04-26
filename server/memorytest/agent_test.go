@@ -123,7 +123,7 @@ func TestAgentTriggerRun(t *testing.T) {
 	})
 
 	// 3. Trigger the agent
-	resp, err := b.TriggerAgentWithInput(ctx, agentID, agentTestPrompt)
+	resp, err := b.TriggerAgentWithInput(ctx, agentID, agentTestPrompt, "")
 	if err != nil {
 		t.Fatalf("TriggerAgentWithInput: %v", err)
 	}

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/Emergent-Comapny/diane/internal/db"
+	"github.com/Emergent-Comapny/diane/internal/events"
 	"github.com/Emergent-Comapny/diane/internal/memory"
 	"github.com/bwmarrin/discordgo"
 )
@@ -75,6 +76,10 @@ type Bot struct {
 
 	dedupMu     sync.RWMutex
 	dedupCache  map[string]time.Time // messageID → timestamp (for dedup on reconnect)
+
+	sseClient        *events.Client
+	sseNotifications chan map[string]interface{} // buffered channel for all SSE notification events
+	sendChannelID    string                      // pre-configured channel ID for notifications
 }
 
 const dedupTTL = 5 * time.Minute // keep dedup entries for 5 minutes
@@ -107,6 +112,9 @@ type Config struct {
 	MemoryAPIKey     string
 	MemoryProjectID  string
 	MemoryOrgID      string
+	// SSEEventStream enables the agent_question notification listener.
+	// Requires MemoryServerURL, MemoryAPIKey, and MemoryProjectID.
+	SSEEventStream bool
 }
 
 // DefaultConfig returns sensible defaults.
@@ -135,13 +143,21 @@ func New(cfg Config) (*Bot, error) {
 		discordgo.IntentsDirectMessages |
 		discordgo.IntentsMessageContent
 
+	// Determine notification channel: use first allowed channel, or a default
+	notifChannel := ""
+	if len(cfg.AllowedChannels) > 0 {
+		notifChannel = cfg.AllowedChannels[0]
+	}
+
 	bot := &Bot{
 		config:   cfg,
 		dg:       dg,
 		sessions: make(map[string]*ChannelSession),
 
-		typingCancel: make(map[string]context.CancelFunc),
-		dedupCache:   make(map[string]time.Time),
+		typingCancel:  make(map[string]context.CancelFunc),
+		dedupCache:    make(map[string]time.Time),
+		sseNotifications: make(chan map[string]interface{}, 100),
+		sendChannelID: notifChannel,
 	}
 
 	// Initialize SQLite for session persistence
@@ -154,6 +170,20 @@ func New(cfg Config) (*Bot, error) {
 
 	dg.AddHandler(bot.onMessageCreate)
 	dg.AddHandler(bot.onReady)
+	dg.AddHandler(bot.onInteractionCreate)
+
+	// Set up SSE listener for Notification Platform events
+	if cfg.SSEEventStream && cfg.MemoryServerURL != "" && cfg.MemoryAPIKey != "" && cfg.MemoryProjectID != "" {
+		bot.sseClient = events.NewClient(
+			cfg.MemoryServerURL,
+			cfg.MemoryAPIKey,
+			cfg.MemoryProjectID,
+			bot.handleNotificationEvent,
+		)
+		log.Println("[SSE] Notification listener configured")
+	} else if cfg.SSEEventStream {
+		log.Println("[WARN] SSEEventStream enabled but Memory config incomplete — skipping")
+	}
 
 	return bot, nil
 }
@@ -187,10 +217,25 @@ func (b *Bot) Start() error {
 		log.Printf("[SES] %d session(s) restored from disk", len(b.sessions))
 	}
 
+	// Start SSE listener for Notification Platform events
+	if b.sseClient != nil {
+		b.sseClient.Start()
+		go b.dispatchNotifications()
+		log.Println("[SSE] Notification listener started")
+	}
+
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 	<-sc
+
 	log.Println("Shutting down Discord bot...")
+
+	// Shut down SSE listener
+	if b.sseClient != nil {
+		b.sseClient.Stop()
+		log.Println("[SSE] Notification listener stopped")
+	}
+
 	return nil
 }
 
@@ -201,6 +246,188 @@ func (b *Bot) Start() error {
 func (b *Bot) onReady(s *discordgo.Session, r *discordgo.Ready) {
 	log.Printf("Bot connected as %s#%s (ID: %s)", r.User.Username, r.User.Discriminator, r.User.ID)
 	log.Printf("Servers: %d — listening on %d channels", len(r.Guilds), len(b.config.AllowedChannels))
+}
+
+// onInteractionCreate handles Discord interaction events (button clicks, etc.).
+func (b *Bot) onInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	switch i.Type {
+	case discordgo.InteractionMessageComponent:
+		b.handleComponentInteraction(s, i.Interaction)
+	default:
+		log.Printf("[INT] Unhandled interaction type: %v", i.Type)
+	}
+}
+
+// handleComponentInteraction processes button clicks on agent question embeds.
+func (b *Bot) handleComponentInteraction(s *discordgo.Session, i *discordgo.Interaction) {
+	customID := i.MessageComponentData().CustomID
+	log.Printf("[INT] Button click: custom_id=%s user=%s", customID, i.Member.User.Username)
+
+	// Custom ID format: "aq:<question_id>:<response_value>"
+	// e.g. "aq:abc-123:approve"
+	if !strings.HasPrefix(customID, "aq:") {
+		log.Printf("[INT] Unknown custom_id format: %s", customID)
+		return
+	}
+
+	parts := strings.SplitN(customID, ":", 3)
+	if len(parts) < 3 {
+		log.Printf("[INT] Invalid custom_id format: %s", customID)
+		return
+	}
+
+	questionID := parts[1]
+	responseValue := parts[2]
+
+	// Map response value to user-facing text
+	responseLabel := responseValue
+	labelMap := map[string]string{
+		"approve": "✅ Approve",
+		"modify":  "🔄 Modify",
+		"skip":    "❌ Skip",
+	}
+	if l, ok := labelMap[responseValue]; ok {
+		responseLabel = l
+	}
+
+	log.Printf("[INT] Responding to question %s with %q", questionID[:12], responseValue)
+
+	// Acknowledge the interaction immediately (Discord requires this within 3s)
+	err := s.InteractionRespond(i, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredMessageUpdate,
+	})
+	if err != nil {
+		log.Printf("[INT] Failed to acknowledge interaction: %v", err)
+		return
+	}
+
+	// Submit the response to MP's agent-question endpoint
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	notifResp, err := globalBridge.RespondToAgentQuestion(ctx, questionID, responseValue)
+	if err != nil {
+		log.Printf("[INT] Failed to respond to question %s: %v", questionID[:12], err)
+		// Edit the original embed to show error
+		_, editErr := s.InteractionResponseEdit(i, &discordgo.WebhookEdit{
+			Content: toPtr(fmt.Sprintf("❌ Failed to respond: %v", err)),
+		})
+		if editErr != nil {
+			log.Printf("[INT] Failed to edit response: %v", editErr)
+		}
+		return
+	}
+
+	log.Printf("[INT] Question %s answered successfully (%s → %s)", questionID[:12], responseValue, notifResp.Status)
+
+	// Update the original embed to show the response was submitted
+	_, editErr := s.InteractionResponseEdit(i, &discordgo.WebhookEdit{
+		Content: toPtr(fmt.Sprintf("🧠 **Agent Question**\nResponded: **%s**\n_Agent resuming..._ ✅", responseLabel)),
+		Components: &[]discordgo.MessageComponent{}, // remove buttons
+	})
+	if editErr != nil {
+		log.Printf("[INT] Failed to edit original message: %v", editErr)
+	}
+}
+
+// handleNotificationEvent is called by the SSE client when any entity.created
+// notification arrives. It feeds the raw data into a buffered channel for
+// sequential dispatch to Discord. The dispatch function filters by type.
+func (b *Bot) handleNotificationEvent(data map[string]interface{}) {
+	select {
+	case b.sseNotifications <- data:
+	default:
+		log.Printf("[SSE] Notification channel full, dropping event")
+	}
+}
+
+// dispatchNotifications runs in a background goroutine and reads from the
+// sseNotifications channel, dispatching each notification by its type field.
+func (b *Bot) dispatchNotifications() {
+	for data := range b.sseNotifications {
+		notifType, _ := data["type"].(string)
+		switch notifType {
+		case "agent_question":
+			b.sendAgentQuestionToDiscord(data)
+		default:
+			log.Printf("[SSE] Unhandled notification type: %s", notifType)
+		}
+	}
+}
+
+// sendAgentQuestionToDiscord sends an agent_question notification to the
+// configured Discord channel as an embed with interactive buttons.
+// The data map contains: question_id, run_id, question, status.
+func (b *Bot) sendAgentQuestionToDiscord(data map[string]interface{}) {
+	channelID := b.sendChannelID
+	if channelID == "" {
+		log.Printf("[SSE] No notification channel configured, skipping question")
+		return
+	}
+
+	questionID, _ := data["question_id"].(string)
+	question, _ := data["question"].(string)
+	status, _ := data["status"].(string)
+
+	if questionID == "" || question == "" {
+		log.Printf("[SSE] Incomplete agent_question event, skipping")
+		return
+	}
+
+	// Truncate question for Discord embed
+	displayQuestion := question
+	if len(displayQuestion) > 500 {
+		displayQuestion = displayQuestion[:497] + "..."
+	}
+
+	embed := &discordgo.MessageEmbed{
+		Title:       "🧠 Agent Needs Your Input",
+		Description: displayQuestion,
+		Color:       0x0099ff, // Blue
+		Footer: &discordgo.MessageEmbedFooter{
+			Text: fmt.Sprintf("Q: %s | Status: %s", questionID[:12], status),
+		},
+		Timestamp: time.Now().Format(time.RFC3339),
+	}
+
+	// Build action buttons
+	buttons := []discordgo.MessageComponent{
+		discordgo.ActionsRow{
+			Components: []discordgo.MessageComponent{
+				discordgo.Button{
+					Label:    "✅ Approve",
+					Style:    discordgo.SuccessButton,
+					CustomID: fmt.Sprintf("aq:%s:approve", questionID),
+				},
+				discordgo.Button{
+					Label:    "🔄 Modify",
+					Style:    discordgo.PrimaryButton,
+					CustomID: fmt.Sprintf("aq:%s:modify", questionID),
+				},
+				discordgo.Button{
+					Label:    "❌ Skip",
+					Style:    discordgo.DangerButton,
+					CustomID: fmt.Sprintf("aq:%s:skip", questionID),
+				},
+			},
+		},
+	}
+
+	_, err := b.dg.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+		Embed:      embed,
+		Components: buttons,
+	})
+	if err != nil {
+		log.Printf("[SSE] Failed to send question to Discord: %v", err)
+		return
+	}
+
+	log.Printf("[SSE] Question %s sent to Discord channel %s", questionID[:12], channelID)
+}
+
+// toPtr returns a pointer to a string (helper for Discord API calls).
+func toPtr(s string) *string {
+	return &s
 }
 
 func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
@@ -293,27 +520,31 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.Message) {
 	// Stop typing indicator
 	b.stopTyping(responseChannel)
 
-	// Phase 2: For new threads, extract [TITLE: ...] tag from response
-	// BEFORE sending to Discord so the tag never appears in chat.
-	var threadTitle string
-	if !isThread && strings.Contains(response, "[TITLE:") {
-		threadTitle = extractTitleFromResponse(&response)
-	}
-
-	// Send response if we got one (now with title stripped)
+	// Send response if we got one
 	if response != "" {
 		b.sendMessage(s, responseChannel, response)
 		processingOK = true
 	}
 
-	// Rename thread if agent suggested a title
-	if threadTitle != "" {
-		if _, err := s.ChannelEdit(responseChannel, &discordgo.ChannelEdit{
-			Name: threadTitle,
-		}); err != nil {
-			log.Printf("[THR] Title update failed: %v", err)
-		} else {
-			log.Printf("[THR] Renamed thread to %q", threadTitle)
+	// Phase 2: For new threads, check if the agent updated the session title
+	// via the set_session_title built-in tool. This is a clean, interface-agnostic
+	// approach — the title lives in session metadata, and each interface reads
+	// it independently (Discord renames threads, CLI renames tabs, etc.).
+	if !isThread && processingOK {
+		b.mu.RLock()
+		cs, exists := b.sessions[responseChannel]
+		b.mu.RUnlock()
+		if exists && cs.SessionID != "" {
+			sd, err := globalBridge.GetSession(context.Background(), cs.SessionID)
+			if err == nil && sd.Title != "" && !strings.HasPrefix(sd.Title, "Discord #") {
+				if _, err := s.ChannelEdit(responseChannel, &discordgo.ChannelEdit{
+					Name: sd.Title,
+				}); err != nil {
+					log.Printf("[THR] Title update failed: %v", err)
+				} else {
+					log.Printf("[THR] Renamed thread to %q", sd.Title)
+				}
+			}
 		}
 	}
 
@@ -600,8 +831,6 @@ func (b *Bot) detectAgentType(content string) string {
 // If includeTools is true, appends a short tool usage indicator to the response.
 func (b *Bot) triggerAgentWithContext(ctx context.Context, cs *ChannelSession, userMsg string, agentName string) (string, error) {
 
-	isNewSession := cs.SessionID == ""
-
 	// 0. Ensure we have a Memory session for cross-run context
 	// The session ID is passed to the agent in the trigger prompt so it can
 	// search past messages. Without this, each restarted bot loses all context.
@@ -663,22 +892,11 @@ func (b *Bot) triggerAgentWithContext(ctx context.Context, cs *ChannelSession, u
 	// 3. Build trigger prompt with session context
 	triggerPrompt := userMsg
 	if cs.SessionID != "" {
-		if isNewSession {
-			// For the first message in a new session, ask agent to suggest a thread title
-			triggerPrompt = fmt.Sprintf(
-				"[Session: %s]\n\n"+
-					"After responding to this message, suggest a brief thread title with a relevant emoji prefix. "+
-					"Place it at the end of your response as: [TITLE: 🐛 Login Bug]\n"+
-					"Choose your prefix from: 🐛 Bug, ✨ Feature, ❓ Question, 💬 Discussion, 💡 Idea, 🔧 Fix, ⚠️ Issue, 📚 Research, 🚀 Release, 🎨 Design\n"+
-					"Make it concise (under 50 chars including emoji).\n\n%s",
-				cs.SessionID, userMsg)
-		} else {
-			triggerPrompt = fmt.Sprintf("[Session: %s]\n%s", cs.SessionID, userMsg)
-		}
+		triggerPrompt = fmt.Sprintf("[Session: %s]\n%s", cs.SessionID, userMsg)
 	}
 
 	dlog("AGT", "action", "triggering", "prompt_chars", len(triggerPrompt))
-	triggerResp, err := globalBridge.TriggerAgentWithInput(ctx, agentID, triggerPrompt)
+	triggerResp, err := globalBridge.TriggerAgentWithInput(ctx, agentID, triggerPrompt, cs.SessionID)
 	if err != nil {
 		dlog("AGT", "err", "trigger", "msg", err.Error())
 		return "", fmt.Errorf("trigger agent: %w", err)
@@ -1070,23 +1288,4 @@ func categorizeMessage(content string) (emoji, category string) {
 	}
 	// Default
 	return "💬", "Chat"
-}
-
-// extractTitleFromResponse looks for a [TITLE: ...] tag in the response text,
-// strips it, and returns the title. If no tag is found, returns "" and the
-// response is left unchanged.
-func extractTitleFromResponse(response *string) string {
-	if response == nil || *response == "" {
-		return ""
-	}
-	re := regexp.MustCompile(`\[TITLE:\s*(.+?)\]`)
-	matches := re.FindStringSubmatch(*response)
-	if len(matches) < 2 {
-		return ""
-	}
-	title := strings.TrimSpace(matches[1])
-	// Strip the tag from the response (only the first occurrence)
-	*response = strings.Replace(*response, matches[0], "", 1)
-	*response = strings.TrimSpace(*response)
-	return title
 }

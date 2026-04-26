@@ -167,6 +167,10 @@ AGENT CATALOG:
 Your tools are limited to:
 - search-knowledge / search-hybrid — search the knowledge graph
 - web-search-brave / web-fetch — search and read web pages
+- ask_user — ask the user for approval or input during a task.
+  Pauses execution, sends notification to Discord with buttons, resumes when user responds.
+  Use when you need a decision, approval, or clarification from the user.
+  Supports multiple-choice options or free-text questions.
 - entity-query / entity-search — explore project data
 - entity-create — save facts to the memory graph (MemoryFact objects)
 - schema-list / schema-get — browse available schema types and their definitions
@@ -241,12 +245,16 @@ func buildAgentList() []BuiltInAgent {
 
 				// Memory (save and retrieve facts)
 				"entity-create",
+
+				// User interaction — ask for approval during agent runs
+				"ask_user",
 			},
 			Skills:     []string{"diane-coding"},
 			FlowType:   "standard",
 			Visibility: "project",
 			MaxSteps:   50,
 			Timeout:    300,
+			Model: &config.AgentModelConfig{Name: "deepseek/deepseek-v4-flash"},
 		},
 		{
 			Name:        "diane-researcher",
@@ -296,6 +304,7 @@ Be thorough and cite your sources.`,
 			Visibility: "project",
 			MaxSteps:   50,
 			Timeout:    300,
+			Model: &config.AgentModelConfig{Name: "deepseek/deepseek-v4-flash"},
 			Delegation: &config.DelegationHeuristics{
 				SpeedMultiplier:   1.5,
 				CostMultiplier:    1.0,
@@ -324,10 +333,17 @@ You have access to Memory Platform's MCP tools for:
    - agent-def-delete — remove agents no longer needed
    - agent-get / agent-list — inspect runtime agents
    - agent-run-list / agent-run-get / agent-run-messages — review run history
+   - ask_user — built-in ADK tool for asking the user questions during a run.
+     Pauses execution, waits for the user's response, then resumes.
+     Include "ask_user" in an agent's tools list when it needs human-in-the-loop
+     approval (e.g. schema designers, deployment agents, content reviewers).
+     Supports structured options (multiple choice) or free-text responses.
+     The user receives a notification and can respond via Discord buttons or API.
+     Example: agents that propose schema changes should ask_user before creating.
 
 2. GRAPH BROWSING (read-only) — understand project context:
-   - entity-query / entity-search / entity-type-list — explore the knowledge graph
-   - search-knowledge / search-hybrid — find relevant information
+    - entity-query / entity-search / entity-type-list — explore the knowledge graph
+    - search-knowledge / search-hybrid — find relevant information
 
 3. SKILL MANAGEMENT — create reusable workflow documents:
    - skill-list / skill-get — browse existing skills
@@ -391,11 +407,15 @@ CRITICAL RULES:
 
 				// Web access
 				"web-search-brave", "web-fetch",
+
+				// User interaction — ask for approval during agent runs
+				"ask_user",
 			},
 			Skills:     []string{"*"},
 			Visibility: "project",
 			MaxSteps:   100,
 			Timeout:    600,
+			Model: &config.AgentModelConfig{Name: "deepseek/deepseek-v4-flash"},
 			Delegation: &config.DelegationHeuristics{
 				SpeedMultiplier:   1.0,
 				CostMultiplier:    1.0,
@@ -469,6 +489,11 @@ After user approval, create the schema with schema-create().
 After creation, verify with schema-get() that it was registered correctly.
 Then optionally migrate matching MemoryFacts to the new type.
 
+IMPORTANT: Use the ask_user tool to get user approval for schema proposals.
+It pauses execution and sends a notification to the user via Discord with
+Approve/Modify/Skip buttons. Call ask_user(question="...", options=[...])
+with structured options when you need a yes/no/maybe decision.
+
 CRITICAL RULES:
 - NEVER create a schema without user approval — always propose first
 - NEVER create a type that duplicates an existing type
@@ -503,12 +528,16 @@ CRITICAL RULES:
 
 				// Web access
 				"web-search-brave", "web-fetch",
+
+				// User interaction — ask for approval during agent runs
+				"ask_user",
 			},
 			Skills:     []string{},
 			FlowType:   "standard",
 			Visibility: "project",
 			MaxSteps:   100,
 			Timeout:    600,
+			Model: &config.AgentModelConfig{Name: "deepseek/deepseek-v4-flash"},
 			Delegation: &config.DelegationHeuristics{
 				SpeedMultiplier:   0.8,
 				CostMultiplier:    1.0,
@@ -558,6 +587,7 @@ tool usage patterns, and decisions made.`,
 			Visibility: "project",
 			MaxSteps:   100,
 			Timeout:    600,
+			Model: &config.AgentModelConfig{Name: "deepseek/deepseek-v4-flash"},
 		},
 		{
 			Name:        "diane-codebase",
@@ -620,6 +650,7 @@ Store findings as Technology nodes in the graph when appropriate.`,
 			Visibility: "project",
 			MaxSteps:   100,
 			Timeout:    600,
+			Model: &config.AgentModelConfig{Name: "deepseek/deepseek-v4-flash"},
 			Delegation: &config.DelegationHeuristics{
 				SpeedMultiplier:   2.0,
 				CostMultiplier:    1.0,
@@ -675,6 +706,7 @@ Always start with memory_apply_decay, then memory_detect_patterns, then hallucin
 			Visibility: "project",
 			MaxSteps:   200,
 			Timeout:    900,
+			Model: &config.AgentModelConfig{Name: "deepseek/deepseek-v4-flash"},
 		},
 		{
 			Name:        "diane-skill-monitor",
@@ -722,11 +754,12 @@ If nothing is worth saving from a session, skip it.`,
 				// Graph — write checkpoint entity
 				"entity-create", "entity-update",
 			},
-			Skills:     []string{},
+Skills:     []string{},
 			FlowType:   "standard",
 			Visibility: "project",
-			MaxSteps:   200,
+			MaxSteps:   100,
 			Timeout:    600,
+			Model: &config.AgentModelConfig{Name: "deepseek/deepseek-v4-flash"},
 		},
 	}
 }

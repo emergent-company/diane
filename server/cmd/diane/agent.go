@@ -812,7 +812,7 @@ func cmdAgentTrigger(name, prompt string) {
 
 	// 3. Trigger the agent
 	fmt.Printf("💬 Triggering with: \"%s\"...\n", truncateStr(prompt, 60))
-	triggerResp, err := bridge.TriggerAgentWithInput(ctx, agentID, prompt)
+	triggerResp, err := bridge.TriggerAgentWithInput(ctx, agentID, prompt, "")
 	if err != nil {
 		fmt.Printf("❌ Trigger: %v\n", err)
 		return
@@ -1262,12 +1262,16 @@ func cmdAgentTrace(runID string) {
 	if run.ErrorMessage != nil {
 		fmt.Printf("  Error:        %s\n", *run.ErrorMessage)
 	}
+	modelName := "N/A"
 	if run.Model != nil {
-		fmt.Printf("  Model:        %s\n", *run.Model)
+		modelName = *run.Model
 	}
+	providerName := "N/A"
 	if run.Provider != nil {
-		fmt.Printf("  Provider:     %s\n", *run.Provider)
+		providerName = *run.Provider
 	}
+	fmt.Printf("  Model:        %s\n", modelName)
+	fmt.Printf("  Provider:     %s\n", providerName)
 	if run.TraceID != nil {
 		fmt.Printf("  Trace ID:     %s\n", *run.TraceID)
 	}
@@ -1316,7 +1320,7 @@ func cmdAgentTrace(runID string) {
 	}
 
 	// Tool calls
-	if len(full.Data.ToolCalls) > 0 {
+		if len(full.Data.ToolCalls) > 0 {
 		fmt.Printf("\n── Tool Calls (%d) ──\n", len(full.Data.ToolCalls))
 		for _, tc := range full.Data.ToolCalls {
 			inputPreview := ""
@@ -1335,6 +1339,19 @@ func cmdAgentTrace(runID string) {
 				dur = fmt.Sprintf(" [%dms]", *tc.DurationMs)
 			}
 			fmt.Printf("  %s %s(%s)%s\n", status, tc.ToolName, inputPreview, dur)
+
+			// Show output for interesting tool calls
+			if tc.ToolName == "search-knowledge" && len(tc.Output) > 0 {
+				if rid, ok := tc.Output["run_id"]; ok {
+					fmt.Printf("       → run_id: %v\n", rid)
+				}
+				if answer, ok := tc.Output["answer"]; ok {
+					fmt.Printf("       → answer: %s\n", truncateStr(fmt.Sprintf("%v", answer), 150))
+				}
+				if sessionID, ok := tc.Output["session_id"]; ok {
+					fmt.Printf("       → session_id: %v\n", sessionID)
+				}
+			}
 		}
 
 		// Search for search-knowledge calls and suggest trace inspection
@@ -1438,6 +1455,10 @@ func cmdAgentRuns(agentName, sinceStr string) {
 					a.Total, a.Success, a.Failed,
 					time.Duration(a.AvgDurationMs)*time.Millisecond,
 					a.TotalCostUSD, a.AvgInputTokens, a.AvgOutputTokens)
+			}
+			// Hint that different agents may use different models
+			if len(filtered) > 0 && agentName == "" {
+				fmt.Println("\nℹ️  Agents can use different models — check with: diane agent trace <runID>")
 			}
 		}
 
