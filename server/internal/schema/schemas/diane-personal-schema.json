@@ -41,6 +41,7 @@
   {
     "type_name": "MCPProxyConfig",
     "description": "MCP proxy server configuration synced from the graph to relay instances",
+    "namespace": "system",
     "json_schema": {
       "label": "MCP Proxy Config",
       "properties": {
@@ -68,6 +69,7 @@
   {
     "type_name": "MCPSecret",
     "description": "API keys and credentials used by MCP servers registered in the proxy config",
+    "namespace": "system",
     "json_schema": {
       "label": "MCP Secret",
       "properties": {

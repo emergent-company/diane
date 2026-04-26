@@ -41,8 +41,8 @@ type SchemaDefinition struct {
 
 // schemaFile holds the parsed contents of one schema JSON file.
 type schemaFile struct {
-	Name     string              // filename without extension
-	Types    []SchemaDefinition
+	Name  string              // filename without extension
+	Types []SchemaDefinition
 }
 
 // ---------------------------------------------------------------------------
@@ -51,7 +51,6 @@ type schemaFile struct {
 
 // ApplyOptions controls how Apply behaves.
 type ApplyOptions struct {
-	// DryRun logs what would be done without making API calls.
 	DryRun bool
 }
 
@@ -69,24 +68,21 @@ func Apply(ctx context.Context, client *sdk.Client, projectID string, opts *Appl
 		opts = &ApplyOptions{}
 	}
 
-	// 1. Parse all embedded schema files
 	files, err := parseSchemaFiles()
 	if err != nil {
 		return nil, fmt.Errorf("parse embedded schemas: %w", err)
 	}
 
-	// 2. Fetch existing types from the project
 	existing, err := fetchExistingTypes(ctx, client, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("fetch existing schemas: %w", err)
 	}
 	existingByName := make(map[string]*srsdk.SchemaRegistryEntry, len(existing))
 	for _, e := range existing {
-		entry := e // capture loop variable
+		entry := e
 		existingByName[e.Type] = &entry
 	}
 
-	// 3. Apply each type
 	var results []Result
 	for _, file := range files {
 		for _, def := range file.Types {
@@ -102,7 +98,6 @@ func Apply(ctx context.Context, client *sdk.Client, projectID string, opts *Appl
 // Internal
 // ---------------------------------------------------------------------------
 
-// applyOne handles create vs update for a single schema type.
 func applyOne(
 	ctx context.Context,
 	client *sdk.Client,
@@ -114,7 +109,6 @@ func applyOne(
 	enabled := def.Enabled
 
 	if existing == nil {
-		// ── Create ──
 		if opts.DryRun {
 			log.Printf("[schema] DRY-RUN: would create type %q", def.TypeName)
 			return Result{TypeName: def.TypeName, Action: "created"}
@@ -133,11 +127,7 @@ func applyOne(
 		return Result{TypeName: def.TypeName, Action: "created"}
 	}
 
-	// ── Update if changed ──
 	if !typeHasChanged(existing, &def) {
-		if opts.DryRun {
-			log.Printf("[schema] DRY-RUN: type %q unchanged, would skip", def.TypeName)
-		}
 		return Result{TypeName: def.TypeName, Action: "unchanged"}
 	}
 
@@ -158,15 +148,12 @@ func applyOne(
 	return Result{TypeName: def.TypeName, Action: "updated"}
 }
 
-// parseSchemaFiles reads all embedded JSON files and parses them.
 func parseSchemaFiles() ([]schemaFile, error) {
-	// Read the directory listing
 	dirEntries, err := schemaFiles.ReadDir("schemas")
 	if err != nil {
 		return nil, fmt.Errorf("read embedded schemas dir: %w", err)
 	}
 
-	// Collect JSON filenames
 	var filenames []string
 	for _, de := range dirEntries {
 		if de.IsDir() {
@@ -197,7 +184,6 @@ func parseSchemaFiles() ([]schemaFile, error) {
 			Name:  baseName,
 			Types: defs,
 		})
-
 		log.Printf("[schema] Loaded %s: %d type(s)", name, len(defs))
 	}
 
@@ -208,7 +194,6 @@ func parseSchemaFiles() ([]schemaFile, error) {
 	return files, nil
 }
 
-// fetchExistingTypes retrieves all types currently registered on the project.
 func fetchExistingTypes(ctx context.Context, client *sdk.Client, projectID string) ([]srsdk.SchemaRegistryEntry, error) {
 	types, err := client.SchemaRegistry.GetProjectTypes(ctx, projectID, &srsdk.ListTypesOptions{
 		EnabledOnly: boolPtr(false),
@@ -219,36 +204,30 @@ func fetchExistingTypes(ctx context.Context, client *sdk.Client, projectID strin
 	return types, nil
 }
 
-// typeHasChanged compares an existing schema registry entry with a local definition.
-// Returns true if an update is needed.
 func typeHasChanged(existing *srsdk.SchemaRegistryEntry, def *SchemaDefinition) bool {
 	if existing == nil {
 		return true
 	}
 
-	// Check description
 	if def.Description != "" {
 		if existing.Description == nil || *existing.Description != def.Description {
 			return true
 		}
 	}
 
-	// Check enabled
 	if existing.Enabled != def.Enabled {
 		return true
 	}
 
-	// Check JSON schema — normalize and compare
 	existingJSON := normalizeJSON(existing.JSONSchema)
 	localJSON := normalizeJSON(def.JSONSchema)
 	return existingJSON != localJSON
 }
 
-// normalizeJSON pretty-prints JSON for stable comparison.
 func normalizeJSON(data []byte) string {
 	var v any
 	if err := json.Unmarshal(data, &v); err != nil {
-		return string(data) // fallback to raw
+		return string(data)
 	}
 	normalized, err := json.Marshal(v)
 	if err != nil {
