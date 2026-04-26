@@ -1,0 +1,464 @@
+// Package memory provides a bridge between Diane and the Memory Platform.
+//
+// It wraps the emergent.memory SDK to handle:
+//   - Session lifecycle (create, retrieve, close)
+//   - Message persistence (append, list)
+//   - Semantic memory search across sessions and facts
+//   - Streaming chat via the Memory Platform's LLM
+//
+// Architecture: Diane calls Memory Platform over outbound HTTP.
+// No inbound connectivity is required for these operations.
+package memory
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"time"
+
+	sdk "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk"
+	"github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/chat"
+	"github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/graph"
+	sdkprovider "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/provider"
+
+	sdkagents "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agentdefinitions"
+	sdkagentrun "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agents"
+)
+
+// Bridge is the main interface to the Memory Platform.
+// Each Bridge is scoped to a single Memory project.
+type Bridge struct {
+	client    *sdk.Client
+	projectID string
+}
+
+// Session represents a conversation session stored in the graph.
+type Session struct {
+	ID           string
+	Key          string
+	Title        string
+	MessageCount int
+	TotalTokens  int  // auto-maintained by server when messages have token_count
+	Status       string
+	CreatedAt    time.Time
+}
+
+// Message represents a single turn in a session.
+type Message struct {
+	ID      string
+	Role    string
+	Content string
+	Seq     int
+	TokenCount int // 0 if unknown; populated when stored with token counting
+}
+
+// SearchResult is a single match from memory recall.
+type SearchResult struct {
+	ObjectType string
+	Content    string
+	Score      float64
+	ObjectID   string
+}
+
+// Config holds configuration for creating a Bridge.
+type Config struct {
+	ServerURL string
+	APIKey    string
+	ProjectID string
+	OrgID     string
+	// HTTPClientTimeout overrides the default 30s HTTP client timeout.
+	// Use a longer timeout (e.g., 120s) when making streaming chat calls.
+	HTTPClientTimeout time.Duration
+}
+
+// New creates a Bridge with explicit config.
+func New(cfg Config) (*Bridge, error) {
+	httpTimeout := cfg.HTTPClientTimeout
+	if httpTimeout <= 0 {
+		httpTimeout = 30 * time.Second
+	}
+	client, err := sdk.New(sdk.Config{
+		ServerURL: cfg.ServerURL,
+		Auth:      sdk.AuthConfig{Mode: "apikey", APIKey: cfg.APIKey},
+		HTTPClient: &http.Client{
+			Timeout: httpTimeout,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("memory bridge: sdk.New: %w", err)
+	}
+	client.SetContext(cfg.OrgID, cfg.ProjectID)
+	return &Bridge{client: client, projectID: cfg.ProjectID}, nil
+}
+
+// Client returns the raw SDK client for advanced operations.
+func (b *Bridge) Client() *sdk.Client {
+	return b.client
+}
+
+// Close releases idle connections.
+func (b *Bridge) Close() {
+	if b.client != nil {
+		b.client.Close()
+	}
+}
+
+// ============================================================================
+// Session Lifecycle
+// ============================================================================
+
+// CreateSession creates a new conversation session in the graph.
+func (b *Bridge) CreateSession(ctx context.Context, title string) (*Session, error) {
+	obj, err := b.client.Graph.CreateSession(ctx, &graph.CreateSessionRequest{
+		Title: title,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create session: %w", err)
+	}
+	return graphObjectToSession(obj), nil
+}
+
+// GetSession retrieves a session by its graph object ID.
+func (b *Bridge) GetSession(ctx context.Context, sessionID string) (*Session, error) {
+	obj, err := b.client.Graph.GetObject(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("get session %s: %w", sessionID, err)
+	}
+	return graphObjectToSession(obj), nil
+}
+
+// CloseSession marks a session as completed.
+func (b *Bridge) CloseSession(ctx context.Context, sessionID string) error {
+	_, err := b.client.Graph.UpdateObject(ctx, sessionID, &graph.UpdateObjectRequest{
+		Properties: map[string]any{
+			"status":   "completed",
+			"ended_at": time.Now().UTC().Format(time.RFC3339),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("close session %s: %w", sessionID, err)
+	}
+	return nil
+}
+
+// ListSessions lists all sessions, optionally filtered by status.
+func (b *Bridge) ListSessions(ctx context.Context, status string) ([]Session, error) {
+	opts := &graph.ListObjectsOptions{
+		Type: "Session",
+	}
+	if status != "" {
+		opts.PropertyFilters = []graph.PropertyFilter{
+			{Path: "status", Op: "eq", Value: status},
+		}
+	}
+	resp, err := b.client.Graph.ListObjects(ctx, opts)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+	sessions := make([]Session, 0, len(resp.Items))
+	for _, obj := range resp.Items {
+		sessions = append(sessions, *graphObjectToSession(obj))
+	}
+	return sessions, nil
+}
+
+// ============================================================================
+// Messages
+// ============================================================================
+
+// AppendMessage appends a message to a session and returns the created message.
+// If tokenCount > 0, it's included in the request so the server can auto-maintain
+// the session's total_tokens counter. Pass 0 to skip token counting.
+func (b *Bridge) AppendMessage(ctx context.Context, sessionID, role, content string, tokenCount int) (*Message, error) {
+	req := &graph.AppendMessageRequest{
+		Role:    role,
+		Content: content,
+	}
+	if tokenCount > 0 {
+		req.TokenCount = &tokenCount
+	}
+	obj, err := b.client.Graph.AppendMessage(ctx, sessionID, req)
+	if err != nil {
+		return nil, fmt.Errorf("append message: %w", err)
+	}
+	return graphObjectToMessage(obj), nil
+}
+
+// GetMessages retrieves all messages for a session, ordered by sequence number.
+func (b *Bridge) GetMessages(ctx context.Context, sessionID string) ([]Message, error) {
+	var all []Message
+	cursor := ""
+	for {
+		resp, err := b.client.Graph.ListMessages(ctx, sessionID, 100, cursor)
+		if err != nil {
+			return nil, fmt.Errorf("list messages: %w", err)
+		}
+		for _, obj := range resp.Items {
+			all = append(all, *graphObjectToMessage(obj))
+		}
+		if resp.NextCursor == nil || *resp.NextCursor == "" {
+			break
+		}
+		cursor = *resp.NextCursor
+	}
+	return all, nil
+}
+
+// ============================================================================
+// Memory Recall — Hybrid Search across stored content
+// ============================================================================
+
+// SearchMemory performs hybrid (semantic + keyword) search across graph objects.
+// Returns matched objects ranked by relevance.
+func (b *Bridge) SearchMemory(ctx context.Context, query string, limit int) ([]SearchResult, error) {
+	resp, err := b.client.Graph.HybridSearch(ctx, &graph.HybridSearchRequest{
+		Query:   query,
+		Limit:   limit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("search memory: %w", err)
+	}
+	out := make([]SearchResult, 0, len(resp.Data))
+	for _, r := range resp.Data {
+		content := extractContent(r.Object)
+		out = append(out, SearchResult{
+			ObjectType: r.Object.Type,
+			Content:    content,
+			Score:      float64(r.Score),
+			ObjectID:   r.Object.EntityID,
+		})
+	}
+	return out, nil
+}
+
+// extractContent pulls the best "content" field from a graph object's properties.
+func extractContent(obj *graph.GraphObject) string {
+	if obj == nil || obj.Properties == nil {
+		return ""
+	}
+	// Try content, then description, then title
+	for _, key := range []string{"content", "description", "title", "summary", "name"} {
+		if v, ok := obj.Properties[key]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+// ============================================================================
+// Streaming Chat (via Memory Platform's LLM)
+// ============================================================================
+
+// StreamChat starts a streaming chat session with the Memory Platform's LLM.
+// If conversationID is empty, a new conversation is created.
+// Caller must call Close() on the returned stream.
+func (b *Bridge) StreamChat(ctx context.Context, message string, conversationID string) (*ChatStream, error) {
+	req := &chat.StreamRequest{
+		Message: message,
+	}
+	if conversationID != "" {
+		req.ConversationID = &conversationID
+	}
+	stream, err := b.client.Chat.StreamChat(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("stream chat: %w", err)
+	}
+	return &ChatStream{stream: stream}, nil
+}
+
+// ChatStream is an active SSE stream from the Memory Platform's chat endpoint.
+type ChatStream struct {
+	stream *chat.Stream
+}
+
+// Events returns a channel of stream events. Read from it until it closes.
+func (cs *ChatStream) Events() <-chan *chat.StreamEvent {
+	return cs.stream.Events()
+}
+
+// Close terminates the stream.
+func (cs *ChatStream) Close() error {
+	return cs.stream.Close()
+}
+
+// ============================================================================
+// LLM Provider Proxy — delegates to Memory Platform's provider API
+// ============================================================================
+
+// ListOrgProviders returns all provider configs configured at the org level.
+func (b *Bridge) ListOrgProviders(ctx context.Context, orgID string) ([]sdkprovider.ProviderConfig, error) {
+	return b.client.Provider.ListOrgConfigs(ctx, orgID)
+}
+
+// UpsertOrgProvider creates or updates an org-level provider config with credentials.
+// Runs a live credential test and syncs model catalog on success.
+func (b *Bridge) UpsertOrgProvider(ctx context.Context, orgID, providerType string, apiKey, model, baseURL string) (*sdkprovider.ProviderConfig, error) {
+	req := &sdkprovider.UpsertProviderConfigRequest{
+		APIKey:          apiKey,
+		GenerativeModel: model,
+		BaseURL:         baseURL,
+	}
+	return b.client.Provider.UpsertOrgConfig(ctx, orgID, providerType, req)
+}
+
+// TestProvider sends a live generation call to verify provider credentials work.
+func (b *Bridge) TestProvider(ctx context.Context, orgID, providerType string) (*sdkprovider.TestProviderResponse, error) {
+	return b.client.Provider.TestProvider(ctx, providerType, b.projectID, orgID)
+}
+
+// ============================================================================
+// Agent Definition Proxy — delegates to Memory Platform's AgentDefinitions API
+// ============================================================================
+
+// ListAgentDefs returns all agent definitions for the current project.
+func (b *Bridge) ListAgentDefs(ctx context.Context) (*sdkagents.APIResponse[[]sdkagents.AgentDefinitionSummary], error) {
+	return b.client.AgentDefinitions.List(ctx)
+}
+
+// GetAgentDef returns a single agent definition by ID.
+func (b *Bridge) GetAgentDef(ctx context.Context, id string) (*sdkagents.APIResponse[sdkagents.AgentDefinition], error) {
+	return b.client.AgentDefinitions.Get(ctx, id)
+}
+
+// CreateAgentDef creates a new agent definition.
+func (b *Bridge) CreateAgentDef(ctx context.Context, req *sdkagents.CreateAgentDefinitionRequest) (*sdkagents.APIResponse[sdkagents.AgentDefinition], error) {
+	return b.client.AgentDefinitions.Create(ctx, req)
+}
+
+// UpdateAgentDef updates an existing agent definition.
+func (b *Bridge) UpdateAgentDef(ctx context.Context, id string, req *sdkagents.UpdateAgentDefinitionRequest) (*sdkagents.APIResponse[sdkagents.AgentDefinition], error) {
+	return b.client.AgentDefinitions.Update(ctx, id, req)
+}
+
+// DeleteAgentDef deletes an agent definition.
+func (b *Bridge) DeleteAgentDef(ctx context.Context, id string) error {
+	return b.client.AgentDefinitions.Delete(ctx, id)
+}
+
+// SetAgentWorkspaceConfig configures sandbox settings for an agent definition.
+func (b *Bridge) SetAgentWorkspaceConfig(ctx context.Context, defID string, config map[string]any) (*sdkagents.APIResponse[map[string]any], error) {
+	return b.client.AgentDefinitions.SetWorkspaceConfig(ctx, defID, config)
+}
+
+// ============================================================================
+// Agent Runtime — delegates to Memory Platform's Agents API
+// ============================================================================
+
+// CreateRuntimeAgent creates a runtime agent linked to an agent definition.
+// The agent is named identically to the definition for exact-name resolution.
+func (b *Bridge) CreateRuntimeAgent(ctx context.Context, name, defID string) (*sdkagentrun.APIResponse[sdkagentrun.Agent], error) {
+	return b.client.Agents.Create(ctx, &sdkagentrun.CreateAgentRequest{
+		Name:          name,
+		StrategyType:  "chat-session:" + defID,
+		CronSchedule:  "0 0 29 2 *", // Feb 29 — never fires except leap years at 00:00
+		TriggerType:   "manual",
+		ExecutionMode: "execute",
+		Enabled:       boolPtr(true),
+	})
+}
+
+// CreateScheduledRuntimeAgent creates a runtime agent with a cron schedule.
+// The agent will auto-trigger on the cron schedule without manual intervention.
+// Use "" for triggerPrompt to use the agent's default startup prompt.
+func (b *Bridge) CreateScheduledRuntimeAgent(ctx context.Context, name, defID, cronSchedule, triggerPrompt string) (*sdkagentrun.APIResponse[sdkagentrun.Agent], error) {
+	req := &sdkagentrun.CreateAgentRequest{
+		Name:          name,
+		StrategyType:  "chat-session:" + defID,
+		CronSchedule:  cronSchedule,
+		TriggerType:   "schedule",
+		ExecutionMode: "execute",
+		Enabled:       boolPtr(true),
+	}
+	return b.client.Agents.Create(ctx, req)
+}
+
+// TriggerAgentWithInput triggers a runtime agent with a prompt.
+func (b *Bridge) TriggerAgentWithInput(ctx context.Context, agentID, prompt string) (*sdkagentrun.TriggerResponse, error) {
+	return b.client.Agents.TriggerWithInput(ctx, agentID, sdkagentrun.TriggerRequest{
+		Input: prompt,
+	})
+}
+
+// GetAgentRuns returns recent runs for a runtime agent.
+func (b *Bridge) GetAgentRuns(ctx context.Context, agentID string, limit int) (*sdkagentrun.APIResponse[[]sdkagentrun.AgentRun], error) {
+	return b.client.Agents.GetRuns(ctx, agentID, limit)
+}
+
+// GetProjectRun returns details for a specific run.
+func (b *Bridge) GetProjectRun(ctx context.Context, runID string) (*sdkagentrun.APIResponse[sdkagentrun.AgentRun], error) {
+	return b.client.Agents.GetProjectRun(ctx, b.projectID, runID)
+}
+
+// GetRunMessages returns the conversation transcript for a run.
+func (b *Bridge) GetRunMessages(ctx context.Context, runID string) (*sdkagentrun.APIResponse[[]sdkagentrun.AgentRunMessage], error) {
+	return b.client.Agents.GetRunMessages(ctx, b.projectID, runID)
+}
+
+// GetRunToolCalls returns the tool calls made during a run.
+func (b *Bridge) GetRunToolCalls(ctx context.Context, runID string) (*sdkagentrun.APIResponse[[]sdkagentrun.AgentRunToolCall], error) {
+	return b.client.Agents.GetRunToolCalls(ctx, b.projectID, runID)
+}
+
+// ============================================================================
+// Internal helpers
+// ============================================================================
+
+func graphObjectToSession(obj *graph.GraphObject) *Session {
+	s := &Session{
+		ID:        obj.EntityID,
+		Key:       safeStr(obj.Key),
+		Title:     safePropStr(obj.Properties, "title"),
+		Status:    safePropStr(obj.Properties, "status"),
+		CreatedAt: obj.CreatedAt,
+	}
+	if mc, ok := obj.Properties["message_count"].(float64); ok {
+		s.MessageCount = int(mc)
+	}
+	if tt, ok := obj.Properties["total_tokens"].(float64); ok {
+		s.TotalTokens = int(tt)
+	}
+	return s
+}
+
+func graphObjectToMessage(obj *graph.GraphObject) *Message {
+	m := &Message{
+		ID:      obj.EntityID,
+		Role:    safePropStr(obj.Properties, "role"),
+		Content: safePropStr(obj.Properties, "content"),
+	}
+	if seq, ok := obj.Properties["sequence_number"].(float64); ok {
+		m.Seq = int(seq)
+	}
+	if tc, ok := obj.Properties["token_count"].(float64); ok {
+		m.TokenCount = int(tc)
+	}
+	return m
+}
+
+func safeStr(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+func safePropStr(props map[string]any, key string) string {
+	if props == nil {
+		return ""
+	}
+	v, ok := props[key]
+	if !ok {
+		return ""
+	}
+	s, ok := v.(string)
+	if !ok {
+		return ""
+	}
+	return s
+}
+
+func boolPtr(v bool) *bool {
+	return &v
+}

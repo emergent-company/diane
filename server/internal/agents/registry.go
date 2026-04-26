@@ -11,6 +11,7 @@ package agents
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/Emergent-Comapny/diane/internal/config"
 	sdkagents "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agentdefinitions"
@@ -36,20 +37,108 @@ type BuiltInAgent struct {
 	MaxSteps    int
 	Timeout     int
 	Sandbox     *config.SandboxConfig
+
+	// Delegation heuristics for orchestrator routing.
+	// Only agents the orchestrator should consider delegating TO get this populated.
+	Delegation *config.DelegationHeuristics `yaml:"delegation,omitempty"`
 }
 
-// BuiltInAgents returns the full list of built-in agents.
-// This is the single source of truth — modify here to add new built-ins.
-//
-// Tool names come from Memory Platform's built-in MCP server (discovered via
-// POST /api/mcp/rpc tools/list after initialize). They map 1:1 to the MCP
-// tool names that the agent runtime will make available.
-func BuiltInAgents() []BuiltInAgent {
-	return []BuiltInAgent{
-		{
-			Name:        "diane-default",
-			Description: "General-purpose personal AI assistant",
-			SystemPrompt: `You are Diane, a personal AI assistant. You help with a wide range of tasks.
+// BuildAgentCatalog generates the AGENT CATALOG section for the orchestrator's
+// system prompt using delegation heuristics metadata. Each agent entry shows:
+// - What tools and skills the agent has (capability context for solution path selection)
+// - Cost/speed/quality stats (routing efficiency)
+// - Delegate when / don't delegate when rules (decision heuristics)
+// This is inspired by oh-my-opencode-slim's orchestrator prompt pattern.
+func BuildAgentCatalog(agents []BuiltInAgent) string {
+	var b strings.Builder
+	for _, a := range agents {
+		if a.Name == "diane-default" {
+			continue // skip self
+		}
+		b.WriteString(fmt.Sprintf("- @%s: %s\n", a.Name, a.Description))
+
+		// Tool access — what tools does this agent have?
+		if len(a.Tools) > 0 {
+			maskedTools := summarizeToolGroups(a.Tools)
+			b.WriteString(fmt.Sprintf("  Tools: %s (%d total)\n", maskedTools, len(a.Tools)))
+		}
+
+		// Skills — what workflows does this agent know?
+		if len(a.Skills) > 0 {
+			skillStr := strings.Join(a.Skills, ", ")
+			if len(skillStr) > 100 {
+				skillStr = skillStr[:97] + "..."
+			}
+			b.WriteString(fmt.Sprintf("  Skills: %s\n", skillStr))
+		}
+
+		if a.Delegation == nil {
+			continue
+		}
+		d := a.Delegation
+
+		// Stats — relative performance for routing decisions
+		if d.SpeedMultiplier > 0 || d.CostMultiplier > 0 || d.QualityMultiplier > 0 {
+			b.WriteString(fmt.Sprintf("  Stats: %.1fx speed, %.1fx cost, %.1fx quality (vs doing it yourself)\n", d.SpeedMultiplier, d.CostMultiplier, d.QualityMultiplier))
+		}
+
+		// Capability areas — broad categories this agent handles
+		if len(d.CapabilityAreas) > 0 {
+			b.WriteString(fmt.Sprintf("  Best for: %s\n", strings.Join(d.CapabilityAreas, ", ")))
+		}
+
+		// Routing rules
+		for _, rule := range d.DelegateWhen {
+			b.WriteString(fmt.Sprintf("  Delegate when: %s\n", rule))
+		}
+		for _, rule := range d.DontDelegateWhen {
+			b.WriteString(fmt.Sprintf("  Don't delegate when: %s\n", rule))
+		}
+		if d.RuleOfThumb != "" {
+			b.WriteString(fmt.Sprintf("  Rule of thumb: %s\n", d.RuleOfThumb))
+		}
+	}
+	b.WriteString("Call list_available_agents() for the full up-to-date list.\n")
+	return b.String()
+}
+
+// summarizeToolGroups condenses tool lists into meaningful capability hints.
+// Rather than listing every tool, it shows the categories of tools available.
+func summarizeToolGroups(tools []string) string {
+	groups := map[string][]string{}
+	for _, t := range tools {
+		switch {
+		case strings.HasPrefix(t, "web-"):
+			groups["Web search"] = append(groups["Web search"], t)
+		case strings.Contains(t, "search-") || strings.Contains(t, "entity-"):
+			groups["Graph & memory"] = append(groups["Graph & memory"], t)
+		case strings.Contains(t, "agent-") || strings.Contains(t, "skill-") || strings.Contains(t, "schema-"):
+			groups["Management"] = append(groups["Management"], t)
+		case strings.Contains(t, "memory_"):
+			groups["Memory ops"] = append(groups["Memory ops"], t)
+		case strings.Contains(t, "spawn_") || strings.Contains(t, "list_available"):
+			groups["Coordination"] = append(groups["Coordination"], t)
+		default:
+			groups["Other"] = append(groups["Other"], t)
+		}
+	}
+	var parts []string
+	for _, name := range []string{"Web search", "Graph & memory", "Management", "Memory ops", "Coordination", "Other"} {
+		if g, ok := groups[name]; ok && len(g) > 0 {
+			if len(g) <= 2 {
+				parts = append(parts, name)
+			} else {
+				parts = append(parts, fmt.Sprintf("%s (%d tools)", name, len(g)))
+			}
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
+// dianeDefaultSystemPrompt builds the system prompt for diane-default, injecting
+// the dynamic agent catalog generated from delegation heuristics metadata.
+func dianeDefaultSystemPrompt(catalog string) string {
+	return fmt.Sprintf(`You are Diane, a personal AI assistant. You help with a wide range of tasks.
 You can delegate specialized work to sub-agents using spawn_agents.
 
 ORCHESTRATION RULES:
@@ -74,20 +163,7 @@ MEMORY SYSTEM:
 - Check for existing related facts before creating new ones (avoid duplicates).
 
 AGENT CATALOG:
-- diane-default: You — general-purpose assistant (search, browse, graph queries, schema discovery)
-- diane-codebase: Codebase analysis and knowledge graph management specialist.
-  Use for codebase analysis, scenario management, competitive landscape,
-  dependency tracking, architecture diagrams, or any graph-heavy work.
-- diane-researcher: Deep-dive research agent (web search, fact checking, source synthesis)
-- diane-agent-creator: Specialized in creating, modifying, and managing agent
-  definitions, skills, and schemas. Has all agent-def-*, skill-*, and schema-* tools.
-- diane-schema-designer: Schema design and evolution agent. Proposes new object types,
-  designs relationships, and deploys schemas after user approval.
-- graph-query-agent: Knowledge graph query assistant.
-- diane-dreamer: Nightly memory consolidation agent (runs on schedule).
-- diane-session-extractor: Extracts structured memories from completed runs.
-Call list_available_agents() for the full up-to-date list.
-
+%s
 Your tools are limited to:
 - search-knowledge / search-hybrid — search the knowledge graph
 - web-search-brave / web-fetch — search and read web pages
@@ -102,7 +178,41 @@ Your tools are limited to:
 You do NOT have agent-def-create, skill-create, schema-create, or any mutation tools.
 For creating agents, skills, or schemas, ALWAYS delegate to the appropriate specialized agent.
 
-Be concise, helpful, and proactive. When you need more context, ask clarifying questions.`,
+Be concise, helpful, and proactive. When you need more context, ask clarifying questions.`, catalog)
+}
+
+// BuiltInAgents returns the full list of built-in agents.
+// This is the single source of truth — modify here to add new built-ins.
+//
+// Tool names come from Memory Platform's built-in MCP server (discovered via
+// POST /api/mcp/rpc tools/list after initialize). They map 1:1 to the MCP
+// tool names that the agent runtime will make available.
+func BuiltInAgents() []BuiltInAgent {
+	// Build the catalog from all agents so diane-default's system prompt
+	// dynamically includes delegation heuristics for delegatable agents.
+	agents := buildAgentList()
+	// Build the default agent first with just the others for the catalog
+	defaultPrompt := dianeDefaultSystemPrompt(BuildAgentCatalog(agents))
+	// Override default's prompt with the dynamic version
+	for i := range agents {
+		if agents[i].Name == "diane-default" {
+			agents[i].SystemPrompt = defaultPrompt
+			break
+		}
+	}
+	return agents
+}
+
+// buildAgentList returns the raw agent definitions (without prompt injection).
+func buildAgentList() []BuiltInAgent {
+	return []BuiltInAgent{
+		{
+			Name:        "diane-default",
+			Description: "General-purpose personal AI assistant",
+			// SystemPrompt is dynamically built by BuiltInAgents() via
+			// dianeDefaultSystemPrompt() + BuildAgentCatalog(). The value
+			// below is a placeholder and gets replaced at runtime.
+			SystemPrompt: "(dynamically generated)",
 
 			Tools: []string{
 				// ADK skill tool (loads bound skills on demand)
@@ -186,6 +296,15 @@ Be thorough and cite your sources.`,
 			Visibility: "project",
 			MaxSteps:   50,
 			Timeout:    300,
+			Delegation: &config.DelegationHeuristics{
+				SpeedMultiplier:   1.5,
+				CostMultiplier:    1.0,
+				QualityMultiplier: 3.0,
+				CapabilityAreas:   []string{"Web research", "Fact verification", "Source synthesis"},
+				DelegateWhen:      []string{"Multi-source web research needing fact verification", "Synthesizing findings from multiple sources"},
+				DontDelegateWhen:  []string{"Single-source lookup", "Quick factual answers you already know"},
+				RuleOfThumb:       "Deep research → @diane-researcher. Quick lookup → yourself.",
+			},
 		},
 		{
 			Name:        "diane-agent-creator",
@@ -277,6 +396,15 @@ CRITICAL RULES:
 			Visibility: "project",
 			MaxSteps:   100,
 			Timeout:    600,
+			Delegation: &config.DelegationHeuristics{
+				SpeedMultiplier:   1.0,
+				CostMultiplier:    1.0,
+				QualityMultiplier: 5.0,
+				CapabilityAreas:   []string{"Agent management", "Skill management", "Schema management"},
+				DelegateWhen:      []string{"Creating or modifying agents, skills, or agent definitions", "Managing schemas"},
+				DontDelegateWhen:  []string{"Using existing agents (not creating them)", "Routine conversation"},
+				RuleOfThumb:       "Need to create/modify/delete an agent or skill? → @diane-agent-creator. Just using agents? → yourself.",
+			},
 		},
 		{
 			Name:        "diane-schema-designer",
@@ -381,6 +509,15 @@ CRITICAL RULES:
 			Visibility: "project",
 			MaxSteps:   100,
 			Timeout:    600,
+			Delegation: &config.DelegationHeuristics{
+				SpeedMultiplier:   0.8,
+				CostMultiplier:    1.0,
+				QualityMultiplier: 10.0,
+				CapabilityAreas:   []string{"Schema design", "Data model evolution", "Relationship architecture"},
+				DelegateWhen:      []string{"New schema type proposals needing careful design", "Complex relationship design between types", "Schema evolution decisions"},
+				DontDelegateWhen:  []string{"Simple field additions", "Routine data entry", "Quick schema lookups"},
+				RuleOfThumb:       "Need a well-designed schema? → @diane-schema-designer. Simple config change? → yourself.",
+			},
 		},
 		{
 			Name:        "diane-session-extractor",
@@ -483,6 +620,15 @@ Store findings as Technology nodes in the graph when appropriate.`,
 			Visibility: "project",
 			MaxSteps:   100,
 			Timeout:    600,
+			Delegation: &config.DelegationHeuristics{
+				SpeedMultiplier:   2.0,
+				CostMultiplier:    1.0,
+				QualityMultiplier: 5.0,
+				CapabilityAreas:   []string{"Codebase analysis", "Graph management", "Competitive intelligence"},
+				DelegateWhen:      []string{"Codebase analysis and structural understanding", "Knowledge graph operations (entities, relationships)", "Competitive landscape tracking", "Technology catalog management", "Architecture diagrams and dependency graphs"},
+				DontDelegateWhen:  []string{"Simple file reads", "Basic text searches", "General conversation"},
+				RuleOfThumb:       "Graph-heavy or codebase structural work → @diane-codebase. Simple reads → yourself.",
+			},
 		},
 		{
 			Name:        "diane-dreamer",
@@ -619,6 +765,12 @@ func toCreateRequest(ba BuiltInAgent) *sdkagents.CreateAgentDefinitionRequest {
 			MaxTokens:   intPtr(ba.Model.MaxTokens),
 		}
 	}
+	if ba.Delegation != nil {
+		if r.Config == nil {
+			r.Config = make(map[string]any)
+		}
+		r.Config["delegation"] = ba.Delegation
+	}
 	return r
 }
 
@@ -640,6 +792,12 @@ func toUpdateRequest(ba BuiltInAgent) *sdkagents.UpdateAgentDefinitionRequest {
 			Temperature: fl32Ptr(ba.Model.Temperature),
 			MaxTokens:   intPtr(ba.Model.MaxTokens),
 		}
+	}
+	if ba.Delegation != nil {
+		if r.Config == nil {
+			r.Config = make(map[string]any)
+		}
+		r.Config["delegation"] = ba.Delegation
 	}
 	return r
 }

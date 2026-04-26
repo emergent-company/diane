@@ -35,20 +35,6 @@ Download binaries from [GitHub Releases](https://github.com/Emergent-Comapny/dia
 
 Diane speaks MCP, so it works with any compatible AI client.
 
-### OpenCode
-
-Add to your `opencode.json`:
-
-```json
-{
-  "mcp": {
-    "diane": {
-      "command": ["~/.diane/bin/diane"]
-    }
-  }
-}
-```
-
 ### Claude Desktop
 
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:

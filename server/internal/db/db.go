@@ -108,28 +108,78 @@ func (db *DB) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_job_executions_job_id ON job_executions(job_id);
 	CREATE INDEX IF NOT EXISTS idx_job_executions_started_at ON job_executions(started_at);
 
-	CREATE TABLE IF NOT EXISTS agents (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		name TEXT NOT NULL UNIQUE,
-		type TEXT NOT NULL DEFAULT 'acp',
-		url TEXT NOT NULL,
-		enabled INTEGER NOT NULL DEFAULT 1,
+	CREATE TABLE IF NOT EXISTS discord_sessions (
+		channel_id TEXT PRIMARY KEY,
+		session_id TEXT NOT NULL DEFAULT '',
+		conversation TEXT NOT NULL DEFAULT '',
+		agent_type TEXT NOT NULL DEFAULT 'default',
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-	);
-
-	CREATE TABLE IF NOT EXISTS webhooks (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		agent_id INTEGER,
-		path TEXT NOT NULL UNIQUE,
-		prompt TEXT NOT NULL,
-		enabled INTEGER NOT NULL DEFAULT 1,
-		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE SET NULL
 	);
 	`
 
 	_, err := db.conn.Exec(schema)
 	return err
+}
+
+// DiscordSession represents a persisted Discord channel→session mapping.
+type DiscordSession struct {
+	ChannelID    string    `json:"channel_id"`
+	SessionID    string    `json:"session_id"`
+	Conversation string    `json:"conversation"`
+	AgentType    string    `json:"agent_type"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// UpsertDiscordSession inserts or updates a channel→session mapping.
+func (db *DB) UpsertDiscordSession(s *DiscordSession) error {
+	_, err := db.conn.Exec(`
+		INSERT INTO discord_sessions (channel_id, session_id, conversation, agent_type, updated_at)
+		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(channel_id) DO UPDATE SET
+			session_id = excluded.session_id,
+			conversation = excluded.conversation,
+			agent_type = excluded.agent_type,
+			updated_at = CURRENT_TIMESTAMP
+	`, s.ChannelID, s.SessionID, s.Conversation, s.AgentType)
+	return err
+}
+
+// GetDiscordSessionByChannel returns a single session by channel ID.
+func (db *DB) GetDiscordSessionByChannel(channelID string) (*DiscordSession, error) {
+	s := &DiscordSession{}
+	err := db.conn.QueryRow(`
+		SELECT channel_id, session_id, conversation, agent_type, created_at, updated_at
+		FROM discord_sessions WHERE channel_id = ?
+	`, channelID).Scan(&s.ChannelID, &s.SessionID, &s.Conversation, &s.AgentType, &s.CreatedAt, &s.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// GetAllDiscordSessions returns all persisted discord sessions.
+func (db *DB) GetAllDiscordSessions() ([]*DiscordSession, error) {
+	rows, err := db.conn.Query(`
+		SELECT channel_id, session_id, conversation, agent_type, created_at, updated_at
+		FROM discord_sessions ORDER BY updated_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sessions []*DiscordSession
+	for rows.Next() {
+		s := &DiscordSession{}
+		if err := rows.Scan(&s.ChannelID, &s.SessionID, &s.Conversation, &s.AgentType, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, s)
+	}
+	return sessions, rows.Err()
 }

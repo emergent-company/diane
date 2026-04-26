@@ -1,0 +1,22 @@
+[Unit]
+Description=Diane MCP Relay — connects local tools to Memory Platform
+Documentation=https://github.com/emergent-company/diane
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+ExecStart=/usr/local/bin/diane mcp relay --instance %H
+Restart=always
+RestartSec=30s
+StartLimitBurst=5
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/%i/.config /home/%i/.diane
+
+[Install]
+WantedBy=multi-user.target

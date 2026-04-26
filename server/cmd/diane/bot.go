@@ -1,0 +1,66 @@
+package main
+
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/Emergent-Comapny/diane/internal/config"
+	"github.com/Emergent-Comapny/diane/internal/discord"
+	"github.com/Emergent-Comapny/diane/internal/memory"
+)
+
+// startBot starts the Discord bot and blocks until shutdown.
+// On setup errors, it logs and exits (user-facing convenience).
+func startBot(pc *config.ProjectConfig) {
+	if err := runBotOnce(pc); err != nil {
+		log.Fatalf("Bot error: %v", err)
+	}
+}
+
+// runBotOnce starts the Discord bot once and returns when it exits.
+// Unlike startBot, it returns errors instead of calling log.Fatalf,
+// so the caller can decide whether to restart.
+func runBotOnce(pc *config.ProjectConfig) error {
+	// Build Discord config
+	dc := discord.DefaultConfig()
+	dc.BotToken = pc.DiscordBotToken
+	dc.AllowedChannels = pc.DiscordChannelIDs
+	if pc.SystemPrompt != "" {
+		dc.SystemPrompt = pc.SystemPrompt
+	}
+
+	if dc.BotToken == "" {
+		return fmt.Errorf("discord bot token not configured — run 'diane init'")
+	}
+
+	// Build Memory bridge
+	memCfg := memory.Config{
+		ServerURL:          pc.ServerURL,
+		APIKey:             pc.Token,
+		ProjectID:          pc.ProjectID,
+		OrgID:              pc.OrgID,
+		HTTPClientTimeout:  120 * time.Second,
+	}
+
+	bridge, err := memory.New(memCfg)
+	if err != nil {
+		return fmt.Errorf("create memory bridge: %w", err)
+	}
+
+	bot, err := discord.New(dc)
+	if err != nil {
+		return fmt.Errorf("create discord bot: %w", err)
+	}
+	bot.AttachBridge(bridge)
+
+	log.Printf("Starting Diane bot for project '%s'...", pc.ServerURL+"/project/"+pc.ProjectID)
+	log.Printf("  Discord bot token: configured")
+	log.Printf("  Memory server:     %s", pc.ServerURL)
+	log.Printf("  Memory project:    %s", pc.ProjectID)
+	if len(dc.AllowedChannels) > 0 {
+		log.Printf("  Discord channels:  %v", dc.AllowedChannels)
+	}
+
+	return bot.Start()
+}

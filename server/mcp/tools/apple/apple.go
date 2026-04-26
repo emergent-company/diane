@@ -262,7 +262,7 @@ func (p *Provider) getSwiftScriptPath() string {
 		return p.swiftScriptPath
 	}
 	// Default path relative to the diane repo
-	return filepath.Join(".opencode", "tools", "lib", "search_all_contacts.swift")
+	return filepath.Join(".diane", "tools", "lib", "search_all_contacts.swift")
 }
 
 func (p *Provider) searchContacts(args map[string]interface{}) (interface{}, error) {

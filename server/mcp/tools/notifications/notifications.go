@@ -63,7 +63,7 @@ func loadChannelMappings() (channelMappings, error) {
 	// Try DIANE config directories
 	paths := []string{
 		filepath.Join(home, ".diane", "secrets", "discord-channels.json"),
-		filepath.Join(home, ".opencode", "secrets", "discord-channels.json"),
+		filepath.Join(home, ".diane", "secrets", "discord-channels.json"),
 	}
 
 	for _, path := range paths {

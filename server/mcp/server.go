@@ -21,6 +21,7 @@ import (
 	"github.com/Emergent-Comapny/diane/mcp/tools/notifications"
 	"github.com/Emergent-Comapny/diane/mcp/tools/places"
 	"github.com/Emergent-Comapny/diane/mcp/tools/weather"
+	"github.com/Emergent-Comapny/diane/mcp/tools/memorytools"
 )
 
 // MCP Server for Diane
@@ -39,6 +40,7 @@ var financeProvider *finance.Provider
 var placesProvider *places.Provider
 var weatherProvider *weather.Provider
 var githubProvider *githubbot.Provider
+var memoryProvider *memorytools.Provider
 
 type MCPRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -157,6 +159,15 @@ func main() {
 		log.Printf("GitHub Bot tools initialized successfully")
 	}
 
+	// Initialize Memory tools provider (wraps MP SDK for memory ops)
+	memoryProvider = memorytools.NewProvider()
+	if err := memoryProvider.CheckDependencies(); err != nil {
+		log.Printf("Warning: Memory tools not available: %v", err)
+		memoryProvider = nil
+	} else {
+		log.Printf("Memory tools initialized successfully")
+	}
+
 	// MCP servers communicate via stdin/stdout
 	decoder := json.NewDecoder(os.Stdin)
 	encoder := json.NewEncoder(os.Stdout)
@@ -223,12 +234,12 @@ func handleRequest(req MCPRequest) MCPResponse {
 }
 
 // forwardProxiedNotifications monitors the proxy for tool list changes
-// and forwards them to the MCP client (OpenCode)
+// and forwards them to the MCP client
 func forwardProxiedNotifications(p *mcpproxy.Proxy) {
 	for serverName := range p.NotificationChan() {
 		log.Printf("Received tools/list_changed notification from proxied server: %s", serverName)
 
-		// Send notification to stdout (to OpenCode)
+		// Send notification to stdout (to the MCP client)
 		notification := map[string]interface{}{
 			"jsonrpc": "2.0",
 			"method":  "notifications/tools/list_changed",
@@ -470,6 +481,17 @@ func listTools() MCPResponse {
 		}
 	}
 
+	// Add Memory tools (memory_save, memory_recall, memory_apply_decay, memory_detect_patterns)
+	if memoryProvider != nil {
+		for _, tool := range memoryProvider.Tools() {
+			tools = append(tools, map[string]interface{}{
+				"name":        tool.Name,
+				"description": tool.Description,
+				"inputSchema": tool.InputSchema,
+			})
+		}
+	}
+
 	// Add proxied tools from other MCP servers
 	if proxy != nil {
 		proxiedTools, err := proxy.ListAllTools()
@@ -623,6 +645,20 @@ func callTool(params json.RawMessage) MCPResponse {
 		// Try GitHub Bot tools
 		if githubProvider != nil && githubProvider.HasTool(call.Name) {
 			result, err := githubProvider.Call(call.Name, call.Arguments)
+			if err != nil {
+				return MCPResponse{
+					Error: &MCPError{
+						Code:    -1,
+						Message: err.Error(),
+					},
+				}
+			}
+			return MCPResponse{Result: result}
+		}
+
+		// Try Memory tools
+		if memoryProvider != nil && memoryProvider.HasTool(call.Name) {
+			result, err := memoryProvider.Call(call.Name, call.Arguments)
 			if err != nil {
 				return MCPResponse{
 					Error: &MCPError{

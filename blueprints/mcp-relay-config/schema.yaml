@@ -1,0 +1,49 @@
+name: mcp-relay-config
+version: 1.0.0
+description: "MCP Relay configuration and secrets — stores MCP proxy server configs and device-local secrets in the graph for automatic sync across master/slave instances."
+author: "Diane"
+license: "MIT"
+
+objectTypeSchemas:
+  - name: MCPProxyConfig
+    description: "MCP proxy server configuration (mcp-servers.json contents). Defines which MCP servers a relay instance should proxy."
+    properties:
+      config:
+        type: string
+        description: "Full JSON content of mcp-servers.json — the list of proxied MCP servers"
+      scope:
+        type: string
+        description: "Which instance(s) this applies to: 'all', 'master', 'slave', or a specific instance name like 'slave-laptop'"
+      version:
+        type: integer
+        description: "Config version number. Bump this when config changes so instances can detect stale config"
+      instance_id:
+        type: string
+        description: "Specific target instance if scope is an instance name (redundant with scope, kept for query convenience)"
+
+  - name: MCPSecret
+    description: "A single secret value (API key, token, cert) used by MCP proxy servers on relay instances."
+    properties:
+      name:
+        type: string
+        description: "Secret filename (e.g., 'github-bot-token.json', 'cloudflare-config.json'). Maps to ~/.diane/secrets/<name>"
+      value:
+        type: string
+        description: "The secret content (raw value or JSON blob)"
+      scope:
+        type: string
+        description: "Which instance(s) this secret applies to: 'all', 'master', 'slave', or specific instance name"
+      description:
+        type: string
+        description: "Human-readable description of what this secret is for"
+
+relationshipTypeSchemas:
+  - name: uses_config
+    sourceType: MCPProxyConfig
+    targetType: MCPProxyConfig
+    description: "This config inherits from another (for layered configs — base + machine-specific overrides)"
+
+  - name: requires_secret
+    sourceType: MCPProxyConfig
+    targetType: MCPSecret
+    description: "This config requires this secret"

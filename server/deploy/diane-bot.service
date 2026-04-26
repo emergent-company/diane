@@ -1,0 +1,26 @@
+[Unit]
+Description=Diane Discord Bot — Discord ↔ Memory Platform bridge
+Documentation=https://github.com/emergent-company/diane
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/diane bot --pidfile /root/.diane/bot.pid --restart --restart-delay 5s
+Restart=always
+RestartSec=5s
+StartLimitBurst=5
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/root/.config /root/.diane
+
+# Clean shutdown — send SIGTERM, graceful exit through bot's Start()
+KillSignal=SIGTERM
+TimeoutStopSec=10s
+
+[Install]
+WantedBy=multi-user.target

@@ -14,7 +14,7 @@ Works on macOS and Linux. The installer auto-detects your platform and installs 
 
 ## What can Diane do?
 
-Diane connects to your AI tools (OpenCode, Claude Desktop, Cursor) and gives them superpowers to help with your daily life:
+Diane connects to your AI tools (Claude Desktop, Cursor, and any MCP-compatible client) and gives them superpowers to help with your daily life:
 
 | | What Diane helps with |
 |---|---|
@@ -33,21 +33,6 @@ Diane connects to your AI tools (OpenCode, Claude Desktop, Cursor) and gives the
 ## Connect to your AI
 
 Diane speaks MCP (Model Context Protocol), so it works with any compatible client.
-
-### OpenCode
-
-Add to `opencode.json`:
-
-```json
-{
-  "mcp": {
-    "diane": {
-      "type": "local",
-      "command": ["~/.diane/bin/diane"]
-    }
-  }
-}
-```
 
 ### Claude Desktop
 

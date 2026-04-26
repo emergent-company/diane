@@ -185,7 +185,7 @@ func (c *MCPClient) sendRequest(method string, params json.RawMessage) (json.Raw
 	// Create response channel
 	respCh := make(chan MCPResponse, 1)
 	c.pendingMu.Lock()
-	c.pending[reqID] = respCh
+	c.pending[float64(reqID)] = respCh // Use float64 to match JSON decoder's default number type
 	c.pendingMu.Unlock()
 
 	// Send request
@@ -202,7 +202,7 @@ func (c *MCPClient) sendRequest(method string, params json.RawMessage) (json.Raw
 
 	if err != nil {
 		c.pendingMu.Lock()
-		delete(c.pending, reqID)
+		delete(c.pending, float64(reqID))
 		c.pendingMu.Unlock()
 		return nil, fmt.Errorf("failed to send %s: %w", method, err)
 	}
