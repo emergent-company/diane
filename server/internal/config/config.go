@@ -113,7 +113,7 @@ type AgentConfig struct {
 	// Skills the agent has loaded
 	Skills []string `yaml:"skills,omitempty"`
 
-	// Flow type: standard, acp, tool_use, auto
+	// Flow type: single, sequential, loop (optional — server defaults to "single")
 	FlowType string `yaml:"flow_type,omitempty"`
 
 	// Visibility: project, org, private

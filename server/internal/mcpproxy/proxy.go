@@ -44,7 +44,7 @@ type Config struct {
 
 // Proxy manages multiple MCP clients
 type Proxy struct {
-	clients    map[string]*MCPClient
+	clients    map[string]Client
 	config     *Config
 	configPath string // Store config path for reload
 	mu         sync.RWMutex
@@ -59,7 +59,7 @@ func NewProxy(configPath string) (*Proxy, error) {
 	}
 
 	proxy := &Proxy{
-		clients:    make(map[string]*MCPClient),
+		clients:    make(map[string]Client),
 		config:     config,
 		configPath: configPath,
 		notifyChan: make(chan string, 10), // Buffered channel for notifications
@@ -67,10 +67,26 @@ func NewProxy(configPath string) (*Proxy, error) {
 
 	// Start enabled MCP servers
 	for _, server := range config.Servers {
-		if server.Enabled && server.Type == "stdio" {
+		if !server.Enabled {
+			continue
+		}
+		switch server.Type {
+		case "stdio":
 			if err := proxy.startClient(server); err != nil {
 				log.Printf("Failed to start MCP server %s: %v", server.Name, err)
 			}
+		case "http", "streamable-http", "sse":
+			client, err := NewHTTPMCPClient(server.Name, server.URL, server.Headers)
+			if err != nil {
+				log.Printf("Failed to connect to HTTP MCP server %s: %v", server.Name, err)
+				continue
+			}
+			proxy.mu.Lock()
+			proxy.clients[server.Name] = client
+			proxy.mu.Unlock()
+			log.Printf("Connected to HTTP MCP server: %s", server.Name)
+		default:
+			log.Printf("Unknown MCP server type: %s for server %s", server.Type, server.Name)
 		}
 	}
 
@@ -153,16 +169,10 @@ func (p *Proxy) CallTool(toolName string, arguments map[string]interface{}) (jso
 // monitorNotifications watches all client notification channels
 func (p *Proxy) monitorNotifications() {
 	p.mu.RLock()
-	clients := make([]*MCPClient, 0, len(p.clients))
-	for _, client := range p.clients {
-		clients = append(clients, client)
+	for name, client := range p.clients {
+		go p.monitorClient(name, client)
 	}
 	p.mu.RUnlock()
-
-	// Start a goroutine for each client to forward notifications
-	for _, client := range clients {
-		go p.monitorClient(client)
-	}
 }
 
 // NotificationChan returns the channel for receiving aggregated notifications
@@ -185,8 +195,14 @@ func (p *Proxy) Reload() error {
 	// Build map of new enabled servers
 	newServers := make(map[string]ServerConfig)
 	for _, s := range newConfig.Servers {
-		if s.Enabled && s.Type == "stdio" {
+		if !s.Enabled {
+			continue
+		}
+		switch s.Type {
+		case "stdio", "http", "streamable-http", "sse":
 			newServers[s.Name] = s
+		default:
+			log.Printf("Unknown MCP server type in reload: %s for server %s", s.Type, s.Name)
 		}
 	}
 
@@ -225,7 +241,18 @@ func (p *Proxy) Reload() error {
 
 // startClientUnlocked starts a client (assumes lock is held by caller)
 func (p *Proxy) startClientUnlocked(config ServerConfig) error {
-	client, err := NewMCPClient(config.Name, config.Command, config.Args, config.Env)
+	var client Client
+	var err error
+
+	switch config.Type {
+	case "stdio":
+		client, err = NewMCPClient(config.Name, config.Command, config.Args, config.Env)
+	case "http", "streamable-http", "sse":
+		client, err = NewHTTPMCPClient(config.Name, config.URL, config.Headers)
+	default:
+		return fmt.Errorf("unknown MCP server type: %s", config.Type)
+	}
+
 	if err != nil {
 		return err
 	}
@@ -233,21 +260,21 @@ func (p *Proxy) startClientUnlocked(config ServerConfig) error {
 	p.clients[config.Name] = client
 
 	// Start monitoring this client's notifications
-	go p.monitorClient(client)
+	go p.monitorClient(config.Name, client)
 
 	log.Printf("Started MCP server: %s", config.Name)
 	return nil
 }
 
 // monitorClient monitors a single client for notifications
-func (p *Proxy) monitorClient(client *MCPClient) {
+func (p *Proxy) monitorClient(clientName string, client Client) {
 	for method := range client.NotificationChan() {
 		if method == "notifications/tools/list_changed" {
-			log.Printf("[%s] Tools changed, forwarding notification", client.Name)
+			log.Printf("[%s] Tools changed, forwarding notification", clientName)
 			select {
-			case p.notifyChan <- client.Name:
+			case p.notifyChan <- clientName:
 			default:
-				log.Printf("Proxy notification channel full, dropping notification from %s", client.Name)
+				log.Printf("Proxy notification channel full, dropping notification from %s", clientName)
 			}
 		}
 	}
@@ -265,7 +292,7 @@ func (p *Proxy) Close() error {
 		}
 	}
 
-	p.clients = make(map[string]*MCPClient)
+	p.clients = make(map[string]Client)
 	return nil
 }
 

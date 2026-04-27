@@ -43,6 +43,19 @@ type MCPResponse struct {
 	Error   *MCPError       `json:"error,omitempty"`
 }
 
+// Client is the interface for MCP client implementations.
+// Both stdio (subprocess) and HTTP (Streamable HTTP) clients implement this,
+// allowing the proxy to use them interchangeably.
+type Client interface {
+	ListTools() ([]map[string]interface{}, error)
+	CallTool(name string, arguments map[string]interface{}) (json.RawMessage, error)
+	Close() error
+	NotificationChan() <-chan string
+}
+
+// Compile-time check that *MCPClient implements Client.
+var _ Client = (*MCPClient)(nil)
+
 // MCPError represents a JSON-RPC error
 type MCPError struct {
 	Code    int    `json:"code"`

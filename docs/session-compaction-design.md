@@ -1,6 +1,6 @@
 # Diane Session Compaction Design
 
-> **Status:** Proposal  
+> **Status:** Deprecated — implementation removed 2026-04-26. Diane agents run on Memory Platform ADK runtime which handles context management server-side (see `emergent.memory` executor.go + session_compressor.go). The local compressor package (`internal/session/`) was ported from Hermes Agent but never wired to any consumer and has been deleted. Any context/pruning improvements should target the MP ADK runtime instead.
 > **Date:** 2026-04-25  
 > **Research sources:** OpenCode (anomalyco/opencode), Aider (Aider-AI/aider), Anthropic Claude compaction API, MemGPT/Letta, LlamaIndex, LLMLingua, GraphRAG
 

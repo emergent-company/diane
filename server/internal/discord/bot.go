@@ -1573,9 +1573,30 @@ pollLoop:
 			}()))
 			if msg.Role == "user" || msg.Role == "tool" {
 				continue
+		}
+		var reasoningText string
+
+		// Get reasoning content if present
+		if val, ok := msg.Content["reasoning"]; ok {
+			if s := extractText(val); len(s) > 20 {
+				reasoningText = s
+				dlog("EXTR", "found_reasoning", "len", len(reasoningText), "preview", truncateStr(reasoningText, 80))
 			}
-			// Try every key — the text might be nested under a slice
+		}
+
+		// Get the main text content — prefer "text" key, fall back to others
+		if val, ok := msg.Content["text"]; ok {
+			if s := extractText(val); len(s) > 0 {
+				responseText = s
+				dlog("EXTR", "found_text", "len", len(responseText), "preview", truncateStr(responseText, 80))
+			}
+		}
+		if responseText == "" {
+			// Fallback: scan other keys for content
 			for key, val := range msg.Content {
+				if key == "reasoning" {
+					continue
+				}
 				s := extractText(val)
 				if len(s) > 20 {
 					dlog("EXTR", "found_in_key", key, "len", len(s), "preview", truncateStr(s, 80))
@@ -1583,9 +1604,18 @@ pollLoop:
 					break
 				}
 			}
-			if responseText != "" {
-				break
-			}
+		}
+
+		// Combine reasoning + response in Claude-style format
+		if reasoningText != "" && responseText == "" {
+			responseText = reasoningText
+		} else if reasoningText != "" {
+			responseText = "🤔 *Thinking...*\n" + reasoningText + "\n\n" + responseText
+		}
+
+		if responseText != "" {
+			break
+		}
 			dlog("EXTR", "skip_msg", i, "no_content_found", fmt.Sprintf("%v", msg.Content))
 		}
 	}

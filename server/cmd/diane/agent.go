@@ -172,7 +172,7 @@ func cmdAgentList() {
 			if a.Description != "" {
 				fmt.Printf("       %s\n", a.Description)
 			}
-			fmt.Printf("       Tools: %d | Skills: %d | Flow: %s\n", toolCount, skillCount, orDefault(a.FlowType, "standard"))
+			fmt.Printf("       Tools: %d | Skills: %d | Flow: %s\n", toolCount, skillCount, orDefault(a.FlowType, ""))
 			if a.Sandbox != nil && a.Sandbox.Enabled {
 				fmt.Printf("       Sandbox: %s\n", orDefault(a.Sandbox.BaseImage, "default"))
 			}
@@ -283,12 +283,10 @@ func cmdAgentDefine(name string) {
 	}
 
 	// Flow type
-	prompt = fmt.Sprintf("Flow type (standard/acp/tool_use/auto) [%s]: ", orDefault(ac.FlowType, "standard"))
+	prompt = fmt.Sprintf("Flow type (single/sequential/loop) [%s]: ", ac.FlowType)
 	fmt.Print(prompt)
 	if ft := readLine(reader); ft != "" {
 		ac.FlowType = ft
-	} else if ac.FlowType == "" {
-		ac.FlowType = "standard"
 	}
 
 	// Visibility

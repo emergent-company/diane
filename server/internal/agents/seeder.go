@@ -46,12 +46,6 @@ func SeedToDB(d *db.DB) error {
 			return fmt.Errorf("marshal tags for %s: %w", ba.Name, err)
 		}
 
-		// Flow type
-		flowType := ba.FlowType
-		if flowType == "" {
-			flowType = "standard"
-		}
-
 		// Visibility
 		visibility := ba.Visibility
 		if visibility == "" {
@@ -75,7 +69,7 @@ func SeedToDB(d *db.DB) error {
 			ToolsJSON:      string(toolsJSON),
 			SkillsJSON:     string(skillsJSON),
 			ModelConfigJSON: "",
-			FlowType:       flowType,
+			FlowType:       ba.FlowType,
 			Visibility:     visibility,
 			MaxSteps:       maxSteps,
 			DefaultTimeout: timeout,

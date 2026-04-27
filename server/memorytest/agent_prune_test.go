@@ -194,14 +194,12 @@ func createPruneAgentDef(t *testing.T, ctx context.Context, b *memory.Bridge, na
 	t.Helper()
 	desc := "Prune test agent — will be cleaned up"
 	sysPrompt := "You are a test agent for prune testing."
-	flowType := "standard"
 	visibility := "project"
 
 	created, err := b.CreateAgentDef(ctx, &sdkagents.CreateAgentDefinitionRequest{
 		Name:         name,
 		Description:  &desc,
 		SystemPrompt: &sysPrompt,
-		FlowType:     flowType,
 		Visibility:   visibility,
 	})
 	if err != nil {

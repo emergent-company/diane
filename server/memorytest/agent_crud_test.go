@@ -35,7 +35,6 @@ func TestAgentDef_Create(t *testing.T) {
 	sysPrompt := "You are a test agent. Respond concisely."
 	tools := []string{"web-search-brave", "web-fetch"}
 	skills := []string{"test-driven-development"}
-	flowType := "standard"
 	visibility := "project"
 	maxSteps := 25
 	timeout := 120
@@ -47,7 +46,6 @@ func TestAgentDef_Create(t *testing.T) {
 		SystemPrompt:   &sysPrompt,
 		Tools:          tools,
 		Skills:         skills,
-		FlowType:       flowType,
 		Visibility:     visibility,
 		MaxSteps:       &maxSteps,
 		DefaultTimeout: &timeout,
@@ -79,9 +77,6 @@ func TestAgentDef_Create(t *testing.T) {
 			got = *created.Data.Description
 		}
 		t.Errorf("Description = %q, want %q", got, desc)
-	}
-	if created.Data.FlowType != flowType {
-		t.Errorf("FlowType = %q, want %q", created.Data.FlowType, flowType)
 	}
 	if created.Data.Visibility != visibility {
 		t.Errorf("Visibility = %q, want %q", created.Data.Visibility, visibility)
@@ -133,7 +128,6 @@ func TestAgentDef_CreateAndGet(t *testing.T) {
 		Name:         defName,
 		SystemPrompt: &sysPrompt,
 		Tools:        tools,
-		FlowType:     "standard",
 		Visibility:   "project",
 	})
 	if err != nil {
@@ -167,9 +161,6 @@ func TestAgentDef_CreateAndGet(t *testing.T) {
 	if len(def.Tools) != len(tools) || def.Tools[0] != tools[0] {
 		t.Errorf("Tools = %v, want %v", def.Tools, tools)
 	}
-	if def.FlowType != "standard" {
-		t.Errorf("FlowType = %q, want 'standard'", def.FlowType)
-	}
 	if def.Visibility != "project" {
 		t.Errorf("Visibility = %q, want 'project'", def.Visibility)
 	}
@@ -201,7 +192,6 @@ func TestAgentDef_Update(t *testing.T) {
 		Name:        defName,
 		Description: &originalDesc,
 		Tools:       originalTools,
-		FlowType:    "standard",
 		Visibility:  "project",
 	})
 	if err != nil {
@@ -277,7 +267,6 @@ func TestAgentDef_CreateAndList(t *testing.T) {
 	// Create
 	created, err := b.CreateAgentDef(ctx, &sdkagents.CreateAgentDefinitionRequest{
 		Name:       defName,
-		FlowType:   "standard",
 		Visibility: "project",
 	})
 	if err != nil {
@@ -336,7 +325,6 @@ func TestAgentDef_Delete(t *testing.T) {
 	// Create
 	created, err := b.CreateAgentDef(ctx, &sdkagents.CreateAgentDefinitionRequest{
 		Name:       defName,
-		FlowType:   "standard",
 		Visibility: "project",
 	})
 	if err != nil {
@@ -461,7 +449,6 @@ func TestAgentDef_CreateAndSetWorkspaceConfig(t *testing.T) {
 	// Create
 	created, err := b.CreateAgentDef(ctx, &sdkagents.CreateAgentDefinitionRequest{
 		Name:       defName,
-		FlowType:   "standard",
 		Visibility: "project",
 	})
 	if err != nil {

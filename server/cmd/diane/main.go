@@ -41,11 +41,11 @@ func main() {
 		fmt.Println("  nodes           List all connected MCP relay nodes")
 		fmt.Println("  upgrade         Upgrade Diane to the latest version")
 		fmt.Println("  service         Manage the MCP relay as a service (start|stop|status|restart)")
-		fmt.Println("  mcp relay       Connect MCP server to Memory Platform relay")
-		fmt.Println("  mcp serve       Run MCP JSON-RPC server (stdin/stdout)")
-		fmt.Println("  schema apply    Apply embedded schema definitions to Memory Platform")
-		fmt.Println()
-	}
+		fmt.Println("  mcp             Manage MCP servers (list, relay, serve)")
+			fmt.Println("  schema apply    Apply embedded schema definitions to Memory Platform")
+			fmt.Println()
+			os.Exit(0)
+		}
 
 	switch os.Args[1] {
 	case "init":
@@ -72,10 +72,17 @@ func main() {
 		cmdSchema(os.Args[2:])
 	case "mcp":
 		if len(os.Args) < 3 {
-			fmt.Println("Usage: diane mcp relay [--instance <name>] [--relay <url>]")
+			fmt.Println("Usage: diane mcp <command> [options]")
+			fmt.Println()
+			fmt.Println("Commands:")
+			fmt.Println("  list            List configured MCP servers (and tools with --tools)")
+			fmt.Println("  relay           Connect MCP server to Memory Platform relay")
+			fmt.Println("  serve           Run MCP JSON-RPC server (stdin/stdout)")
 			os.Exit(1)
 		}
 		switch os.Args[2] {
+		case "list":
+			cmdMCPList(os.Args[3:])
 		case "relay":
 			runMCPRelay(os.Args[3:])
 		case "serve":
