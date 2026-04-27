@@ -225,6 +225,12 @@ func (db *DB) migrate() error {
 		value TEXT NOT NULL,
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
+
+	CREATE TABLE IF NOT EXISTS dedup_messages (
+		message_id TEXT PRIMARY KEY,
+		seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_dedup_messages_seen_at ON dedup_messages(seen_at);
 	`
 
 	_, err := db.conn.Exec(schema)
@@ -643,6 +649,71 @@ func (db *DB) SetConfig(key, value string) error {
 			updated_at = CURRENT_TIMESTAMP
 	`, key, value)
 	return err
+}
+
+// ============================================================================
+// Dedup Message Persistence (survives bot restarts)
+// ============================================================================
+
+// DedupMessage represents a seen message ID for dedup persistence.
+type DedupMessage struct {
+	MessageID string    `json:"message_id"`
+	SeenAt    time.Time `json:"seen_at"`
+}
+
+// SaveDedupMessage persists a message ID so it survives bot restarts.
+func (db *DB) SaveDedupMessage(messageID string) error {
+	_, err := db.conn.Exec(`
+		INSERT OR IGNORE INTO dedup_messages (message_id, seen_at)
+		VALUES (?, CURRENT_TIMESTAMP)
+	`, messageID)
+	return err
+}
+
+// IsMessageSeen checks if a message ID was already seen in a prior bot lifetime.
+func (db *DB) IsMessageSeen(messageID string) (bool, error) {
+	var count int
+	err := db.conn.QueryRow(
+		"SELECT COUNT(*) FROM dedup_messages WHERE message_id = ?", messageID,
+	).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// DeleteOldDedupMessages removes dedup entries older than the TTL.
+func (db *DB) DeleteOldDedupMessages(ttl time.Duration) (int64, error) {
+	result, err := db.conn.Exec(
+		"DELETE FROM dedup_messages WHERE seen_at < ?",
+		time.Now().Add(-ttl),
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// LoadAllDedupMessageIDs returns all persisted message IDs.
+// Used on bot startup to restore the in-memory dedup cache.
+func (db *DB) LoadAllDedupMessageIDs() ([]*DedupMessage, error) {
+	rows, err := db.conn.Query(
+		"SELECT message_id, seen_at FROM dedup_messages ORDER BY seen_at DESC",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var msgs []*DedupMessage
+	for rows.Next() {
+		m := &DedupMessage{}
+		if err := rows.Scan(&m.MessageID, &m.SeenAt); err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, m)
+	}
+	return msgs, rows.Err()
 }
 
 // ============================================================================

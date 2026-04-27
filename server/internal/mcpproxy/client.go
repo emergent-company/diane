@@ -8,6 +8,7 @@ import (
 	"log"
 	"os/exec"
 	"sync"
+	"time"
 )
 
 // MCPClient represents a connection to an MCP server
@@ -187,7 +188,11 @@ func (c *MCPClient) messageLoop() {
 	}
 }
 
-// sendRequest sends a request and waits for response asynchronously
+// sendRequest sends a request and waits for response with a 10-second timeout.
+// Slow-starting MCP servers (e.g. AirMCP) can block indefinitely during
+// startup, so a timeout prevents the relay from hanging on tools/list.
+// If the timeout expires, the pending entry is cleaned up and an error
+// is returned — the caller can retry on next poll cycle.
 func (c *MCPClient) sendRequest(method string, params json.RawMessage) (json.RawMessage, error) {
 	// Generate unique request ID
 	c.mu.Lock()
@@ -220,17 +225,31 @@ func (c *MCPClient) sendRequest(method string, params json.RawMessage) (json.Raw
 		return nil, fmt.Errorf("failed to send %s: %w", method, err)
 	}
 
-	// Wait for response
-	resp, ok := <-respCh
-	if !ok {
-		return nil, fmt.Errorf("connection closed while waiting for response")
-	}
+	// Wait for response with 10-second timeout
+	// Without this, a slow-starting MCP server blocks the entire proxy's
+	// ListAllTools (and therefore the relay's sendRegister poll loop).
+	timeout := 10 * time.Second
+	select {
+	case resp, ok := <-respCh:
+		if !ok {
+			c.pendingMu.Lock()
+			delete(c.pending, float64(reqID))
+			c.pendingMu.Unlock()
+			return nil, fmt.Errorf("connection closed while waiting for response")
+		}
 
-	if resp.Error != nil {
-		return nil, fmt.Errorf("%s error: %s", method, resp.Error.Message)
-	}
+		if resp.Error != nil {
+			return nil, fmt.Errorf("%s error: %s", method, resp.Error.Message)
+		}
 
-	return resp.Result, nil
+		return resp.Result, nil
+
+	case <-time.After(timeout):
+		c.pendingMu.Lock()
+		delete(c.pending, float64(reqID))
+		c.pendingMu.Unlock()
+		return nil, fmt.Errorf("%s timed out after %v", method, timeout)
+	}
 }
 
 // initialize sends the initialize request to the MCP server

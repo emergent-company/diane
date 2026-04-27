@@ -14,7 +14,9 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Emergent-Comapny/diane/internal/config"
@@ -294,8 +296,26 @@ func cmdBot() {
 	restartDelay := fs.Duration("restart-delay", 5*time.Second, "Restart delay")
 	fs.Parse(os.Args[2:])
 
-	// Write PID file
+	// ── PID file: check for existing instance, then write ──
 	if *pidfilePtr != "" {
+		// Check if another instance is already running
+		if data, err := os.ReadFile(*pidfilePtr); err == nil {
+			existingPID, err := strconv.Atoi(strings.TrimSpace(string(data)))
+			if err == nil && existingPID > 0 && existingPID != os.Getpid() {
+				// Signal 0 checks if the process exists (no signal sent)
+				if proc, err := os.FindProcess(existingPID); err == nil {
+					if proc.Signal(syscall.Signal(0)) == nil {
+						log.Fatalf(
+							"[PROC] Another instance is already running (PID %d).\n"+
+								"       Stop it first: systemctl stop diane-bot (or kill %d)\n"+
+								"       To force-start: diane bot --pidfile \"\"",
+							existingPID, existingPID,
+						)
+					}
+				}
+			}
+		}
+
 		dir := filepath.Dir(*pidfilePtr)
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			log.Fatalf("Cannot create PID dir %s: %v", dir, err)
