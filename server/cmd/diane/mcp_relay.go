@@ -266,10 +266,59 @@ func (s *MCPSession) sendWS(msg json.RawMessage) {
 }
 
 func (s *MCPSession) forwardToMCP(frame RelayFrame) {
+	// MP prefixes tool names with the instance ID when routing.
+	// Strip the prefix before forwarding to the MCP server so it
+	// receives the bare tool name (e.g., "echo_text" not "inst_echo_text").
+	payload := frame.Payload
+
+	// Only strip prefix for tools/call — initialize and others pass through
+	if s.cfg.InstanceID != "" {
+		payload = stripToolNamePrefix(payload, s.cfg.InstanceID+"_")
+	}
+
 	// Send the MCP JSON-RPC request to the subprocess
-	s.mcpIn.Write(frame.Payload)
+	s.mcpIn.Write(payload)
 	s.mcpIn.WriteByte('\n')
 	s.mcpIn.Flush()
+}
+
+// stripToolNamePrefix parses a JSON-RPC tools/call request and strips the
+// given prefix from params.name before forwarding to the MCP server.
+func stripToolNamePrefix(raw json.RawMessage, prefix string) json.RawMessage {
+	// Fast path: if the raw message doesn't contain the prefix, skip parsing
+	if !strings.Contains(string(raw), prefix) {
+		return raw
+	}
+
+	var req struct {
+		Method string          `json:"method"`
+		Params json.RawMessage `json:"params"`
+	}
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return raw
+	}
+	if req.Method != "tools/call" || len(req.Params) == 0 {
+		return raw
+	}
+
+	var params struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		return raw
+	}
+
+	// Strip the prefix from the tool name
+	stripped := strings.TrimPrefix(params.Name, prefix)
+	if stripped == params.Name {
+		return raw // prefix not found, nothing to strip
+	}
+
+	// Rebuild the params with the stripped name
+	oldName := `"name":"` + params.Name + `"`
+	newName := `"name":"` + stripped + `"`
+	result := strings.Replace(string(raw), oldName, newName, 1)
+	return json.RawMessage(result)
 }
 
 func (s *MCPSession) sendRegister() {

@@ -138,9 +138,14 @@ func TestAgentMCPTools(t *testing.T) {
 
 	defName := fmt.Sprintf("test-mcp-agent-%d", time.Now().UnixMilli())
 	desc := "Test agent with MCP echo tools"
-	sysPrompt := `You are a test agent with access to MCP echo tools.
-You MUST use the echo_text tool to respond - call echo_text with the text you want to say.
-Do NOT answer without first calling echo_text.`
+	sysPrompt := `You are a test agent with access to MCP tools.
+You have exactly these tools available to call:
+  - echo_text: Echoes back the input text
+  - add_numbers: Adds two numbers together
+
+You MUST call at least one of these tools. The user's request requires it.
+When asked to add numbers, ALWAYS use the add_numbers tool.
+Do NOT compute the result yourself. Always use the tool.`
 
 	created, err := b.CreateAgentDef(ctx, &sdkagents.CreateAgentDefinitionRequest{
 		Name:           defName,
@@ -184,8 +189,8 @@ Do NOT answer without first calling echo_text.`
 	})
 
 	// Trigger with a prompt that forces tool usage
-	// The LLM cannot know what add_numbers returns without calling the tool
-	prompt := "I need you to call add_numbers with a=79342, b=92837. Tell me the exact result returned by the tool."
+	// The LLM is instructed via system prompt to always use the tool for addition
+	prompt := "Please add 79342 and 92837 using the add_numbers tool and tell me the result."
 	resp, err := b.TriggerAgentWithInput(ctx, agentID, prompt, "")
 	if err != nil {
 		t.Fatalf("TriggerAgentWithInput: %v", err)

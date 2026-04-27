@@ -16,6 +16,7 @@ type HTTPMCPClient struct {
 	Name    string
 	URL     string
 	Headers map[string]string // Static HTTP headers (e.g., Authorization, X-API-Key)
+	Token   string            // OAuth bearer token
 	client  *http.Client
 	mu      sync.Mutex
 	nextID  int
@@ -81,6 +82,11 @@ func (c *HTTPMCPClient) sendRequest(method string, params json.RawMessage) (json
 	// Add static headers (e.g., Authorization, X-API-Key)
 	for k, v := range c.Headers {
 		httpReq.Header.Set(k, v)
+	}
+
+	// Add OAuth bearer token if set
+	if c.Token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.Token)
 	}
 
 	resp, err := c.client.Do(httpReq)
@@ -151,6 +157,12 @@ func (c *HTTPMCPClient) CallTool(toolName string, arguments map[string]interface
 // NotificationChan returns nil since HTTP MCP is stateless and does not support server-sent notifications.
 func (c *HTTPMCPClient) NotificationChan() <-chan string {
 	return nil
+}
+
+// SetToken sets the OAuth bearer token for this client.
+// The token will be sent as an Authorization: Bearer header on all requests.
+func (c *HTTPMCPClient) SetToken(token string) {
+	c.Token = token
 }
 
 // Close is a no-op for HTTP clients (no subprocess to kill).
