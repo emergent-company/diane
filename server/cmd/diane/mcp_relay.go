@@ -74,8 +74,14 @@ type MCPSession struct {
 	mcpOut  *bufio.Scanner
 	wsConn  *websocket.Conn
 	wsMutex sync.Mutex
+	mcpMu   sync.Mutex // protects mcpIn writes from tool watch vs forward loops
 	pending sync.Map // map[requestID]chan response
 	done    chan struct{}
+
+	// Dynamic tool registration: register immediately on connect, then
+	// re-register when new MCP servers appear (slow starters like AirMCP
+	// get picked up via periodic tool watch).
+	toolWatchID int64 // incrementing request ID for tool watch polls
 }
 
 func cmdMCPRelay(cfg MCPRelayConfig) {
@@ -190,6 +196,11 @@ func (s *MCPSession) run() error {
 	// Send initial register message with tool list
 	s.sendRegister()
 
+	// Start background tool watch — periodically checks for new/changed MCP
+	// tools and re-registers. This picks up slow-starting servers (AirMCP)
+	// without blocking initial registration.
+	s.startToolWatch()
+
 	defer s.disconnectWS()
 
 	// 3. Forward loop: WS → MCP stdin
@@ -218,10 +229,20 @@ func (s *MCPSession) run() error {
 		}
 	}()
 
-	// 4. Forward loop: MCP stdout → WS
+	// 4. Forward loop: MCP stdout → WS, with tool-change detection
 	go func() {
 		for s.mcpOut.Scan() {
 			line := s.mcpOut.Bytes()
+
+			// Check if this is a tools/list response from our watch loop
+			// (watch IDs start at 1000000). If tools changed, re-register.
+			var respMeta struct {
+				ID float64 `json:"id"`
+			}
+			if err := json.Unmarshal(line, &respMeta); err == nil && respMeta.ID >= 999999 {
+				s.checkToolChangeAndReregister(line)
+			}
+
 			var resp json.RawMessage
 			if err := json.Unmarshal(line, &resp); err != nil {
 				continue
@@ -304,29 +325,26 @@ func (s *MCPSession) forwardToMCP(frame RelayFrame) {
 }
 
 func (s *MCPSession) sendRegister() {
-	// Poll tools/list until we get non-empty tools, or timeout (max 15s)
-	var toolsResp []byte
-	for i := 0; i < 15; i++ {
-		initMsg := json.RawMessage(`{"jsonrpc":"2.0","id":0,"method":"tools/list","params":{}}`)
-		s.mcpIn.Write(initMsg)
-		s.mcpIn.WriteByte('\n')
-		s.mcpIn.Flush()
-	
-		if s.mcpOut.Scan() {
-			line := s.mcpOut.Bytes()
-			if s.hasTools(line) || i >= 14 {
-				toolsResp = line
-				break
-			}
-			log.Printf("[mcp-relay] tools/list returned empty tools, retrying (%d/15)...", i+1)
-			time.Sleep(1 * time.Second)
-		} else {
-			toolsResp = s.mcpOut.Bytes()
-			break
-		}
-	}
+	// Single tools/list poll — register immediately with whatever is available.
+	// Slow-starting servers (AirMCP) get picked up later via toolWatchLoop.
+	initMsg := json.RawMessage(`{"jsonrpc":"2.0","id":0,"method":"tools/list","params":{}}`)
+	s.mcpMu.Lock()
+	s.mcpIn.Write(initMsg)
+	s.mcpIn.WriteByte('\n')
+	s.mcpIn.Flush()
+	s.mcpMu.Unlock()
 
-	// Parse MCP response to extract just the result (strip jsonrpc/id/error wrapper)
+	if s.mcpOut.Scan() {
+		s.doRegister(s.mcpOut.Bytes())
+	} else {
+		// MCP process didn't respond — register with empty tools
+		s.doRegister(json.RawMessage(`{"tools":[]}`))
+	}
+}
+
+// doRegister registers (or re-registers) tools with the relay. Stores the
+// tool list for comparison on subsequent updates.
+func (s *MCPSession) doRegister(data []byte) {
 	var mcpResponse struct {
 		Result json.RawMessage `json:"result"`
 		Error  *struct {
@@ -334,8 +352,8 @@ func (s *MCPSession) sendRegister() {
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	toolsData := toolsResp
-	if err := json.Unmarshal(toolsResp, &mcpResponse); err == nil {
+	toolsData := data
+	if err := json.Unmarshal(data, &mcpResponse); err == nil {
 		if mcpResponse.Error != nil {
 			log.Printf("[mcp-relay] Failed to list tools: %s (code %d)", mcpResponse.Error.Message, mcpResponse.Error.Code)
 			toolsData = json.RawMessage(`{"tools":[]}`)
@@ -351,12 +369,62 @@ func (s *MCPSession) sendRegister() {
 		InstanceID: s.cfg.InstanceID,
 		Hostname:   hostname,
 		Version:    "1.0",
-		Tools:      toolsData,
+		Tools:      json.RawMessage(toolsData),
 	}
-	data, _ := json.Marshal(reg)
+	data, _ = json.Marshal(reg)
 	s.sendWS(data)
 
 	log.Printf("[mcp-relay] Registered with relay: %s", s.cfg.InstanceID)
+}
+
+// startToolWatch starts a background loop that periodically checks for new or
+// changed MCP tools and re-registers them with the relay. This picks up
+// slow-starting MCP servers (like AirMCP) without blocking initial registration.
+func (s *MCPSession) startToolWatch() {
+	s.toolWatchID = 999999
+	go func() {
+		ticker := time.NewTicker(20 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.toolWatchID++
+				reqID := s.toolWatchID
+				msg := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/list","params":{}}`, reqID)
+				s.mcpMu.Lock()
+				s.mcpIn.WriteString(msg)
+				s.mcpIn.WriteByte('\n')
+				s.mcpIn.Flush()
+				s.mcpMu.Unlock()
+			case <-s.done:
+				return
+			}
+		}
+	}()
+}
+
+// checkToolChangeAndReregister re-registers tools with the relay when the
+// tool watch loop detects a tools/list response. Called from the MCP stdout
+// forwarding goroutine. We always re-register on watch responses — the
+// overhead is negligible (one WS frame per 20s), and it ensures slow-starting
+// servers like AirMCP get registered as soon as their tools appear.
+func (s *MCPSession) checkToolChangeAndReregister(line []byte) {
+	// Verify the response has tools data
+	var mcpResponse struct {
+		Result *struct {
+			Tools []json.RawMessage `json:"tools"`
+		} `json:"result,omitempty"`
+		Tools []json.RawMessage `json:"tools,omitempty"`
+	}
+	if err := json.Unmarshal(line, &mcpResponse); err != nil {
+		return
+	}
+	if mcpResponse.Result == nil && mcpResponse.Tools == nil {
+		return
+	}
+
+	log.Printf("[mcp-relay] Tools update detected, re-registering...")
+	s.doRegister(line)
 }
 
 // RelayFrame is the wire format for WS messages.
@@ -376,44 +444,12 @@ type RegisterFrame struct {
 }
 
 // init registers the "relay" subcommand
-// hasTools checks if a tools/list response contains AirMCP tools.
-// We specifically wait for airmcp_* tools since other MCP servers (brightdata,
-// devtools) start faster and would cause registration before AirMCP is ready.
-func (s *MCPSession) hasTools(data []byte) bool {
-	var resp struct {
-		Result *struct {
-			Tools []struct {
-				Name string `json:"name"`
-			} `json:"tools"`
-		} `json:"result,omitempty"`
-		Tools []struct {
-			Name string `json:"name"`
-		} `json:"tools,omitempty"`
-	}
-	if err := json.Unmarshal(data, &resp); err != nil {
-		return false // parse error, wait for next poll
-	}
-	// Check Result wrapper first
-	if resp.Result != nil {
-		for _, t := range resp.Result.Tools {
-			if strings.Contains(t.Name, "airmcp") {
-				return true
-			}
-		}
-	}
-	// Check flat format
-	for _, t := range resp.Tools {
-		if strings.Contains(t.Name, "airmcp") {
-			return true
-		}
-	}
-	return false
-}
-
 func init() {
 	// This runs when the diane CLI starts — registers the relay command
 	// via the command routing in main.go
 }
+
+// RelayFrame is the wire format for WS messages.
 
 // ── Graph Config Sync ──
 
