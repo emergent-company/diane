@@ -1,12 +1,16 @@
 package mcpproxy
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -107,7 +111,14 @@ func (c *HTTPMCPClient) sendRequest(method string, params json.RawMessage) (json
 	// Handle 401 — trigger OAuth authentication if configured
 	if resp.StatusCode == http.StatusUnauthorized {
 		if c.OAuth == nil {
-			return nil, fmt.Errorf("%s unauthorized (401): check authentication credentials", method)
+			// No OAuth config — try to discover from www-authenticate header
+			discovered, discErr := c.discoverOAuthFromHeader(resp.Header)
+			if discErr == nil && discovered != nil {
+				c.OAuth = discovered
+				_ = SaveDiscoveredConfig(c.Name, discovered)
+			} else {
+				return nil, fmt.Errorf("%s unauthorized (401): %w", method, discErr)
+			}
 		}
 
 		// Run OAuth flow (device or auth code) interactively
@@ -181,6 +192,134 @@ func (c *HTTPMCPClient) CallTool(toolName string, arguments map[string]interface
 // NotificationChan returns nil since HTTP MCP is stateless and does not support server-sent notifications.
 func (c *HTTPMCPClient) NotificationChan() <-chan string {
 	return nil
+}
+
+// WWWAuthenticate holds the parsed structure of a WWW-Authenticate header
+type WWWAuthenticate struct {
+	Scheme           string
+	Error            string
+	ErrorDescription string
+	ResourceMetadata string // URL for OAuth protected resource metadata
+}
+
+// discoverOAuthFromHeader parses the WWW-Authenticate header from a 401 response.
+// It follows the OAuth metadata discovery chain:
+// 1. Parse www-authenticate header → get resource_metadata URL
+// 2. Fetch resource_metadata → get authorization_servers
+// 3. Fetch auth server's .well-known/oauth-authorization-server → get endpoints
+func (c *HTTPMCPClient) discoverOAuthFromHeader(headers http.Header) (*OAuthConfig, error) {
+	authHeader := headers.Get("www-authenticate")
+	if authHeader == "" {
+		return nil, fmt.Errorf("no www-authenticate header in 401 response")
+	}
+
+	// Parse the header value
+	wwwAuth := parseWWWAuthenticate(authHeader)
+	if wwwAuth.ResourceMetadata == "" {
+		return nil, fmt.Errorf("no resource_metadata in www-authenticate header")
+	}
+
+	// Fetch the resource metadata to get the authorization server URL
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(wwwAuth.ResourceMetadata)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch OAuth resource metadata from %s: %w", wwwAuth.ResourceMetadata, err)
+	}
+	defer resp.Body.Close()
+
+	var metadata struct {
+		Resource            string   `json:"resource"`
+		AuthorizationServer []string `json:"authorization_servers"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&metadata); err != nil {
+		return nil, fmt.Errorf("failed to parse resource metadata: %w", err)
+	}
+	if len(metadata.AuthorizationServer) == 0 {
+		return nil, fmt.Errorf("no authorization_servers in resource metadata")
+	}
+
+	authServer := metadata.AuthorizationServer[0]
+	if !strings.HasPrefix(authServer, "http") {
+		return nil, fmt.Errorf("invalid authorization server URL: %s", authServer)
+	}
+
+	// Fetch the OAuth authorization server metadata
+	wellKnownURL := strings.TrimRight(authServer, "/") + "/.well-known/oauth-authorization-server"
+	resp2, err := client.Get(wellKnownURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch OAuth server metadata from %s: %w", wellKnownURL, err)
+	}
+	defer resp2.Body.Close()
+
+	var oauthMeta struct {
+		AuthorizationEndpoint string `json:"authorization_endpoint"`
+		TokenEndpoint        string `json:"token_endpoint"`
+	}
+	if err := json.NewDecoder(resp2.Body).Decode(&oauthMeta); err != nil {
+		return nil, fmt.Errorf("failed to parse OAuth server metadata: %w", err)
+	}
+	if oauthMeta.AuthorizationEndpoint == "" || oauthMeta.TokenEndpoint == "" {
+		return nil, fmt.Errorf("incomplete OAuth server metadata: missing authorization or token endpoint")
+	}
+
+	log.Printf("[OAuth] Discovered OAuth endpoints for %s: authorize=%s token=%s",
+		c.Name, oauthMeta.AuthorizationEndpoint, oauthMeta.TokenEndpoint)
+
+	return &OAuthConfig{
+		AuthorizationURL: oauthMeta.AuthorizationEndpoint,
+		TokenURL:         oauthMeta.TokenEndpoint,
+	}, nil
+}
+
+// parseWWWAuthenticate parses a WWW-Authenticate header value into its components.
+// Supports: Bearer scheme with key=value parameters (comma-separated, quoted values).
+func parseWWWAuthenticate(header string) WWWAuthenticate {
+	result := WWWAuthenticate{}
+	parts := strings.SplitN(header, " ", 2)
+	if len(parts) > 0 {
+		result.Scheme = parts[0]
+	}
+	if len(parts) < 2 {
+		return result
+	}
+
+	// Parse key="value" pairs
+	rest := parts[1]
+	scanner := bufio.NewScanner(strings.NewReader(rest))
+	scanner.Split(bufio.ScanWords)
+	for scanner.Scan() {
+		token := scanner.Text()
+		eqIdx := strings.IndexByte(token, '=')
+		if eqIdx < 0 {
+			continue
+		}
+		key := token[:eqIdx]
+		val := strings.Trim(token[eqIdx+1:], "\",")
+		switch key {
+		case "error":
+			result.Error = val
+		case "error_description":
+			result.ErrorDescription = val
+		case "resource_metadata":
+			result.ResourceMetadata = strings.Trim(val, "\"")
+		}
+	}
+	return result
+}
+
+// SaveDiscoveredConfig saves an auto-discovered OAuth config for a server.
+// This allows subsequent runs to use the discovered config without re-discovery.
+func SaveDiscoveredConfig(serverName string, config *OAuthConfig) error {
+	path := TokenPath(serverName + "-oauth-config")
+	data, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0600)
 }
 
 // ensureAuthenticated checks for stored tokens or runs OAuth flow on 401.
