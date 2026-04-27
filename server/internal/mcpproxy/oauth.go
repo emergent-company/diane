@@ -553,12 +553,14 @@ func AuthenticateAuthCodeFlow(serverName string, oauth *OAuthConfig) (string, er
 	codeChan := make(chan string, 1)
 	errChan := make(chan error, 1)
 
-	port, err := startCallbackServer(codeChan, errChan)
+	server, port, err := startCallbackServer(codeChan, errChan)
 	if err != nil {
 		// Can't start local server — fall back to stdin paste
 		log.Printf("[OAuth] Cannot start callback server: %v, falling back to stdin", err)
 		return authenticateAuthCodeFlowStdin(serverName, oauth, verifier, challenge)
 	}
+	// Ensure the callback server shuts down when we're done
+	defer server.Shutdown(context.Background())
 
 	// Use the local port as the redirect URI
 	redirectURI := fmt.Sprintf("http://localhost:%d/callback", port)
@@ -614,8 +616,8 @@ func AuthenticateAuthCodeFlow(serverName string, oauth *OAuthConfig) (string, er
 
 // startCallbackServer starts a local HTTP server on an available port.
 // The server handles GET /callback?code=... requests and sends the code
-// to the provided channel. Returns the port number or an error.
-func startCallbackServer(codeChan chan string, errChan chan error) (int, error) {
+// to the provided channel. Returns the server (for caller shutdown) and port.
+func startCallbackServer(codeChan chan string, errChan chan error) (*http.Server, int, error) {
 	// Try the default port first, then fall back to random
 	port := defaultCallbackPort
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
@@ -623,7 +625,7 @@ func startCallbackServer(codeChan chan string, errChan chan error) (int, error) 
 		// Default port taken — try random
 		listener, err = net.Listen("tcp", ":0")
 		if err != nil {
-			return 0, fmt.Errorf("cannot open callback server: %w", err)
+			return nil, 0, fmt.Errorf("cannot open callback server: %w", err)
 		}
 		port = listener.Addr().(*net.TCPAddr).Port
 	}
@@ -638,11 +640,16 @@ func startCallbackServer(codeChan chan string, errChan chan error) (int, error) 
 			errChan <- fmt.Errorf("callback missing code parameter")
 			return
 		}
-		// Show success page
+		// Show success page — response written synchronously,
+		// then send the code to the main flow (NOT a cleanup goroutine)
 		w.Header().Set("Content-Type", "text/html")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(successPage))
-		codeChan <- code
+		// Use a non-blocking send to avoid deadlock if no one is listening
+		select {
+		case codeChan <- code:
+		default:
+		}
 	})
 
 	server := &http.Server{Handler: mux}
@@ -652,17 +659,7 @@ func startCallbackServer(codeChan chan string, errChan chan error) (int, error) 
 		}
 	}()
 
-	// Shut down the server after we get the code or error
-	go func() {
-		select {
-		case <-codeChan:
-			server.Shutdown(context.Background())
-		case <-errChan:
-			server.Shutdown(context.Background())
-		}
-	}()
-
-	return port, nil
+	return server, port, nil
 }
 
 // authenticateAuthCodeFlowStdin is the fallback path that reads the redirect
