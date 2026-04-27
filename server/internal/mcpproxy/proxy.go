@@ -27,6 +27,10 @@ type OAuthConfig struct {
 	BearerToken string `json:"bearer_token,omitempty"`
 }
 
+// DefaultToolTimeout is the default per-server tool call timeout in seconds.
+// Applied when ServerConfig.Timeout is 0 or not set.
+const DefaultToolTimeout = 60
+
 // ServerConfig represents configuration for an MCP server
 type ServerConfig struct {
 	Name    string            `json:"name"`
@@ -38,6 +42,7 @@ type ServerConfig struct {
 	URL     string            `json:"url,omitempty"`     // HTTP/SSE endpoint URL
 	Headers map[string]string `json:"headers,omitempty"` // Static HTTP headers for auth
 	OAuth   *OAuthConfig      `json:"oauth,omitempty"`   // OAuth 2.0 configuration
+	Timeout int               `json:"timeout,omitempty"` // Tool call timeout in seconds (0 = DefaultToolTimeout)
 }
 
 // Config represents the MCP proxy configuration
@@ -79,7 +84,7 @@ func NewProxy(configPath string) (*Proxy, error) {
 				log.Printf("Failed to start MCP server %s: %v", server.Name, err)
 			}
 		case "http", "streamable-http", "sse":
-			client, err := NewHTTPMCPClient(server.Name, server.URL, server.Headers, server.OAuth)
+			client, err := NewHTTPMCPClient(server.Name, server.URL, server.Headers, server.OAuth, server.Timeout)
 			if err != nil {
 				log.Printf("Failed to connect to HTTP MCP server %s: %v", server.Name, err)
 				continue
@@ -101,7 +106,7 @@ func NewProxy(configPath string) (*Proxy, error) {
 
 // startClient starts an MCP client
 func (p *Proxy) startClient(config ServerConfig) error {
-	client, err := NewMCPClient(config.Name, config.Command, config.Args, config.Env)
+	client, err := NewMCPClient(config.Name, config.Command, config.Args, config.Env, config.Timeout)
 	if err != nil {
 		return err
 	}
@@ -249,9 +254,9 @@ func (p *Proxy) startClientUnlocked(config ServerConfig) error {
 
 	switch config.Type {
 	case "stdio":
-		client, err = NewMCPClient(config.Name, config.Command, config.Args, config.Env)
+		client, err = NewMCPClient(config.Name, config.Command, config.Args, config.Env, config.Timeout)
 	case "http", "streamable-http", "sse":
-		client, err = NewHTTPMCPClient(config.Name, config.URL, config.Headers, config.OAuth)
+		client, err = NewHTTPMCPClient(config.Name, config.URL, config.Headers, config.OAuth, config.Timeout)
 	default:
 		return fmt.Errorf("unknown MCP server type: %s", config.Type)
 	}

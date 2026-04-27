@@ -24,6 +24,7 @@ type MCPClient struct {
 	notifyChan chan string // Channel for notifications (method names)
 	responseCh chan MCPResponse
 	nextID     int
+	timeout    time.Duration // Per-request timeout for tool calls
 	pendingMu  sync.Mutex
 	pending    map[interface{}]chan MCPResponse
 }
@@ -80,8 +81,9 @@ type MCPMessage struct {
 	Params  json.RawMessage `json:"params,omitempty"`
 }
 
-// NewMCPClient creates a new MCP client and starts the server process
-func NewMCPClient(name string, command string, args []string, env map[string]string) (*MCPClient, error) {
+// NewMCPClient creates a new MCP client and starts the server process.
+// timeoutSec is the tool call timeout in seconds (0 = DefaultToolTimeout).
+func NewMCPClient(name string, command string, args []string, env map[string]string, timeoutSec int) (*MCPClient, error) {
 	cmd := exec.Command(command, args...)
 
 	// Set environment variables
@@ -109,6 +111,10 @@ func NewMCPClient(name string, command string, args []string, env map[string]str
 		return nil, fmt.Errorf("failed to start command: %w", err)
 	}
 
+	if timeoutSec <= 0 {
+		timeoutSec = DefaultToolTimeout
+	}
+
 	client := &MCPClient{
 		Name:       name,
 		cmd:        cmd,
@@ -119,6 +125,7 @@ func NewMCPClient(name string, command string, args []string, env map[string]str
 		decoder:    json.NewDecoder(bufio.NewReader(stdout)),
 		notifyChan: make(chan string, 10), // Buffered channel for notifications
 		nextID:     1,                     // Start at 1 (0 is used by initialize)
+		timeout:    time.Duration(timeoutSec) * time.Second,
 		pending:    make(map[interface{}]chan MCPResponse),
 	}
 
@@ -225,11 +232,14 @@ func (c *MCPClient) sendRequest(method string, params json.RawMessage) (json.Raw
 		return nil, fmt.Errorf("failed to send %s: %w", method, err)
 	}
 
-	// Wait for response with 30-second timeout.
-	// Stdio MCP tools (e.g. AirMCP Apple API calls) can take 10-20s
+	// Wait for response with configurable timeout (default 60s).
+	// Stdio MCP tools (e.g. AirMCP Apple API calls) can take 10-30s
 	// to respond. The relay's tool watch loop handles slow-starting
 	// servers independently, so this timeout covers tool calls too.
-	timeout := 30 * time.Second
+	toolTimeout := c.timeout
+	if toolTimeout <= 0 {
+		toolTimeout = time.Duration(DefaultToolTimeout) * time.Second
+	}
 	select {
 	case resp, ok := <-respCh:
 		if !ok {
@@ -245,11 +255,11 @@ func (c *MCPClient) sendRequest(method string, params json.RawMessage) (json.Raw
 
 		return resp.Result, nil
 
-	case <-time.After(timeout):
+	case <-time.After(toolTimeout):
 		c.pendingMu.Lock()
 		delete(c.pending, float64(reqID))
 		c.pendingMu.Unlock()
-		return nil, fmt.Errorf("%s timed out after %v", method, timeout)
+		return nil, fmt.Errorf("%s timed out after %v", method, toolTimeout)
 	}
 }
 

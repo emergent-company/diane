@@ -193,7 +193,7 @@ func TestHTTPMCPClient_ListTools_Integration(t *testing.T) {
 	mock := newMockMCPServerWithEcho()
 	defer mock.Close()
 
-	client, err := NewHTTPMCPClient("test-server", mock.URL+"/mcp", nil, nil)
+	client, err := NewHTTPMCPClient("test-server", mock.URL+"/mcp", nil, nil, 0)
 	if err != nil {
 		t.Fatalf("NewHTTPMCPClient failed: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestHTTPMCPClient_CallTool_Integration(t *testing.T) {
 	mock := newMockMCPServerWithEcho()
 	defer mock.Close()
 
-	client, err := NewHTTPMCPClient("test-server", mock.URL+"/mcp", nil, nil)
+	client, err := NewHTTPMCPClient("test-server", mock.URL+"/mcp", nil, nil, 0)
 	if err != nil {
 		t.Fatalf("NewHTTPMCPClient failed: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestHTTPMCPClient_401WithToken(t *testing.T) {
 		"Authorization": "Bearer valid-test-token",
 	}
 
-	client, err := NewHTTPMCPClient("auth-server", mock.URL+"/mcp", headers, nil)
+	client, err := NewHTTPMCPClient("auth-server", mock.URL+"/mcp", headers, nil, 0)
 	if err != nil {
 		t.Fatalf("NewHTTPMCPClient with pre-set token failed: %v", err)
 	}

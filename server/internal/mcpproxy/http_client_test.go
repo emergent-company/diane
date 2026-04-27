@@ -129,7 +129,7 @@ func TestHTTPMCPClient_Initialize(t *testing.T) {
 	mock := newMockMCPServer(t)
 	defer mock.Close()
 
-	client, err := NewHTTPMCPClient("test-server", mock.URL(), nil, nil)
+	client, err := NewHTTPMCPClient("test-server", mock.URL(), nil, nil, 0)
 	if err != nil {
 		t.Fatalf("NewHTTPMCPClient failed: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestHTTPMCPClient_ListTools(t *testing.T) {
 	mock := newMockMCPServer(t)
 	defer mock.Close()
 
-	client, err := NewHTTPMCPClient("test-server", mock.URL(), nil, nil)
+	client, err := NewHTTPMCPClient("test-server", mock.URL(), nil, nil, 0)
 	if err != nil {
 		t.Fatalf("NewHTTPMCPClient failed: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestHTTPMCPClient_CallTool(t *testing.T) {
 	mock := newMockMCPServer(t)
 	defer mock.Close()
 
-	client, err := NewHTTPMCPClient("test-server", mock.URL(), nil, nil)
+	client, err := NewHTTPMCPClient("test-server", mock.URL(), nil, nil, 0)
 	if err != nil {
 		t.Fatalf("NewHTTPMCPClient failed: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestHTTPMCPClient_WithHeaders(t *testing.T) {
 		"Authorization": "Bearer test-token-123",
 		"X-API-Key":     "my-api-key",
 	}
-	client, err := NewHTTPMCPClient("auth-server", ts.URL, headers, nil)
+	client, err := NewHTTPMCPClient("auth-server", ts.URL, headers, nil, 0)
 	if err != nil {
 		t.Fatalf("NewHTTPMCPClient failed: %v", err)
 	}
@@ -261,7 +261,7 @@ func TestHTTPMCPClient_Unauthorized(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	_, err := NewHTTPMCPClient("unauth-server", ts.URL, nil, nil)
+	_, err := NewHTTPMCPClient("unauth-server", ts.URL, nil, nil, 0)
 	if err == nil {
 		t.Fatal("expected error for 401 response, got nil")
 	}
@@ -273,7 +273,7 @@ func TestHTTPMCPClient_NotificationChan(t *testing.T) {
 	mock := newMockMCPServer(t)
 	defer mock.Close()
 
-	client, err := NewHTTPMCPClient("test-server", mock.URL(), nil, nil)
+	client, err := NewHTTPMCPClient("test-server", mock.URL(), nil, nil, 0)
 	if err != nil {
 		t.Fatalf("NewHTTPMCPClient failed: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestHTTPMCPClient_ListAllTools_WithProxy(t *testing.T) {
 	defer mock.Close()
 
 	// Create HTTP client and add it to a proxy
-	client, err := NewHTTPMCPClient("remote-api", mock.URL(), nil, nil)
+	client, err := NewHTTPMCPClient("remote-api", mock.URL(), nil, nil, 0)
 	if err != nil {
 		t.Fatalf("NewHTTPMCPClient failed: %v", err)
 	}
@@ -341,7 +341,7 @@ func TestHTTPMCPClient_ListAllTools_WithProxy(t *testing.T) {
 
 // TestHTTPMCPClient_URLError tests connection refused / invalid URL handling
 func TestHTTPMCPClient_URLError(t *testing.T) {
-	_, err := NewHTTPMCPClient("bad-server", "http://127.0.0.1:1", nil, nil)
+	_, err := NewHTTPMCPClient("bad-server", "http://127.0.0.1:1", nil, nil, 0)
 	if err == nil {
 		t.Fatal("expected error for unreachable server, got nil")
 	}
@@ -391,7 +391,7 @@ func TestHTTPMCPClient_AutoLoadStoredToken(t *testing.T) {
 		TokenURL: "https://token.example.com",
 	}
 
-	client, err := NewHTTPMCPClient(serverName, ts.URL, nil, oauth)
+	client, err := NewHTTPMCPClient(serverName, ts.URL, nil, oauth, 0)
 	if err != nil {
 		t.Fatalf("NewHTTPMCPClient failed: %v", err)
 	}
@@ -463,7 +463,7 @@ func TestHTTPMCPClient_RefreshExpiredToken(t *testing.T) {
 		TokenURL: refreshTS.URL, // Point to our mock refresh endpoint
 	}
 
-	client, err := NewHTTPMCPClient(serverName, ts.URL, nil, oauth)
+	client, err := NewHTTPMCPClient(serverName, ts.URL, nil, oauth, 0)
 	if err != nil {
 		t.Fatalf("NewHTTPMCPClient failed: %v", err)
 	}
@@ -518,7 +518,7 @@ func TestHTTPMCPClient_401WithOAuthTriggersReauth(t *testing.T) {
 		// No DeviceAuthURL or AuthorizationURL — will trigger "no flow configured" error
 	}
 
-	_, err := NewHTTPMCPClient(serverName, ts.URL, nil, oauth)
+	_, err := NewHTTPMCPClient(serverName, ts.URL, nil, oauth, 0)
 	if err == nil {
 		t.Fatal("expected error for 401 with incomplete OAuth config, got nil")
 	}
@@ -541,7 +541,7 @@ func TestHTTPMCPClient_401WithNilOAuth(t *testing.T) {
 	defer ts.Close()
 
 	// No OAuth config — should get standard error
-	_, err := NewHTTPMCPClient("no-oauth-server", ts.URL, nil, nil)
+	_, err := NewHTTPMCPClient("no-oauth-server", ts.URL, nil, nil, 0)
 	if err == nil {
 		t.Fatal("expected error for 401, got nil")
 	}

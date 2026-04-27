@@ -371,7 +371,7 @@ func TestHTTPMCPClient_401WithDiscovery_ReturnsActionableError(t *testing.T) {
 	// NewHTTPMCPClient calls initialize() which gets the 401.
 	// The client should auto-discover OAuth from the header, save it,
 	// and return the actionable error without blocking on stdin.
-	client, err := NewHTTPMCPClient("discovery-test", mock.URL+"/mcp", nil, nil)
+	client, err := NewHTTPMCPClient("discovery-test", mock.URL+"/mcp", nil, nil, 0)
 	if err == nil {
 		client.Close()
 		t.Fatal("expected error from 401 on initialize, got nil")

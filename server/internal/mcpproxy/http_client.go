@@ -23,6 +23,7 @@ type HTTPMCPClient struct {
 	Headers map[string]string // Static HTTP headers (e.g., Authorization, X-API-Key)
 	Token   string            // OAuth bearer token (set after authentication)
 	OAuth   *OAuthConfig      // OAuth config for auto-authentication on 401
+	timeout time.Duration     // Per-request HTTP timeout
 	client  *http.Client
 	mu      sync.Mutex
 	nextID  int
@@ -33,13 +34,17 @@ var _ Client = (*HTTPMCPClient)(nil)
 
 // NewHTTPMCPClient creates a new HTTP MCP client and initializes the connection.
 // It sends an initialize request to verify the server is reachable and speaks MCP.
-func NewHTTPMCPClient(name string, url string, headers map[string]string, oauth *OAuthConfig) (*HTTPMCPClient, error) {
+func NewHTTPMCPClient(name string, url string, headers map[string]string, oauth *OAuthConfig, timeoutSec int) (*HTTPMCPClient, error) {
+	if timeoutSec <= 0 {
+		timeoutSec = DefaultToolTimeout
+	}
 	c := &HTTPMCPClient{
 		Name:    name,
 		URL:     url,
 		Headers: headers,
 		OAuth:   oauth,
-		client:  &http.Client{Timeout: 30 * time.Second},
+		timeout: time.Duration(timeoutSec) * time.Second,
+		client:  &http.Client{Timeout: time.Duration(timeoutSec) * time.Second},
 		nextID:  0,
 	}
 
