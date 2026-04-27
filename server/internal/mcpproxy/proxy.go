@@ -76,7 +76,7 @@ func NewProxy(configPath string) (*Proxy, error) {
 				log.Printf("Failed to start MCP server %s: %v", server.Name, err)
 			}
 		case "http", "streamable-http", "sse":
-			client, err := NewHTTPMCPClient(server.Name, server.URL, server.Headers)
+			client, err := NewHTTPMCPClient(server.Name, server.URL, server.Headers, server.OAuth)
 			if err != nil {
 				log.Printf("Failed to connect to HTTP MCP server %s: %v", server.Name, err)
 				continue
@@ -248,7 +248,7 @@ func (p *Proxy) startClientUnlocked(config ServerConfig) error {
 	case "stdio":
 		client, err = NewMCPClient(config.Name, config.Command, config.Args, config.Env)
 	case "http", "streamable-http", "sse":
-		client, err = NewHTTPMCPClient(config.Name, config.URL, config.Headers)
+		client, err = NewHTTPMCPClient(config.Name, config.URL, config.Headers, config.OAuth)
 	default:
 		return fmt.Errorf("unknown MCP server type: %s", config.Type)
 	}
