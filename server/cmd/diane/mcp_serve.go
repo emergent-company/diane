@@ -139,14 +139,62 @@ func handleMCPServeRequest(
 			},
 		}
 	case "tools/call":
+		if proxy == nil {
+			return mcpServeResponse{
+				Error: &struct {
+					Code    int    `json:"code"`
+					Message string `json:"message"`
+				}{
+					Code:    -32603,
+					Message: "proxy not initialized",
+				},
+			}
+		}
+
+		var params struct {
+			Name      string                 `json:"name"`
+			Arguments map[string]interface{} `json:"arguments"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return mcpServeResponse{
+				Error: &struct {
+					Code    int    `json:"code"`
+					Message string `json:"message"`
+				}{
+					Code:    -32602,
+					Message: fmt.Sprintf("invalid params: %v", err),
+				},
+			}
+		}
+
+		result, err := proxy.CallTool(params.Name, params.Arguments)
+		if err != nil {
+			return mcpServeResponse{
+				Error: &struct {
+					Code    int    `json:"code"`
+					Message string `json:"message"`
+				}{
+					Code:    -32603,
+					Message: err.Error(),
+				},
+			}
+		}
+
+		var resultObj interface{}
+		if err := json.Unmarshal(result, &resultObj); err != nil {
+			return mcpServeResponse{
+				Error: &struct {
+					Code    int    `json:"code"`
+					Message string `json:"message"`
+				}{
+					Code:    -32603,
+					Message: fmt.Sprintf("failed to parse tool result: %v", err),
+				},
+			}
+		}
+
 		return mcpServeResponse{
-			Error: &struct {
-				Code    int    `json:"code"`
-				Message string `json:"message"`
-			}{
-				Code:    -32603,
-				Message: "tools/call not implemented in serve mode (use relay for tool execution)",
-			},
+			Result: resultObj,
 		}
 	default:
 		return mcpServeResponse{
