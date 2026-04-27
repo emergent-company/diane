@@ -9,14 +9,32 @@ import (
 	"sync"
 )
 
+// OAuthConfig holds OAuth 2.0 configuration for MCP server authentication.
+type OAuthConfig struct {
+	// Device flow (GitHub Copilot style)
+	ClientID      string   `json:"client_id,omitempty"`
+	DeviceAuthURL string   `json:"device_auth_url,omitempty"`
+	TokenURL      string   `json:"token_url,omitempty"`
+	Scopes        []string `json:"scopes,omitempty"`
+
+	// Authorization code flow (infakt style, headless-friendly)
+	AuthorizationURL string `json:"authorization_url,omitempty"`
+
+	// Static bearer token (pre-authenticated)
+	BearerToken string `json:"bearer_token,omitempty"`
+}
+
 // ServerConfig represents configuration for an MCP server
 type ServerConfig struct {
 	Name    string            `json:"name"`
 	Enabled bool              `json:"enabled"`
-	Type    string            `json:"type"` // stdio, http, etc.
+	Type    string            `json:"type"` // stdio, http, sse, streamable-http
 	Command string            `json:"command"`
 	Args    []string          `json:"args"`
 	Env     map[string]string `json:"env"`
+	URL     string            `json:"url,omitempty"`     // HTTP/SSE endpoint URL
+	Headers map[string]string `json:"headers,omitempty"` // Static HTTP headers for auth
+	OAuth   *OAuthConfig      `json:"oauth,omitempty"`   // OAuth 2.0 configuration
 }
 
 // Config represents the MCP proxy configuration
@@ -35,7 +53,7 @@ type Proxy struct {
 
 // NewProxy creates a new MCP proxy
 func NewProxy(configPath string) (*Proxy, error) {
-	config, err := loadConfig(configPath)
+	config, err := LoadConfig(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
@@ -156,7 +174,7 @@ func (p *Proxy) NotificationChan() <-chan string {
 func (p *Proxy) Reload() error {
 	log.Printf("Reloading MCP configuration from %s", p.configPath)
 
-	newConfig, err := loadConfig(p.configPath)
+	newConfig, err := LoadConfig(p.configPath)
 	if err != nil {
 		return fmt.Errorf("failed to load new config: %w", err)
 	}
@@ -251,8 +269,9 @@ func (p *Proxy) Close() error {
 	return nil
 }
 
-// loadConfig loads the MCP proxy configuration
-func loadConfig(configPath string) (*Config, error) {
+// LoadConfig loads the MCP proxy configuration.
+// Returns an error if the file does not exist or contains invalid JSON.
+func LoadConfig(configPath string) (*Config, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, err
