@@ -1,6 +1,10 @@
 package mcpproxy
 
 import (
+	"bufio"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,7 +12,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -293,4 +299,261 @@ func pollForToken(oauth *OAuthConfig, deviceResp *DeviceAuthResponse) (*TokenRes
 			return nil, fmt.Errorf("token endpoint returned HTTP %d: %s", resp.StatusCode, string(body))
 		}
 	}
+}
+
+// =========================================================================
+// PKCE helpers (RFC 7636)
+// =========================================================================
+
+// GenerateCodeVerifier creates a random PKCE code verifier (43-128 chars,
+// using unreserved URL characters: A-Z, a-z, 0-9, -, ., _, ~).
+// Uses crypto/rand for secure randomness.
+func GenerateCodeVerifier() string {
+	// Generate 64 random bytes → base64url encoded = 86 characters (within 43-128 range)
+	buf := make([]byte, 64)
+	if _, err := rand.Read(buf); err != nil {
+		// Fallback to 32 bytes if crypto/rand fails (extremely unlikely)
+		buf = make([]byte, 32)
+		rand.Read(buf)
+	}
+	return base64.RawURLEncoding.EncodeToString(buf)
+}
+
+// GenerateCodeChallenge creates the S256 PKCE code challenge from a verifier.
+// SHA256 hash → base64url encoding (no padding).
+func GenerateCodeChallenge(verifier string) string {
+	hash := sha256.Sum256([]byte(verifier))
+	return base64.RawURLEncoding.EncodeToString(hash[:])
+}
+
+// =========================================================================
+// Authorization code flow with PKCE
+// =========================================================================
+
+// ExtractAuthCodeFromRedirectURL parses the authorization code from a redirect URL.
+// Expected format: http://localhost:PORT/callback?code=AUTH_CODE&state=STATE
+func ExtractAuthCodeFromRedirectURL(redirectURL string) (string, error) {
+	parsed, err := url.Parse(redirectURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse redirect URL: %w", err)
+	}
+
+	code := parsed.Query().Get("code")
+	if code == "" {
+		return "", fmt.Errorf("redirect URL missing 'code' query parameter")
+	}
+
+	return code, nil
+}
+
+// ExchangeCodeForTokens POSTs to the token endpoint to exchange an auth code for tokens.
+// Content-Type: application/x-www-form-urlencoded
+// grant_type=authorization_code&code={code}&redirect_uri={redirectURI}&client_id={clientID}&code_verifier={verifier}
+func ExchangeCodeForTokens(tokenURL, clientID, code, redirectURI, verifier string) (*StoredTokens, error) {
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("code", code)
+	form.Set("redirect_uri", redirectURI)
+	form.Set("client_id", clientID)
+	form.Set("code_verifier", verifier)
+
+	resp, err := http.PostForm(tokenURL, form)
+	if err != nil {
+		return nil, fmt.Errorf("token exchange request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read token exchange response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("token endpoint returned HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	var tokenResp TokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return nil, fmt.Errorf("failed to parse token response: %w", err)
+	}
+
+	if tokenResp.AccessToken == "" {
+		return nil, fmt.Errorf("token response missing access_token: %s", string(body))
+	}
+
+	stored := &StoredTokens{
+		AccessToken: tokenResp.AccessToken,
+		Scope:       tokenResp.Scope,
+	}
+	if tokenResp.RefreshToken != "" {
+		stored.RefreshToken = tokenResp.RefreshToken
+	}
+	if tokenResp.ExpiresIn > 0 {
+		stored.ExpiresAt = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+	}
+
+	return stored, nil
+}
+
+// RefreshTokens uses a refresh token to get new access tokens.
+// POST {TokenURL}
+// grant_type=refresh_token&refresh_token={refreshToken}&client_id={clientID}
+func RefreshTokens(tokenURL, clientID, refreshToken string) (*StoredTokens, error) {
+	if refreshToken == "" {
+		return nil, fmt.Errorf("refresh token is empty")
+	}
+
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", refreshToken)
+	form.Set("client_id", clientID)
+
+	resp, err := http.PostForm(tokenURL, form)
+	if err != nil {
+		return nil, fmt.Errorf("token refresh request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read token refresh response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("token endpoint returned HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	var tokenResp TokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return nil, fmt.Errorf("failed to parse token refresh response: %w", err)
+	}
+
+	if tokenResp.AccessToken == "" {
+		return nil, fmt.Errorf("token refresh response missing access_token: %s", string(body))
+	}
+
+	stored := &StoredTokens{
+		AccessToken: tokenResp.AccessToken,
+		Scope:       tokenResp.Scope,
+	}
+	if tokenResp.RefreshToken != "" {
+		stored.RefreshToken = tokenResp.RefreshToken
+	} else {
+		// Preserve the existing refresh token if the server didn't issue a new one
+		stored.RefreshToken = refreshToken
+	}
+	if tokenResp.ExpiresIn > 0 {
+		stored.ExpiresAt = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+	}
+
+	return stored, nil
+}
+
+// AuthenticateAuthCodeFlow performs OAuth authorization code flow with PKCE.
+// Designed for headless environments:
+//  1. Generates PKCE params
+//  2. Prints authorization URL + instructions to stderr
+//  3. Reads redirect URL from stdin (user paste)
+//  4. Extracts auth code from the URL
+//  5. Exchanges code for tokens
+//  6. Saves tokens to ~/.diane/secrets/<name>.json
+//
+// On macOS, also calls exec.Command("open", url) to open the browser automatically.
+// The redirect_uri is derived from the redirect URL that the user pastes.
+func AuthenticateAuthCodeFlow(serverName string, oauth *OAuthConfig) (string, error) {
+	if oauth == nil {
+		return "", fmt.Errorf("OAuthConfig is nil")
+	}
+	if oauth.ClientID == "" {
+		return "", fmt.Errorf("OAuthConfig.ClientID is required")
+	}
+	if oauth.AuthorizationURL == "" {
+		return "", fmt.Errorf("OAuthConfig.AuthorizationURL is required")
+	}
+	if oauth.TokenURL == "" {
+		return "", fmt.Errorf("OAuthConfig.TokenURL is required")
+	}
+
+	// Step 1: Generate PKCE parameters
+	verifier := GenerateCodeVerifier()
+	challenge := GenerateCodeChallenge(verifier)
+
+	// Build authorization URL
+	authURL, err := url.Parse(oauth.AuthorizationURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse authorization URL: %w", err)
+	}
+	q := authURL.Query()
+	q.Set("response_type", "code")
+	q.Set("client_id", oauth.ClientID)
+	q.Set("code_challenge", challenge)
+	q.Set("code_challenge_method", "S256")
+	if len(oauth.Scopes) > 0 {
+		q.Set("scope", strings.Join(oauth.Scopes, " "))
+	}
+	authURL.RawQuery = q.Encode()
+
+	// Step 2: Print the prompt to stderr (so it doesn't interfere with stdout output)
+	prompt := fmt.Sprintf(`
+╔══════════════════════════════════════════════════════╗
+║         MCP Authentication Required                 ║
+║  Server: %-39s║
+║                                                     ║
+║  1. Open this URL in any browser:                    ║
+║     %s
+║                                                     ║
+║  2. Authorize the application                        ║
+║                                                     ║
+║  3. After redirect, paste the full URL here:         ║
+║     (starting with http://localhost:...)              ║
+╚══════════════════════════════════════════════════════╝
+`, serverName, authURL.String())
+
+	fmt.Fprint(os.Stderr, prompt)
+
+	// On macOS, try to open the browser automatically
+	if runtime.GOOS == "darwin" {
+		exec.Command("open", authURL.String()).Start()
+	}
+
+	// Step 3: Read redirect URL from stdin
+	fmt.Fprint(os.Stderr, "Paste redirect URL: ")
+	reader := bufio.NewReader(os.Stdin)
+	redirectURL, err := reader.ReadString('\n')
+	if err != nil {
+		return "", fmt.Errorf("failed to read redirect URL from stdin: %w", err)
+	}
+	redirectURL = strings.TrimSpace(redirectURL)
+
+	// Step 4: Extract auth code
+	code, err := ExtractAuthCodeFromRedirectURL(redirectURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to extract auth code from redirect URL: %w", err)
+	}
+
+	// Derive redirect_uri from the pasted URL (strip the query params)
+	parsedRedirect, err := url.Parse(redirectURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse redirect URL: %w", err)
+	}
+	// Reconstruct the base redirect URI (scheme + host + path, no query)
+	redirectURI := (&url.URL{
+		Scheme: parsedRedirect.Scheme,
+		Host:   parsedRedirect.Host,
+		Path:   parsedRedirect.Path,
+	}).String()
+
+	// Step 5: Exchange code for tokens
+	stored, err := ExchangeCodeForTokens(oauth.TokenURL, oauth.ClientID, code, redirectURI, verifier)
+	if err != nil {
+		return "", fmt.Errorf("token exchange failed: %w", err)
+	}
+
+	// Step 6: Save tokens
+	if err := SaveTokens(serverName, stored); err != nil {
+		log.Printf("Warning: failed to save OAuth tokens for %s: %v", serverName, err)
+	}
+
+	fmt.Fprintf(os.Stderr, "✅ OAuth authorization complete for %s\n", serverName)
+	return stored.AccessToken, nil
 }
