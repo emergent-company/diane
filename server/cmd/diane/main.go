@@ -75,12 +75,15 @@ func main() {
 			fmt.Println("Usage: diane mcp <command> [options]")
 			fmt.Println()
 			fmt.Println("Commands:")
+			fmt.Println("  auth            Authenticate an MCP server via OAuth (--server required)")
 			fmt.Println("  list            List configured MCP servers (and tools with --tools)")
 			fmt.Println("  relay           Connect MCP server to Memory Platform relay")
 			fmt.Println("  serve           Run MCP JSON-RPC server (stdin/stdout)")
 			os.Exit(1)
 		}
 		switch os.Args[2] {
+		case "auth":
+			cmdMCPAuth(os.Args[3:])
 		case "list":
 			cmdMCPList(os.Args[3:])
 		case "relay":
