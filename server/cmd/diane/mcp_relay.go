@@ -229,7 +229,8 @@ func (s *MCPSession) run() error {
 		}
 	}()
 
-	// 4. Forward loop: MCP stdout → WS, with tool-change detection
+	// 4. Forward loop: MCP stdout → WS, with tool-change detection and
+	//    ResponseFrame wrapping for relay-proxied tool calls.
 	go func() {
 		for s.mcpOut.Scan() {
 			line := s.mcpOut.Bytes()
@@ -243,6 +244,28 @@ func (s *MCPSession) run() error {
 				s.checkToolChangeAndReregister(line)
 			}
 
+			// Extract response ID for relay request matching.
+			var respID struct {
+				ID string `json:"id"`
+			}
+			json.Unmarshal(line, &respID)
+
+			// If this response matches a pending relay tool call, wrap it in
+			// a ResponseFrame so the MP server's relay handler can route it.
+			if respID.ID != "" {
+				if _, ok := s.pending.LoadAndDelete(respID.ID); ok {
+					wrapped := map[string]interface{}{
+						"type":    "response",
+						"id":      respID.ID,
+						"payload": json.RawMessage(line),
+					}
+					wrappedData, _ := json.Marshal(wrapped)
+					s.sendWS(wrappedData)
+					continue
+				}
+			}
+
+			// All other MCP output: forward raw (tool list updates, etc.)
 			var resp json.RawMessage
 			if err := json.Unmarshal(line, &resp); err != nil {
 				continue
@@ -318,6 +341,19 @@ func (s *MCPSession) sendWS(msg json.RawMessage) {
 }
 
 func (s *MCPSession) forwardToMCP(frame RelayFrame) {
+	// Extract the request ID from the JSON-RPC payload so we can match
+	// the response when it comes back from the MCP subprocess.
+	var payloadID json.RawMessage
+	var payloadMeta struct {
+		JSONRPC string          `json:"jsonrpc"`
+		ID      json.RawMessage `json:"id"`
+	}
+	if err := json.Unmarshal(frame.Payload, &payloadMeta); err == nil && payloadMeta.ID != nil {
+		payloadID = payloadMeta.ID
+		// Store the ID so the MCP stdout loop can wrap the response in a ResponseFrame.
+		s.pending.Store(string(payloadID), true)
+	}
+
 	// Send the MCP JSON-RPC request to the subprocess
 	s.mcpIn.Write(frame.Payload)
 	s.mcpIn.WriteByte('\n')
