@@ -39,7 +39,7 @@ func NewHTTPMCPClient(name string, url string, headers map[string]string, oauth 
 		URL:     url,
 		Headers: headers,
 		OAuth:   oauth,
-		client:  &http.Client{},
+		client:  &http.Client{Timeout: 30 * time.Second},
 		nextID:  0,
 	}
 

@@ -44,7 +44,8 @@ func main() {
 		fmt.Println("  upgrade         Upgrade Diane to the latest version")
 		fmt.Println("  service         Manage the MCP relay as a service (start|stop|status|restart)")
 		fmt.Println("  mcp             Manage MCP servers (list, relay, serve)")
-			fmt.Println("  schema apply    Apply embedded schema definitions to Memory Platform")
+		fmt.Println("  tool            Test MCP tools through the proxy (test)")
+		fmt.Println("  schema apply    Apply embedded schema definitions to Memory Platform")
 			fmt.Println()
 			os.Exit(0)
 		}
@@ -56,6 +57,21 @@ func main() {
 		cmdBot()
 	case "projects":
 		cmdProjects()
+	case "tool":
+		if len(os.Args) < 3 {
+			fmt.Println("Usage: diane tool <command>")
+			fmt.Println()
+			fmt.Println("Commands:")
+			fmt.Println("  test            Call an MCP tool with a timeout to test if it works")
+			os.Exit(1)
+		}
+		switch os.Args[2] {
+		case "test":
+			cmdToolTest(os.Args[3:])
+		default:
+			fmt.Fprintf(os.Stderr, "Unknown tool command: %s\n", os.Args[2])
+			os.Exit(1)
+		}
 	case "agent":
 		cmdAgent(os.Args[2:])
 	case "provider":
