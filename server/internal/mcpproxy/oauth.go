@@ -507,7 +507,7 @@ func RefreshTokens(tokenURL, clientID, refreshToken string) (*StoredTokens, erro
 
 // successPage is a minimal HTML page shown after successful OAuth authorization.
 const successPage = `<!DOCTYPE html>
-<html><head><title>Diane Authorization</title><style>
+<html><head><meta charset="utf-8"><title>Diane Authorization</title><style>
 body{font-family:-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f5f5f7}
 .card{background:#fff;border-radius:16px;padding:40px;box-shadow:0 2px 10px rgba(0,0,0,.1);text-align:center}
 h1{color:#1a1a2e;font-size:24px;margin:0 0 10px}
@@ -642,7 +642,7 @@ func startCallbackServer(codeChan chan string, errChan chan error) (*http.Server
 		}
 		// Show success page — response written synchronously,
 		// then send the code to the main flow (NOT a cleanup goroutine)
-		w.Header().Set("Content-Type", "text/html")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(successPage))
 		// Use a non-blocking send to avoid deadlock if no one is listening
