@@ -256,8 +256,10 @@ func (c *HTTPMCPClient) discoverOAuthFromHeader(headers http.Header) (*OAuthConf
 	defer resp2.Body.Close()
 
 	var oauthMeta struct {
-		AuthorizationEndpoint string `json:"authorization_endpoint"`
-		TokenEndpoint        string `json:"token_endpoint"`
+		AuthorizationEndpoint string   `json:"authorization_endpoint"`
+		TokenEndpoint        string   `json:"token_endpoint"`
+		RegistrationEndpoint *string  `json:"registration_endpoint,omitempty"`
+		ScopesSupported      []string `json:"scopes_supported,omitempty"`
 	}
 	if err := json.NewDecoder(resp2.Body).Decode(&oauthMeta); err != nil {
 		return nil, fmt.Errorf("failed to parse OAuth server metadata: %w", err)
@@ -269,10 +271,16 @@ func (c *HTTPMCPClient) discoverOAuthFromHeader(headers http.Header) (*OAuthConf
 	log.Printf("[OAuth] Discovered OAuth endpoints for %s: authorize=%s token=%s",
 		c.Name, oauthMeta.AuthorizationEndpoint, oauthMeta.TokenEndpoint)
 
-	return &OAuthConfig{
+	cfg := &OAuthConfig{
 		AuthorizationURL: oauthMeta.AuthorizationEndpoint,
 		TokenURL:         oauthMeta.TokenEndpoint,
-	}, nil
+		Scopes:           oauthMeta.ScopesSupported,
+	}
+	if oauthMeta.RegistrationEndpoint != nil {
+		cfg.RegistrationURL = *oauthMeta.RegistrationEndpoint
+	}
+
+	return cfg, nil
 }
 
 // parseWWWAuthenticate parses a WWW-Authenticate header value into its components.
@@ -324,6 +332,21 @@ func SaveDiscoveredConfig(serverName string, config *OAuthConfig) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0600)
+}
+
+// LoadDiscoveredConfig loads a previously auto-discovered OAuth config for a server.
+// Returns nil if no discovered config exists.
+func LoadDiscoveredConfig(serverName string) *OAuthConfig {
+	path := TokenPath(serverName + "-oauth-config")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var cfg OAuthConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil
+	}
+	return &cfg
 }
 
 // ensureAuthenticated checks for stored tokens or runs OAuth flow on 401.

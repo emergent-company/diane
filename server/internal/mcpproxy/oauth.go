@@ -2,6 +2,7 @@ package mcpproxy
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -324,6 +325,59 @@ func GenerateCodeVerifier() string {
 func GenerateCodeChallenge(verifier string) string {
 	hash := sha256.Sum256([]byte(verifier))
 	return base64.RawURLEncoding.EncodeToString(hash[:])
+}
+
+// =========================================================================
+// Dynamic client registration (RFC 7591)
+// =========================================================================
+
+// DynamicClientRegistration registers a new OAuth client with an authorization server
+// that supports RFC 7591. It POSTs a client metadata document to the registration
+// endpoint and returns the assigned client_id.
+//
+// The redirect_uri defaults to http://localhost:28561/callback which Diane uses
+// as its standard OAuth callback port.
+func DynamicClientRegistration(registrationURL string) (string, error) {
+	body := map[string]interface{}{
+		"client_name":                  "Diane AI Assistant",
+		"redirect_uris":                []string{"http://localhost:28561/callback"},
+		"grant_types":                  []string{"authorization_code", "refresh_token"},
+		"response_types":               []string{"code"},
+		"token_endpoint_auth_method":   "none",
+		"application_type":             "native",
+	}
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal registration request: %w", err)
+	}
+
+	resp, err := http.Post(registrationURL, "application/json", bytes.NewReader(bodyBytes))
+	if err != nil {
+		return "", fmt.Errorf("registration request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read registration response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("registration endpoint returned HTTP %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var result struct {
+		ClientID string `json:"client_id"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", fmt.Errorf("failed to parse registration response: %w", err)
+	}
+	if result.ClientID == "" {
+		return "", fmt.Errorf("registration response missing client_id: %s", string(respBody))
+	}
+
+	log.Printf("[OAuth] Registered new client: client_id=%s", result.ClientID)
+	return result.ClientID, nil
 }
 
 // =========================================================================

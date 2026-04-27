@@ -20,6 +20,9 @@ type OAuthConfig struct {
 	// Authorization code flow (infakt style, headless-friendly)
 	AuthorizationURL string `json:"authorization_url,omitempty"`
 
+	// Dynamic client registration (RFC 7591)
+	RegistrationURL string `json:"registration_url,omitempty"`
+
 	// Static bearer token (pre-authenticated)
 	BearerToken string `json:"bearer_token,omitempty"`
 }

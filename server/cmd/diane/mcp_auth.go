@@ -49,8 +49,29 @@ func cmdMCPAuth(args []string) {
 		osExit(1)
 	}
 
-	// Check if OAuth is configured
-	if server.OAuth == nil {
+	// Check if OAuth is configured in the server config, or auto-discovered
+	oauth := server.OAuth
+	if oauth == nil {
+		// Try loading auto-discovered OAuth config
+		oauth = mcpproxy.LoadDiscoveredConfig(*serverName)
+	}
+
+	// If we have a discovered config (or config with endpoints) but no client_id,
+	// check if dynamic client registration is available
+	if oauth != nil && oauth.RegistrationURL != "" && oauth.ClientID == "" {
+		fmt.Printf("🔄 Registering client with authorization server...\n")
+		clientID, err := mcpproxy.DynamicClientRegistration(oauth.RegistrationURL)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Dynamic client registration failed: %v\n", err)
+			osExit(1)
+		}
+		oauth.ClientID = clientID
+		// Save the updated config with the client_id back to disk
+		_ = mcpproxy.SaveDiscoveredConfig(*serverName, oauth)
+		fmt.Printf("✅ Registered client: %s\n", clientID)
+	}
+
+	if oauth == nil {
 		// Check if tokens already exist (pre-authenticated)
 		tokens, err := mcpproxy.LoadTokens(*serverName)
 		if err == nil && tokens.AccessToken != "" {
@@ -58,6 +79,7 @@ func cmdMCPAuth(args []string) {
 			return
 		}
 		fmt.Fprintf(os.Stderr, "Error: no OAuth configuration for server %q\n", *serverName)
+		fmt.Fprintf(os.Stderr, "Tip: run diane mcp relay first to auto-discover OAuth endpoints for HTTP servers\n")
 		osExit(1)
 	}
 
@@ -65,10 +87,10 @@ func cmdMCPAuth(args []string) {
 	fmt.Printf("🔐 Authenticating MCP server: %s\n\n", *serverName)
 
 	var token string
-	if server.OAuth.DeviceAuthURL != "" {
-		token, err = mcpproxy.AuthenticateDeviceFlow(*serverName, server.OAuth)
-	} else if server.OAuth.AuthorizationURL != "" {
-		token, err = mcpproxy.AuthenticateAuthCodeFlow(*serverName, server.OAuth)
+	if oauth.DeviceAuthURL != "" {
+		token, err = mcpproxy.AuthenticateDeviceFlow(*serverName, oauth)
+	} else if oauth.AuthorizationURL != "" {
+		token, err = mcpproxy.AuthenticateAuthCodeFlow(*serverName, oauth)
 	} else {
 		fmt.Fprintf(os.Stderr, "Error: no OAuth flow configured (need device_auth_url or authorization_url)\n")
 		osExit(1)
