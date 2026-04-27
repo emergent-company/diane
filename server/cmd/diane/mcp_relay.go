@@ -151,12 +151,41 @@ func (s *MCPSession) run() error {
 	header := make(http.Header)
 	header.Set("Authorization", "Bearer "+s.cfg.ProjectToken)
 
-	conn, _, err := websocket.DefaultDialer.Dial(u.String(), header)
+	dialer := *websocket.DefaultDialer
+	dialer.HandshakeTimeout = 10 * time.Second
+	conn, _, err := dialer.Dial(u.String(), header)
 	if err != nil {
 		return fmt.Errorf("connect to relay: %w", err)
 	}
 	s.wsConn = conn
 	log.Printf("[mcp-relay] Connected to relay: %s (instance: %s)", s.cfg.RelayURL, s.cfg.InstanceID)
+
+	// Set up WebSocket keepalive: send pings every 25s to prevent
+	// server-side proxy (Traefik) from killing idle connections.
+	// Use binary-level ping/pong (RFC 6455) so Traefik forwards them.
+	const (
+		pingPeriod = 25 * time.Second
+		pongWait   = 50 * time.Second
+	)
+	conn.SetReadDeadline(time.Now().Add(pongWait))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(pongWait))
+		return nil
+	})
+	go func() {
+		ticker := time.NewTicker(pingPeriod)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
+					return
+				}
+			case <-s.done:
+				return
+			}
+		}
+	}()
 
 	// Send initial register message with tool list
 	s.sendRegister()
@@ -268,59 +297,10 @@ func (s *MCPSession) sendWS(msg json.RawMessage) {
 }
 
 func (s *MCPSession) forwardToMCP(frame RelayFrame) {
-	// MP prefixes tool names with the instance ID when routing.
-	// Strip the prefix before forwarding to the MCP server so it
-	// receives the bare tool name (e.g., "echo_text" not "inst_echo_text").
-	payload := frame.Payload
-
-	// Only strip prefix for tools/call — initialize and others pass through
-	if s.cfg.InstanceID != "" {
-		payload = stripToolNamePrefix(payload, s.cfg.InstanceID+"_")
-	}
-
 	// Send the MCP JSON-RPC request to the subprocess
-	s.mcpIn.Write(payload)
+	s.mcpIn.Write(frame.Payload)
 	s.mcpIn.WriteByte('\n')
 	s.mcpIn.Flush()
-}
-
-// stripToolNamePrefix parses a JSON-RPC tools/call request and strips the
-// given prefix from params.name before forwarding to the MCP server.
-func stripToolNamePrefix(raw json.RawMessage, prefix string) json.RawMessage {
-	// Fast path: if the raw message doesn't contain the prefix, skip parsing
-	if !strings.Contains(string(raw), prefix) {
-		return raw
-	}
-
-	var req struct {
-		Method string          `json:"method"`
-		Params json.RawMessage `json:"params"`
-	}
-	if err := json.Unmarshal(raw, &req); err != nil {
-		return raw
-	}
-	if req.Method != "tools/call" || len(req.Params) == 0 {
-		return raw
-	}
-
-	var params struct {
-		Name string `json:"name"`
-	}
-	if err := json.Unmarshal(req.Params, &params); err != nil {
-		return raw
-	}
-
-	// Strip the prefix from the tool name
-	stripped := strings.TrimPrefix(params.Name, prefix)
-	if stripped == params.Name {
-		return raw // prefix not found, nothing to strip
-	}
-
-	// Rebuild the params with the stripped name
-	oldName := `"name":"` + params.Name + `"`
-	newName := `"name":"` + stripped + `"`
-	result := strings.Replace(string(raw), oldName, newName, 1)
-	return json.RawMessage(result)
 }
 
 func (s *MCPSession) sendRegister() {

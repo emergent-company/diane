@@ -875,9 +875,11 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.Message) {
 		} else {
 			emoji, category := categorizeMessage(m.Content)
 			cleanMsg := strings.TrimSpace(m.Content)
-			cleanMsg = regexp.MustCompile(`^[\p{So}\p{Sk}\p{Sc}\p{Sm}]\s*`).ReplaceAllString(cleanMsg, "")
 			// Strip Discord mentions (<@!123>, <@&123>, <#123>, <:emoji:123>) from thread title
-			cleanMsg = regexp.MustCompile(`<[@#][^>]*\d+>`).ReplaceAllString(cleanMsg, "")
+			// IMPORTANT: do this BEFORE stripping unicode symbols (the '<' is \p{Sm} = Math Symbol)
+			cleanMsg = regexp.MustCompile(`<[^>]+>`).ReplaceAllString(cleanMsg, "")
+			// Strip leading Unicode symbols/emojis (emoji prefix from user, etc.)
+			cleanMsg = regexp.MustCompile(`^[\p{So}\p{Sk}\p{Sc}\p{Sm}]\s*`).ReplaceAllString(cleanMsg, "")
 			cleanMsg = strings.TrimSpace(cleanMsg)
 			threadName := emoji + " " + category + ": " + truncateStr(cleanMsg, 40)
 			if len(threadName) > 100 {

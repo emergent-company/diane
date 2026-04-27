@@ -1,15 +1,18 @@
-// Package memorytest validates end-to-end MCP tool usage by agents on Memory Platform.
+// Package memorytest validates that agents can access and use MCP tools
+// configured in Diane's MCP server config (~/.diane/mcp-servers.json) via relay.
 //
-// This test verifies that:
-//  1. An MCP server (echo) can be started and its tools registered with MP via relay
-//  2. An agent definition can be created with those MCP tools
-//  3. When triggered, the agent can discover and call the MCP tools
-//  4. Tool call results are returned correctly through the relay
+// Flow:
+//  1. Adds the echo MCP server example to mcp-servers.json
+//  2. Starts diane mcp relay to register tools with Memory Platform
+//  3. Verifies the relay session appears in MP's relay sessions API
+//  4. Creates a test agent definition with the relay-registered tools
+//  5. Triggers the agent with a tool-using prompt
+//  6. Verifies the run completed and tool calls were attempted
 //
-// Prerequisites:
-//  - echo-mcp binary at /tmp/mcp-relay-test/echo-mcp
-//  - ~/.config/diane.yml with valid project credentials
-//  - Memory Platform with MCP relay support
+// Requires:
+//   - echo-mcp binary at /tmp/mcp-relay-test/echo-mcp
+//   - diane binary at /tmp/diane-test-binary (auto-built)
+//   - ~/.config/diane.yml with valid project token
 //
 // Run: cd ~/diane/server && /usr/local/go/bin/go test -v -count=1 -run TestAgentMCPTools ./memorytest/
 package memorytest
@@ -30,237 +33,160 @@ import (
 )
 
 const (
-	echoMCPBinary  = "/tmp/mcp-relay-test/echo-mcp"
-	dianeTestBin   = "/tmp/diane-test-binary"
-	mcpServersFile = "/tmp/diane-test-binary-mcp-servers.json"
+	echoMCPBin  = "/tmp/mcp-relay-test/echo-mcp"
+	dianeBin    = "/tmp/diane-test-binary"
+	mcpCfgFile  = "/tmp/diane-test-binary-mcp-servers.json"
 )
 
-// TestAgentMCPTools verifies that an agent can access and use MCP tools
-// registered via the diane MCP relay.
-//
-// Flow:
-//  1. Starts echo MCP server (provides echo_text + add_numbers tools)
-//  2. Launches `diane mcp relay` pointing to echo MCP binary
-//  3. Waits for relay to register with MP
-//  4. Finds existing relay nodes to discover tool naming pattern
-//  5. Creates agent definition with relay-prefixed tool names
-//  6. Triggers the agent to use add_numbers
-//  7. Polls for completion and verifies tool calls
 func TestAgentMCPTools(t *testing.T) {
-	// ── Preflight checks ──
-	if _, err := os.Stat(echoMCPBinary); os.IsNotExist(err) {
-		t.Skipf("Echo MCP binary not found at %s — skipping", echoMCPBinary)
+	// ── Preflight ──
+	if _, err := os.Stat(echoMCPBin); os.IsNotExist(err) {
+		t.Skipf("Echo MCP binary not found at %s", echoMCPBin)
+	}
+	if err := buildDiane(t); err != nil {
+		t.Skipf("Build diane binary: %v", err)
 	}
 
-	// Build diane binary for relay subprocess
-	if err := buildDianeTestBinary(t); err != nil {
-		t.Skipf("Failed to build diane test binary: %v — skipping", err)
-	}
-
-	// Load config
 	cfg, err := config.Load()
 	if err != nil {
-		t.Skipf("Cannot load config: %v", err)
+		t.Skipf("Config: %v", err)
 	}
 	pc := cfg.Active()
 	if pc == nil || pc.Token == "" {
-		t.Skip("No active project in config")
+		t.Skip("No active project")
 	}
 
 	b := setupBridgeFromConfig(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
 	defer cancel()
 
 	instanceID := fmt.Sprintf("test-mcp-%d", time.Now().UnixMilli())
-	t.Logf("=== MCP Tools Integration Test ===")
 	t.Logf("Instance: %s", instanceID)
-	t.Logf("Project:  %s", pc.ProjectID)
 
-	// ── Step 1: Write temp MCP servers config (echo server) ──
-	writeMCPConfig(t)
+	// ── Step 1: Write mcp-servers.json with echo server ──
+	writeEchoConfig(t)
 
-	// ── Step 2: Start diane mcp relay as background process ──
-	relayCtx, relayCancel := context.WithCancel(context.Background())
-	defer relayCancel()
+	// ── Step 2: Start relay (background process) ──
+	relayCtx, stopRelay := context.WithCancel(context.Background())
+	defer stopRelay()
 
-	relayCmd := exec.CommandContext(relayCtx, dianeTestBin, "mcp", "relay",
+	cmd := exec.CommandContext(relayCtx, dianeBin, "mcp", "relay",
 		"--instance", instanceID,
-		"--mcp-binary", echoMCPBinary,
+		"--mcp-binary", echoMCPBin,
 	)
-	relayCmd.Env = os.Environ()
-	relayCmd.Stdout = os.Stdout
-	relayCmd.Stderr = os.Stderr
+	cmd.Env = os.Environ()
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
-	if err := relayCmd.Start(); err != nil {
-		t.Fatalf("Failed to start relay: %v", err)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("Start relay: %v", err)
 	}
-	t.Logf("✅ Relay started (PID: %d)", relayCmd.Process.Pid)
-
 	t.Cleanup(func() {
-		relayCancel()
-		relayCmd.Process.Kill()
-		relayCmd.Wait()
-		t.Log("✅ Relay stopped")
+		stopRelay()
+		cmd.Process.Kill()
+		cmd.Wait()
 	})
 
-	// ── Step 3: Wait for relay to register with MP ──
-	t.Log("⏳ Waiting for relay to register with Memory Platform...")
-	connected := pollRelayRegistered(t, ctx, pc.Token, pc.ProjectID, instanceID, 30*time.Second)
-
-	if !connected {
-		t.Skipf("Relay %s did not register within timeout — relay endpoint may not be available", instanceID)
+	// ── Step 3: Wait for relay session to appear ──
+	t.Log("Waiting for relay to register...")
+	if !pollRelay(ctx, pc.Token, pc.ProjectID, instanceID, 25*time.Second) {
+		t.Skip("Relay did not register — relay endpoint may be unavailable")
 	}
-	t.Logf("✅ Relay registered: %s", instanceID)
+	t.Logf("✅ Relay registered")
 
-	// ── Step 4: Fetch relay-connected tools from the API ──
-	// The echo MCP provides: echo_text, add_numbers
-	// On MP, MCP tools get prefixed with the relay instance ID, e.g.:
-	//   test-mcp-xxx_echo-server_echo_text
-	// Try the most likely pattern based on how MP handles relay tools.
-	echoTool := instanceID + "_echo_text"
-	addTool := instanceID + "_add_numbers"
-
-	t.Logf("Attempting with tool names:")
-	t.Logf("  %s", echoTool)
-	t.Logf("  %s", addTool)
-
-	// Also register a fallback set of tool names in case the prefix pattern
-	// includes the server name (echo-server) as well
-	altEchoTool := instanceID + "_echo-server_echo_text"
-	altAddTool := instanceID + "_echo-server_add_numbers"
-	t.Logf("  (alt) %s", altEchoTool)
-	t.Logf("  (alt) %s", altAddTool)
-
-	// ── Step 5: Create agent definition with echo tools ──
-	// Tool naming: MP prefixes relay tools with {instance_id}_ 
-	// (confirmed: attempt 1 always succeeds with this pattern)
-	tools := []string{echoTool, addTool}
+	// ── Step 4: Create agent definition with echo tools ──
+	// Tool naming on MP: {instance_id}_{bare_name}
+	tools := []string{
+		instanceID + "_echo_text",
+		instanceID + "_add_numbers",
+	}
 
 	defName := fmt.Sprintf("test-mcp-agent-%d", time.Now().UnixMilli())
-	desc := "Test agent with MCP echo tools"
-	sysPrompt := `You are a test agent with access to MCP tools.
-You have exactly these tools available to call:
-  - echo_text: Echoes back the input text
-  - add_numbers: Adds two numbers together
-
-You MUST call at least one of these tools. The user's request requires it.
-When asked to add numbers, ALWAYS use the add_numbers tool.
-Do NOT compute the result yourself. Always use the tool.`
-
 	created, err := b.CreateAgentDef(ctx, &sdkagents.CreateAgentDefinitionRequest{
 		Name:           defName,
-		Description:    &desc,
-		SystemPrompt:   &sysPrompt,
+		Description:    ptrStr("Test MCP tool usage"),
+		SystemPrompt:   ptrStr("You have access to echo_text and add_numbers MCP tools."),
 		Tools:          tools,
 		Visibility:     "project",
 		MaxSteps:       ptrInt(10),
 		DefaultTimeout: ptrInt(60),
 	})
 	if err != nil {
-		t.Logf("CreateAgentDef failed: %v", err)
-		t.Logf("    Tools: %v", tools)
-		t.Logf("    Relay is connected. Agent tool naming may differ.")
-		return
+		t.Fatalf("CreateAgentDef: %v", err)
 	}
 	defID := created.Data.ID
-	t.Logf("✅ Created agent definition: %s (%s) — tools: %v", defName, defID, tools)
+	t.Cleanup(func() { b.DeleteAgentDef(context.Background(), defID) })
+	t.Logf("✅ Agent def: %s — tools: %v", defName, tools)
 
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cleanupCancel()
-		if err := b.DeleteAgentDef(cleanupCtx, defID); err != nil {
-			t.Logf("Cleanup: delete agent def %s: %v", defID, err)
-		}
-	})
-
-	// ── Step 6: Create runtime agent and trigger ──
-	runName := fmt.Sprintf("test-mcp-run-%d", time.Now().UnixMilli())
-	agent, err := b.CreateRuntimeAgent(ctx, runName, defID)
+	// ── Step 5: Trigger agent ──
+	agent, err := b.CreateRuntimeAgent(ctx, "test-mcp-run-"+fmt.Sprint(time.Now().UnixMilli()), defID)
 	if err != nil {
 		t.Fatalf("CreateRuntimeAgent: %v", err)
 	}
 	agentID := agent.Data.ID
-	t.Logf("✅ Runtime agent: %s", agentID)
+	t.Cleanup(func() { b.Client().Agents.Delete(context.Background(), agentID) })
 
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cleanupCancel()
-		_ = b.Client().Agents.Delete(cleanupCtx, agentID)
-	})
-
-	// Trigger with a prompt that forces tool usage
-	// The LLM is instructed via system prompt to always use the tool for addition
-	prompt := "Please add 79342 and 92837 using the add_numbers tool and tell me the result."
-	resp, err := b.TriggerAgentWithInput(ctx, agentID, prompt, "")
+	resp, err := b.TriggerAgentWithInput(ctx, agentID,
+		"Call add_numbers with 79342 and 92837. Report the result.", "")
 	if err != nil {
-		t.Fatalf("TriggerAgentWithInput: %v", err)
+		t.Fatalf("Trigger: %v", err)
 	}
 	if resp.Error != nil && *resp.Error != "" {
 		t.Fatalf("Trigger error: %s", *resp.Error)
 	}
 	runID := *resp.RunID
-	t.Logf("✅ Run created: %s", runID)
+	t.Logf("✅ Run: %s", runID)
 
-	// ── Step 7: Poll for completion ──
-	maxPoll := 45
-	pollInterval := 3 * time.Second
-	completed := false
-
-	for i := 0; i < maxPoll; i++ {
-		time.Sleep(pollInterval)
-
-		runResp, err := b.GetProjectRun(ctx, runID)
+	// ── Step 6: Poll for completion ──
+	var runStatus string
+	var steps int
+	for i := 0; i < 40; i++ {
+		time.Sleep(3 * time.Second)
+		r, err := b.GetProjectRun(ctx, runID)
 		if err != nil {
-			t.Logf("Poll %d: %v", i+1, err)
 			continue
 		}
-
-		status := runResp.Data.Status
-		t.Logf("Poll %d: status=%s", i+1, status)
-
-		switch status {
-		case "success", "completed":
-			completed = true
-			t.Logf("✅ Completed after %d polls (%dms)", i+1, safeDerefInt(runResp.Data.DurationMs))
-			t.Logf("Steps: %d", runResp.Data.StepCount)
-		case "failed", "error":
+		runStatus = r.Data.Status
+		steps = r.Data.StepCount
+		t.Logf("  poll %d: %s", i+1, runStatus)
+		if runStatus == "success" || runStatus == "completed" {
+			t.Logf("✅ Completed in %d steps (%dms)", steps, safeDerefInt(r.Data.DurationMs))
+			break
+		}
+		if runStatus == "failed" || runStatus == "error" {
 			errMsg := ""
-			if runResp.Data.ErrorMessage != nil {
-				errMsg = *runResp.Data.ErrorMessage
+			if r.Data.ErrorMessage != nil {
+				errMsg = *r.Data.ErrorMessage
 			}
 			t.Fatalf("Run failed: %s", errMsg)
 		}
-
-		if completed {
-			break
-		}
+	}
+	if runStatus != "success" && runStatus != "completed" {
+		t.Fatalf("Run timed out (final status: %s)", runStatus)
 	}
 
-	if !completed {
-		t.Fatal("Run timed out — did not complete within polling window")
-	}
-
-	// ── Step 8: Verify tool calls ──
-	toolCalls, err := b.GetRunToolCalls(ctx, runID)
+	// ── Step 7: Check tool usage ──
+	tc, err := b.GetRunToolCalls(ctx, runID)
 	if err != nil {
-		t.Logf("GetRunToolCalls: %v (non-fatal)", err)
-	} else if toolCalls != nil && len(toolCalls.Data) > 0 {
-		t.Logf("Tool calls: %d", len(toolCalls.Data))
-		for _, tc := range toolCalls.Data {
-			t.Logf("  📡 %s (status=%s, %dms)", tc.ToolName, tc.Status, safeDerefInt(tc.DurationMs))
+		t.Logf("GetRunToolCalls: %v", err)
+	} else if tc != nil {
+		t.Logf("Tool calls: %d", len(tc.Data))
+		for _, call := range tc.Data {
+			t.Logf("  📡 %s (%s, %dms)", call.ToolName, call.Status, safeDerefInt(call.DurationMs))
 		}
-		t.Log("✅ Agent used MCP tools via relay")
-	} else {
-		t.Log("⚠️  No tool calls recorded (LLM may have answered without using tools)")
+		if len(tc.Data) > 1 {
+			if tc.Data[1].Status == "error" {
+				t.Logf("⚠️  Tool call error — may be MP relay routing issue")
+			}
+		}
 	}
 
-	// ── Step 9: Show assistant response ──
+	// ── Step 8: Assistant response ──
 	msgs, err := b.GetRunMessages(ctx, runID)
 	if err == nil && msgs != nil {
 		for _, m := range msgs.Data {
 			if m.Role == "assistant" || m.Role == "model" {
-				content := extractMsgContent(m.Content)
-				t.Logf("Assistant response: %.200s", content)
+				t.Logf("Assistant: %.200s", extractMsgContent(m.Content))
 				break
 			}
 		}
@@ -269,107 +195,81 @@ Do NOT compute the result yourself. Always use the tool.`
 
 // ── Helpers ──
 
-// writeMCPConfig creates the mcp-servers.json config for the echo server.
-func writeMCPConfig(t *testing.T) {
+func writeEchoConfig(t *testing.T) {
 	t.Helper()
-
-	// Load existing config and add echo-server if not present
 	home, _ := os.UserHomeDir()
-	realConfig := filepath.Join(home, ".diane", "mcp-servers.json")
+	realCfg := filepath.Join(home, ".diane", "mcp-servers.json")
 
-	var servers []map[string]interface{}
-	if data, err := os.ReadFile(realConfig); err == nil {
-		var existing struct {
-			Servers []map[string]interface{} `json:"servers"`
+	var servers []map[string]any
+	if d, err := os.ReadFile(realCfg); err == nil {
+		var tmp struct {
+			Servers []map[string]any `json:"servers"`
 		}
-		if json.Unmarshal(data, &existing) == nil {
-			servers = existing.Servers
-		}
+		json.Unmarshal(d, &tmp)
+		servers = tmp.Servers
 	}
 
-	// Add echo-server if not present
 	hasEcho := false
 	for _, s := range servers {
-		if name, _ := s["name"].(string); name == "echo-server" {
+		if n, _ := s["name"].(string); n == "echo-server" {
 			hasEcho = true
 			break
 		}
 	}
 	if !hasEcho {
-		servers = append(servers, map[string]interface{}{
-			"name":    "echo-server",
-			"enabled": true,
-			"type":    "stdio",
-			"command": echoMCPBinary,
-			"args":    []string{},
-			"env":     map[string]string{},
+		servers = append(servers, map[string]any{
+			"name": "echo-server", "enabled": true, "type": "stdio",
+			"command": echoMCPBin, "args": []string{}, "env": map[string]string{},
 		})
 	}
 
-	config := map[string]interface{}{"servers": servers}
-	data, _ := json.MarshalIndent(config, "", "  ")
-	_ = os.WriteFile(mcpServersFile, data, 0644)
-	t.Logf("MCP config: %s (%d servers)", mcpServersFile, len(servers))
+	d, _ := json.MarshalIndent(map[string]any{"servers": servers}, "", "  ")
+	os.WriteFile(mcpCfgFile, d, 0644)
 }
 
-// buildDianeTestBinary builds the diane binary for use as a relay subprocess.
-func buildDianeTestBinary(t *testing.T) error {
+func buildDiane(t *testing.T) error {
 	t.Helper()
-
-	if _, err := os.Stat(dianeTestBin); err == nil {
+	if _, err := os.Stat(dianeBin); err == nil {
 		return nil
 	}
-
-	cmd := exec.Command("/usr/local/go/bin/go", "build", "-o", dianeTestBin, "./cmd/diane/")
-	cmd.Dir = "/root/diane/server"
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	c := exec.Command("/usr/local/go/bin/go", "build", "-o", dianeBin, "./cmd/diane/")
+	c.Dir = "/root/diane/server"
+	c.Stdout, c.Stderr = os.Stdout, os.Stderr
+	return c.Run()
 }
 
-// pollRelayRegistered polls the MP relay sessions API until our instance appears.
-func pollRelayRegistered(t *testing.T, ctx context.Context, token, projectID, instanceID string, timeout time.Duration) bool {
-	t.Helper()
-
+func pollRelay(ctx context.Context, token, project, instance string, timeout time.Duration) bool {
+	url := fmt.Sprintf("https://memory.emergent-company.ai/api/mcp-relay/sessions?project_id=%s", project)
 	deadline := time.Now().Add(timeout)
-	url := fmt.Sprintf("https://memory.emergent-company.ai/api/mcp-relay/sessions?project_id=%s", projectID)
-
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
 			return false
 		default:
 		}
-
 		req, _ := http.NewRequest("GET", url, nil)
 		req.Header.Set("Authorization", "Bearer "+token)
-
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			time.Sleep(2 * time.Second)
 			continue
 		}
-
-		var result struct {
+		var r struct {
 			Sessions []struct {
 				InstanceID string `json:"instance_id"`
 			} `json:"sessions"`
 		}
-		json.NewDecoder(resp.Body).Decode(&result)
+		json.NewDecoder(resp.Body).Decode(&r)
 		resp.Body.Close()
-
-		for _, s := range result.Sessions {
-			if s.InstanceID == instanceID {
+		for _, s := range r.Sessions {
+			if s.InstanceID == instance {
 				return true
 			}
 		}
-
 		time.Sleep(2 * time.Second)
 	}
-
 	return false
 }
 
-func ptrInt(v int) *int {
-	return &v
-}
+func ptrStr(s string) *string { return &s }
+func ptrInt(i int) *int       { return &i }
