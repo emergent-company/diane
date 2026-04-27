@@ -86,7 +86,23 @@ func cmdMCPList(args []string) {
 		if *showTools && s.Enabled {
 			if tools, ok := toolsPerServer[s.Name]; ok {
 				if len(tools) > 0 {
-					fmt.Printf("     └ %d tool%s: %s\n", len(tools), plural(len(tools)), strings.Join(tools, ", "))
+					if s.Type != "stdio" {
+						// HTTP/remote server with tools — show auth status
+						if _, err := mcpproxy.LoadTokens(s.Name); err == nil {
+							fmt.Printf("     └ 🔐 Authenticated (%d tool%s available)\n", len(tools), plural(len(tools)))
+						} else {
+							fmt.Printf("     └ %d tool%s: %s\n", len(tools), plural(len(tools)), strings.Join(tools, ", "))
+						}
+					} else {
+						fmt.Printf("     └ %d tool%s: %s\n", len(tools), plural(len(tools)), strings.Join(tools, ", "))
+					}
+				} else if s.Type != "stdio" {
+					// HTTP/remote server with no tools — check auth status
+					if _, err := mcpproxy.LoadTokens(s.Name); err == nil {
+						fmt.Println("     └ 🔐 Authenticated")
+					} else {
+						fmt.Printf("     └ ⚠️  Not authenticated — run: diane mcp auth --server %s\n", s.Name)
+					}
 				} else {
 					fmt.Println("     └ (no tools reported)")
 				}
@@ -151,8 +167,15 @@ func collectTools(configPath string, cfg *mcpproxy.Config) map[string][]string {
 			if tools, ok := serverTools[s.Name]; ok {
 				result[s.Name] = tools
 			} else if s.Type != "stdio" {
-				// Remote servers won't appear in local proxy tools
-				result[s.Name] = []string{}
+				// Remote/HTTP servers won't appear in proxy tools if not authenticated.
+				// Check OAuth token status for better user feedback.
+				if _, err := mcpproxy.LoadTokens(s.Name); err == nil {
+					// Has stored tokens — authenticated but no tools returned
+					result[s.Name] = []string{}
+				} else {
+					// No stored tokens — needs user to run auth command
+					result[s.Name] = nil
+				}
 			} else {
 				result[s.Name] = nil // failed
 			}
