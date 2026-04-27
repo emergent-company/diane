@@ -225,10 +225,11 @@ func (c *MCPClient) sendRequest(method string, params json.RawMessage) (json.Raw
 		return nil, fmt.Errorf("failed to send %s: %w", method, err)
 	}
 
-	// Wait for response with 10-second timeout
-	// Without this, a slow-starting MCP server blocks the entire proxy's
-	// ListAllTools (and therefore the relay's sendRegister poll loop).
-	timeout := 10 * time.Second
+	// Wait for response with 30-second timeout.
+	// Stdio MCP tools (e.g. AirMCP Apple API calls) can take 10-20s
+	// to respond. The relay's tool watch loop handles slow-starting
+	// servers independently, so this timeout covers tool calls too.
+	timeout := 30 * time.Second
 	select {
 	case resp, ok := <-respCh:
 		if !ok {
