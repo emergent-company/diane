@@ -343,15 +343,16 @@ func (s *MCPSession) sendWS(msg json.RawMessage) {
 func (s *MCPSession) forwardToMCP(frame RelayFrame) {
 	// Extract the request ID from the JSON-RPC payload so we can match
 	// the response when it comes back from the MCP subprocess.
-	var payloadID json.RawMessage
 	var payloadMeta struct {
 		JSONRPC string          `json:"jsonrpc"`
 		ID      json.RawMessage `json:"id"`
 	}
 	if err := json.Unmarshal(frame.Payload, &payloadMeta); err == nil && payloadMeta.ID != nil {
-		payloadID = payloadMeta.ID
-		// Store the ID so the MCP stdout loop can wrap the response in a ResponseFrame.
-		s.pending.Store(string(payloadID), true)
+		// json.RawMessage for a string contains JSON quotes — unmarshal to string.
+		var idStr string
+		if err := json.Unmarshal(payloadMeta.ID, &idStr); err == nil && idStr != "" {
+			s.pending.Store(idStr, true)
+		}
 	}
 
 	// Send the MCP JSON-RPC request to the subprocess
