@@ -350,16 +350,15 @@ func LoadDiscoveredConfig(serverName string) *OAuthConfig {
 }
 
 // ensureAuthenticated checks for stored tokens or runs OAuth flow on 401.
-// Returns the token to use, or empty string if no auth is needed.
+// Always checks for stored tokens first, regardless of whether OAuth is
+// configured in the server config — allows auto-discovered OAuth tokens
+// (e.g., infakt) to work on subsequent connections.
 func (c *HTTPMCPClient) ensureAuthenticated() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.Token != "" {
 		return nil
-	}
-	if c.OAuth == nil {
-		return nil // no auth configured
 	}
 
 	// Try loading stored tokens
@@ -368,11 +367,16 @@ func (c *HTTPMCPClient) ensureAuthenticated() error {
 		// Check expiry
 		if !tokens.ExpiresAt.IsZero() && time.Now().After(tokens.ExpiresAt) {
 			// Expired — try to refresh
-			if tokens.RefreshToken != "" && c.OAuth.TokenURL != "" {
-				newTokens, refreshErr := RefreshTokens(c.OAuth.TokenURL, c.OAuth.ClientID, tokens.RefreshToken)
+			oauth := c.OAuth
+			if oauth == nil || oauth.TokenURL == "" {
+				// Try loading discovered OAuth config for refresh
+				oauth = LoadDiscoveredConfig(c.Name)
+			}
+			if oauth != nil && tokens.RefreshToken != "" && oauth.TokenURL != "" {
+				clientID := oauth.ClientID
+				newTokens, refreshErr := RefreshTokens(oauth.TokenURL, clientID, tokens.RefreshToken)
 				if refreshErr == nil {
 					c.Token = newTokens.AccessToken
-					// Save the refreshed tokens
 					_ = SaveTokens(c.Name, newTokens)
 					return nil
 				}
@@ -385,7 +389,15 @@ func (c *HTTPMCPClient) ensureAuthenticated() error {
 		return nil
 	}
 
-	return nil // no stored token, will trigger reauth on 401
+	// No stored token — try to load discovered OAuth config for later use
+	if c.OAuth == nil {
+		discovered := LoadDiscoveredConfig(c.Name)
+		if discovered != nil {
+			c.OAuth = discovered
+		}
+	}
+
+	return nil // will trigger reauth on 401
 }
 
 // reauthenticate runs the OAuth flow (device or auth code) interactively.

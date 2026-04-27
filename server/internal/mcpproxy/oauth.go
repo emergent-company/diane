@@ -3,6 +3,7 @@ package mcpproxy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -503,17 +505,32 @@ func RefreshTokens(tokenURL, clientID, refreshToken string) (*StoredTokens, erro
 	return stored, nil
 }
 
+// successPage is a minimal HTML page shown after successful OAuth authorization.
+const successPage = `<!DOCTYPE html>
+<html><head><title>Diane Authorization</title><style>
+body{font-family:-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f5f5f7}
+.card{background:#fff;border-radius:16px;padding:40px;box-shadow:0 2px 10px rgba(0,0,0,.1);text-align:center}
+h1{color:#1a1a2e;font-size:24px;margin:0 0 10px}
+p{color:#666;margin:0}
+</style></head><body>
+<div class="card"><h1>✅ Authorization Complete</h1>
+<p>You can close this window and return to Diane.</p></div></body></html>`
+
+// defaultCallbackPort is the standard port for the OAuth callback server.
+const defaultCallbackPort = 28561
+
 // AuthenticateAuthCodeFlow performs OAuth authorization code flow with PKCE.
 // Designed for headless environments:
 //  1. Generates PKCE params
-//  2. Prints authorization URL + instructions to stderr
-//  3. Reads redirect URL from stdin (user paste)
-//  4. Extracts auth code from the URL
+//  2. Starts a local HTTP server to catch the redirect (falls back to stdin paste)
+//  3. Prints authorization URL + opens browser on macOS
+//  4. Catches the redirect with the auth code
 //  5. Exchanges code for tokens
 //  6. Saves tokens to ~/.diane/secrets/<name>.json
 //
 // On macOS, also calls exec.Command("open", url) to open the browser automatically.
-// The redirect_uri is derived from the redirect URL that the user pastes.
+// The redirect_uri is http://localhost:{port}/callback where {port} is
+// 28561 by default, or an available port if 28561 is taken.
 func AuthenticateAuthCodeFlow(serverName string, oauth *OAuthConfig) (string, error) {
 	if oauth == nil {
 		return "", fmt.Errorf("OAuthConfig is nil")
@@ -531,6 +548,138 @@ func AuthenticateAuthCodeFlow(serverName string, oauth *OAuthConfig) (string, er
 	// Step 1: Generate PKCE parameters
 	verifier := GenerateCodeVerifier()
 	challenge := GenerateCodeChallenge(verifier)
+
+	// Step 2: Try to start a local HTTP server for the callback
+	codeChan := make(chan string, 1)
+	errChan := make(chan error, 1)
+
+	port, err := startCallbackServer(codeChan, errChan)
+	if err != nil {
+		// Can't start local server — fall back to stdin paste
+		log.Printf("[OAuth] Cannot start callback server: %v, falling back to stdin", err)
+		return authenticateAuthCodeFlowStdin(serverName, oauth, verifier, challenge)
+	}
+
+	// Use the local port as the redirect URI
+	redirectURI := fmt.Sprintf("http://localhost:%d/callback", port)
+
+	// Build authorization URL
+	authURL, err := url.Parse(oauth.AuthorizationURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse authorization URL: %w", err)
+	}
+	q := authURL.Query()
+	q.Set("response_type", "code")
+	q.Set("client_id", oauth.ClientID)
+	q.Set("redirect_uri", redirectURI)
+	q.Set("code_challenge", challenge)
+	q.Set("code_challenge_method", "S256")
+	if len(oauth.Scopes) > 0 {
+		q.Set("scope", strings.Join(oauth.Scopes, " "))
+	}
+	authURL.RawQuery = q.Encode()
+
+	// Print the prompt
+	fmt.Fprintf(os.Stderr, "\n🔐 Authorization required for %s\n", serverName)
+	fmt.Fprintf(os.Stderr, "   A browser window should open automatically.\n")
+	fmt.Fprintf(os.Stderr, "   If not, open this URL:\n")
+	fmt.Fprintf(os.Stderr, "   %s\n\n", authURL.String())
+
+	// Open browser on macOS
+	if runtime.GOOS == "darwin" {
+		exec.Command("open", authURL.String()).Start()
+	}
+
+	// Wait for the callback (with 5-minute timeout)
+	select {
+	case code := <-codeChan:
+		// Got the auth code — exchange for tokens
+		stored, err := ExchangeCodeForTokens(oauth.TokenURL, oauth.ClientID, code, redirectURI, verifier)
+		if err != nil {
+			return "", fmt.Errorf("token exchange failed: %w", err)
+		}
+		if err := SaveTokens(serverName, stored); err != nil {
+			log.Printf("Warning: failed to save OAuth tokens for %s: %v", serverName, err)
+		}
+		fmt.Fprintf(os.Stderr, "✅ OAuth authorization complete for %s\n", serverName)
+		return stored.AccessToken, nil
+
+	case err := <-errChan:
+		return "", fmt.Errorf("callback server error: %w", err)
+
+	case <-time.After(5 * time.Minute):
+		return "", fmt.Errorf("authorization timed out after 5 minutes")
+	}
+}
+
+// startCallbackServer starts a local HTTP server on an available port.
+// The server handles GET /callback?code=... requests and sends the code
+// to the provided channel. Returns the port number or an error.
+func startCallbackServer(codeChan chan string, errChan chan error) (int, error) {
+	// Try the default port first, then fall back to random
+	port := defaultCallbackPort
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		// Default port taken — try random
+		listener, err = net.Listen("tcp", ":0")
+		if err != nil {
+			return 0, fmt.Errorf("cannot open callback server: %w", err)
+		}
+		port = listener.Addr().(*net.TCPAddr).Port
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
+		code := r.URL.Query().Get("code")
+		if code == "" {
+			w.Header().Set("Content-Type", "text/plain")
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("Missing 'code' parameter"))
+			errChan <- fmt.Errorf("callback missing code parameter")
+			return
+		}
+		// Show success page
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(successPage))
+		codeChan <- code
+	})
+
+	server := &http.Server{Handler: mux}
+	go func() {
+		if serveErr := server.Serve(listener); serveErr != nil && serveErr != http.ErrServerClosed {
+			errChan <- fmt.Errorf("callback server failed: %w", serveErr)
+		}
+	}()
+
+	// Shut down the server after we get the code or error
+	go func() {
+		select {
+		case <-codeChan:
+			server.Shutdown(context.Background())
+		case <-errChan:
+			server.Shutdown(context.Background())
+		}
+	}()
+
+	return port, nil
+}
+
+// authenticateAuthCodeFlowStdin is the fallback path that reads the redirect
+// URL from stdin (for environments without a local server).
+func authenticateAuthCodeFlowStdin(serverName string, oauth *OAuthConfig, verifier, challenge string) (string, error) {
+	if oauth == nil {
+		return "", fmt.Errorf("OAuthConfig is nil")
+	}
+	if oauth.ClientID == "" {
+		return "", fmt.Errorf("OAuthConfig.ClientID is required")
+	}
+	if oauth.AuthorizationURL == "" {
+		return "", fmt.Errorf("OAuthConfig.AuthorizationURL is required")
+	}
+	if oauth.TokenURL == "" {
+		return "", fmt.Errorf("OAuthConfig.TokenURL is required")
+	}
 
 	// Build authorization URL
 	authURL, err := url.Parse(oauth.AuthorizationURL)
