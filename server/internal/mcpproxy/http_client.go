@@ -116,9 +116,13 @@ func (c *HTTPMCPClient) sendRequest(method string, params json.RawMessage) (json
 			if discErr == nil && discovered != nil {
 				c.OAuth = discovered
 				_ = SaveDiscoveredConfig(c.Name, discovered)
-			} else {
-				return nil, fmt.Errorf("%s unauthorized (401): %w", method, discErr)
+				log.Printf("[OAuth] Discovered and saved OAuth config for %s. Run 'diane mcp auth --server %s' to authenticate.",
+					c.Name, c.Name)
 			}
+			// Whether discovery succeeded or not, return a clean error
+			// — don't attempt interactive auth here (blocks on stdin in relay context)
+			return nil, fmt.Errorf("%s unauthorized (401): run 'diane mcp auth --server %s' to authenticate",
+				method, c.Name)
 		}
 
 		// Run OAuth flow (device or auth code) interactively
