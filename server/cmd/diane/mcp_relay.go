@@ -85,7 +85,7 @@ func cmdMCPRelay(cfg MCPRelayConfig) {
 		cfg.MCPBinary = exe + " mcp serve"
 	}
 	if cfg.ReconnectDelay == 0 {
-		cfg.ReconnectDelay = 30 * time.Second
+		cfg.ReconnectDelay = 5 * time.Second
 	}
 
 	log.Printf("[mcp-relay] Starting relay for instance: %s", cfg.InstanceID)
@@ -117,6 +117,8 @@ func cmdMCPRelay(cfg MCPRelayConfig) {
 		err := session.run()
 		if err != nil {
 			log.Printf("[mcp-relay] Connection error: %v (reconnecting in %v)", err, backoff)
+		} else {
+			backoff = cfg.ReconnectDelay
 		}
 
 		select {
@@ -322,15 +324,27 @@ func stripToolNamePrefix(raw json.RawMessage, prefix string) json.RawMessage {
 }
 
 func (s *MCPSession) sendRegister() {
-	// Request tool list from MCP server to register with relay
-	initMsg := json.RawMessage(`{"jsonrpc":"2.0","id":0,"method":"tools/list","params":{}}`)
-	s.mcpIn.Write(initMsg)
-	s.mcpIn.WriteByte('\n')
-	s.mcpIn.Flush()
-
-	// Read the tool list response
-	s.mcpOut.Scan()
-	toolsResp := s.mcpOut.Bytes()
+	// Poll tools/list until we get non-empty tools, or timeout (max 15s)
+	var toolsResp []byte
+	for i := 0; i < 15; i++ {
+		initMsg := json.RawMessage(`{"jsonrpc":"2.0","id":0,"method":"tools/list","params":{}}`)
+		s.mcpIn.Write(initMsg)
+		s.mcpIn.WriteByte('\n')
+		s.mcpIn.Flush()
+	
+		if s.mcpOut.Scan() {
+			line := s.mcpOut.Bytes()
+			if s.hasTools(line) || i >= 14 {
+				toolsResp = line
+				break
+			}
+			log.Printf("[mcp-relay] tools/list returned empty tools, retrying (%d/15)...", i+1)
+			time.Sleep(1 * time.Second)
+		} else {
+			toolsResp = s.mcpOut.Bytes()
+			break
+		}
+	}
 
 	// Parse MCP response to extract just the result (strip jsonrpc/id/error wrapper)
 	var mcpResponse struct {
@@ -382,6 +396,40 @@ type RegisterFrame struct {
 }
 
 // init registers the "relay" subcommand
+// hasTools checks if a tools/list response contains AirMCP tools.
+// We specifically wait for airmcp_* tools since other MCP servers (brightdata,
+// devtools) start faster and would cause registration before AirMCP is ready.
+func (s *MCPSession) hasTools(data []byte) bool {
+	var resp struct {
+		Result *struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result,omitempty"`
+		Tools []struct {
+			Name string `json:"name"`
+		} `json:"tools,omitempty"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return false // parse error, wait for next poll
+	}
+	// Check Result wrapper first
+	if resp.Result != nil {
+		for _, t := range resp.Result.Tools {
+			if strings.Contains(t.Name, "airmcp") {
+				return true
+			}
+		}
+	}
+	// Check flat format
+	for _, t := range resp.Tools {
+		if strings.Contains(t.Name, "airmcp") {
+			return true
+		}
+	}
+	return false
+}
+
 func init() {
 	// This runs when the diane CLI starts — registers the relay command
 	// via the command routing in main.go
