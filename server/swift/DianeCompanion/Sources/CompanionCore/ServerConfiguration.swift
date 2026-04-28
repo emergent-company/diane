@@ -35,26 +35,42 @@ final class ServerConfiguration: ObservableObject {
         self.apiKey        = UserDefaults.standard.string(forKey: Keys.apiKey) ?? ""
         self.launchAtLogin = UserDefaults.standard.bool(forKey: Keys.launchAtLogin)
 
-        // Auto-discover server_url from ~/.diane/config.yaml if not already set
-        if self.serverURL.isEmpty {
-            self.serverURL = Self.discoverServerURL()
+        // Auto-discover from ~/.diane/ config if not already persisted
+        if self.serverURL.isEmpty || self.apiKey.isEmpty {
+            let (discoveredURL, discoveredKey) = Self.discoverFromDianeConfig()
+            if self.serverURL.isEmpty { self.serverURL = discoveredURL }
+            if self.apiKey.isEmpty    { self.apiKey = discoveredKey }
         }
     }
 
-    /// Reads ~/.diane/config.yaml and extracts the server_url value.
-    private static func discoverServerURL() -> String {
+    /// Reads ~/.diane/config.yaml and ~/.diane/secrets/memory-config.json
+    /// to auto-populate server URL and API key.
+    private static func discoverFromDianeConfig() -> (url: String, key: String) {
+        var url = ""
+        var key = ""
+
+        // 1. Try ~/.diane/config.yaml for server_url
         let configPath = NSString(string: "~/.diane/config.yaml").expandingTildeInPath
-        guard let content = try? String(contentsOfFile: configPath, encoding: .utf8) else {
-            return ""
-        }
-        for line in content.components(separatedBy: .newlines) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            let prefix = "server_url:"
-            if trimmed.hasPrefix(prefix) {
-                let value = trimmed.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces)
-                if !value.isEmpty { return value }
+        if let content = try? String(contentsOfFile: configPath, encoding: .utf8) {
+            for line in content.components(separatedBy: .newlines) {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                let prefix = "server_url:"
+                if trimmed.hasPrefix(prefix) {
+                    let value = trimmed.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces)
+                    if !value.isEmpty { url = value }
+                }
             }
         }
-        return ""
+
+        // 2. Try ~/.diane/secrets/memory-config.json for project_token
+        let secretsPath = NSString(string: "~/.diane/secrets/memory-config.json").expandingTildeInPath
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: secretsPath)),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let token = json["project_token"] as? String, !token.isEmpty {
+                key = token
+            }
+        }
+
+        return (url, key)
     }
 }
