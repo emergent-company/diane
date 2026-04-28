@@ -1,6 +1,6 @@
 #!/bin/bash
 # build-dmg.sh — Build, sign, notarize, and package the Diane Mac app as a .dmg
-# Usage: ./Scripts/build-dmg.sh [--release] [--notarize]
+# Usage: ./Scripts/build-dmg.sh [--release] [--notarize] [--no-sign]
 #
 # Environment variables (for CI / notarization):
 #   DEVELOPMENT_TEAM     Apple Developer Team ID (e.g. "XXXXXXXXXX")
@@ -19,6 +19,16 @@ EXPORT_PATH="build/Export"
 DMG_NAME="Diane"
 VERSION=$(defaults read "$(pwd)/DianeCompanion/Info.plist" CFBundleShortVersionString 2>/dev/null || echo "1.0.0")
 CONFIGURATION="Release"
+NO_SIGN=false
+
+# Parse arguments
+for arg in "$@"; do
+  case "$arg" in
+    --no-sign) NO_SIGN=true ;;
+    --notarize) ;;  # handled later
+    --release) ;;   # default
+  esac
+done
 
 echo "==> Building Diane v${VERSION}"
 
@@ -30,27 +40,48 @@ else
     echo "⚠️  xcodegen not found — using existing .xcodeproj"
 fi
 
-# Step 2: Archive
-echo "==> Archiving..."
-xcodebuild archive \
-    -project "${PROJECT}" \
-    -scheme "${SCHEME}" \
-    -configuration "${CONFIGURATION}" \
-    -archivePath "${ARCHIVE_PATH}" \
-    -derivedDataPath "${DERIVED_DATA}" \
-    DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-}" \
-    CODE_SIGN_STYLE="${DEVELOPMENT_TEAM:+Manual}" \
-    | xcpretty || true
+if [ "$NO_SIGN" = true ]; then
+    # ── Unsigned build ──
+    echo "==> Building unsigned (--no-sign)..."
+    xcodebuild build \
+        -project "${PROJECT}" \
+        -scheme "${SCHEME}" \
+        -configuration "${CONFIGURATION}" \
+        -derivedDataPath "${DERIVED_DATA}" \
+        CODE_SIGN_IDENTITY="" \
+        CODE_SIGNING_REQUIRED=NO \
+        CODE_SIGN_ENTITLEMENTS="" \
+        CODE_SIGNING_ALLOWED=NO \
+        | xcpretty || true
 
-# Step 3: Export .app
-echo "==> Exporting .app..."
-mkdir -p "${EXPORT_PATH}"
-xcodebuild -exportArchive \
-    -archivePath "${ARCHIVE_PATH}" \
-    -exportPath "${EXPORT_PATH}" \
-    -exportOptionsPlist Scripts/ExportOptions.plist
+    APP_PATH=$(find "${DERIVED_DATA}/Build/Products/${CONFIGURATION}" -name "*.app" -type d | head -1)
+    if [ -z "$APP_PATH" ]; then
+        echo "❌ Could not find built .app in DerivedData"
+        exit 1
+    fi
+    echo "==> Found app at: ${APP_PATH}"
+else
+    # ── Signed/archived build ──
+    echo "==> Archiving..."
+    xcodebuild archive \
+        -project "${PROJECT}" \
+        -scheme "${SCHEME}" \
+        -configuration "${CONFIGURATION}" \
+        -archivePath "${ARCHIVE_PATH}" \
+        -derivedDataPath "${DERIVED_DATA}" \
+        DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-}" \
+        CODE_SIGN_STYLE="${DEVELOPMENT_TEAM:+Manual}" \
+        | xcpretty || true
 
-APP_PATH="${EXPORT_PATH}/${SCHEME}.app"
+    echo "==> Exporting .app..."
+    mkdir -p "${EXPORT_PATH}"
+    xcodebuild -exportArchive \
+        -archivePath "${ARCHIVE_PATH}" \
+        -exportPath "${EXPORT_PATH}" \
+        -exportOptionsPlist Scripts/ExportOptions.plist
+
+    APP_PATH="${EXPORT_PATH}/${SCHEME}.app"
+fi
 
 # Step 4: Notarize (optional)
 if [[ "${1:-}" == "--notarize" ]]; then
