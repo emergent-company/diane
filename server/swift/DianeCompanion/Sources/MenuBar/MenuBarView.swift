@@ -135,6 +135,12 @@ struct MenuBarView: View {
 
             if updateChecker.isUpdating {
                 ProgressView().controlSize(.small)
+                if !updateChecker.updateOutput.isEmpty {
+                    Text(updateChecker.updateOutput)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
             } else {
                 Button(action: { Task { await updateChecker.performUpdate() } }) {
                     Text("Update")
