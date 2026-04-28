@@ -123,6 +123,7 @@ jobs:
           fi
         working-directory: server/swift/DianeCompanion
         env:
+          VERSION: ${{ github.ref_name }}
           DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM || '' }}
           NOTARIZE_APPLE_ID: ${{ secrets.NOTARIZE_APPLE_ID || '' }}
           NOTARIZE_PASSWORD: ${{ secrets.NOTARIZE_PASSWORD || '' }}

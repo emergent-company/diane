@@ -17,9 +17,19 @@ DERIVED_DATA="build/DerivedData"
 ARCHIVE_PATH="build/Diane.xcarchive"
 EXPORT_PATH="build/Export"
 DMG_NAME="Diane"
-VERSION=$(defaults read "$(pwd)/DianeCompanion/Info.plist" CFBundleShortVersionString 2>/dev/null || echo "1.0.0")
 CONFIGURATION="Release"
 NO_SIGN=false
+
+# Allow VERSION override from env (CI provides github.ref_name)
+if [ -n "${VERSION:-}" ]; then
+    echo "==> Setting version from environment: ${VERSION}"
+    defaults write "$(pwd)/DianeCompanion/Info.plist" CFBundleShortVersionString "${VERSION}"
+    defaults write "$(pwd)/DianeCompanion/Info.plist" CFBundleVersion "${VERSION#v}"
+else
+    VERSION=$(defaults read "$(pwd)/DianeCompanion/Info.plist" CFBundleShortVersionString 2>/dev/null || echo "0.0.0-DEVELOPMENT")
+fi
+
+echo "==> Building Diane v${VERSION}"
 
 # Parse arguments
 for arg in "$@"; do
@@ -29,8 +39,6 @@ for arg in "$@"; do
     --release) ;;   # default
   esac
 done
-
-echo "==> Building Diane v${VERSION}"
 
 # Step 1: Generate Xcode project (requires xcodegen)
 if command -v xcodegen &>/dev/null; then
