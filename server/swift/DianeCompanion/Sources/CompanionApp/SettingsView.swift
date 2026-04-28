@@ -153,26 +153,6 @@ struct SettingsView: View {
                 .padding(4)
             }
 
-            // Poll interval
-            GroupBox("Polling") {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("Check every")
-                        Slider(value: $serverConfig.pollInterval, in: 5...60, step: 5)
-                            .onChange(of: serverConfig.pollInterval) { _ in
-                                statusMonitor.configure(from: serverConfig)
-                            }
-                        Text("\(Int(serverConfig.pollInterval))s")
-                            .monospacedDigit()
-                            .frame(width: 36, alignment: .trailing)
-                    }
-                    Text("How often to check the server health endpoint.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(4)
-            }
-
             Spacer()
         }
         .padding(20)

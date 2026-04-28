@@ -17,10 +17,6 @@ final class ServerConfiguration: ObservableObject {
         didSet { UserDefaults.standard.set(launchAtLogin, forKey: Keys.launchAtLogin) }
     }
 
-    @Published var pollInterval: TimeInterval {
-        didSet { UserDefaults.standard.set(pollInterval, forKey: Keys.pollInterval) }
-    }
-
     var isConfigured: Bool { !serverURL.isEmpty }
 
     var baseURL: URL? {
@@ -32,14 +28,33 @@ final class ServerConfiguration: ObservableObject {
         static let serverURL     = "serverURL"
         static let apiKey        = "apiKey"
         static let launchAtLogin = "launchAtLogin"
-        static let pollInterval  = "pollInterval"
     }
 
     init() {
         self.serverURL     = UserDefaults.standard.string(forKey: Keys.serverURL) ?? ""
         self.apiKey        = UserDefaults.standard.string(forKey: Keys.apiKey) ?? ""
         self.launchAtLogin = UserDefaults.standard.bool(forKey: Keys.launchAtLogin)
-        let stored         = UserDefaults.standard.double(forKey: Keys.pollInterval)
-        self.pollInterval  = stored > 0 ? stored : 10
+
+        // Auto-discover server_url from ~/.diane/config.yaml if not already set
+        if self.serverURL.isEmpty {
+            self.serverURL = Self.discoverServerURL()
+        }
+    }
+
+    /// Reads ~/.diane/config.yaml and extracts the server_url value.
+    private static func discoverServerURL() -> String {
+        let configPath = NSString(string: "~/.diane/config.yaml").expandingTildeInPath
+        guard let content = try? String(contentsOfFile: configPath, encoding: .utf8) else {
+            return ""
+        }
+        for line in content.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let prefix = "server_url:"
+            if trimmed.hasPrefix(prefix) {
+                let value = trimmed.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces)
+                if !value.isEmpty { return value }
+            }
+        }
+        return ""
     }
 }

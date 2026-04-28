@@ -34,7 +34,7 @@ final class StatusMonitor: ObservableObject {
             return
         }
         healthURL = base.appendingPathComponent("health")
-        startPolling(interval: serverConfig.pollInterval)
+        startPolling(interval: 30)
     }
 
     func checkNow() {
