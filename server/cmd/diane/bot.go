@@ -81,6 +81,7 @@ func runBotOnce(pc *config.ProjectConfig) error {
 	bot.AttachBridge(bridge)
 
 	log.Printf("Starting Diane bot for project '%s'...", pc.ServerURL+"/project/"+pc.ProjectID)
+	log.Printf("[BOOT] Bot initialized dedup_cookie=%s restart_count=%d", bot.DedupCookie, bot.RestartCount)
 	log.Printf("  Discord bot token: configured")
 	log.Printf("  Memory server:     %s", pc.ServerURL)
 	log.Printf("  Memory project:    %s", pc.ProjectID)
