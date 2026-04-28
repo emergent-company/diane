@@ -1,0 +1,80 @@
+name: DianeCompanion
+options:
+  bundleIdPrefix: com.emergent-company
+  deploymentTarget:
+    macOS: "13.0"
+  xcodeVersion: "15.0"
+  generateEmptyDirectories: true
+  indentWidth: 4
+  tabWidth: 4
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "13.0"
+    PRODUCT_BUNDLE_IDENTIFIER: com.emergent-company.diane-companion
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_HARDENED_RUNTIME: YES
+
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    version: 2.7.0
+
+targets:
+  DianeCompanion:
+    type: application
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources:
+      - path: Sources
+        excludes:
+          - "**/*.plist"
+          - "**/*.entitlements"
+    dependencies:
+      - package: Sparkle
+        product: Sparkle
+    settings:
+      base:
+        PRODUCT_NAME: DianeCompanion
+        INFOPLIST_FILE: DianeCompanion/Info.plist
+        CODE_SIGN_ENTITLEMENTS: DianeCompanion/DianeCompanion.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      configs:
+        Debug:
+          CODE_SIGN_IDENTITY: "-"
+        Release:
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+    postbuildScripts:
+      - script: "cp -f ${TARGET_BUILD_DIR}/${PRODUCT_NAME}.app/Contents/Resources/bundled-cli ${TARGET_BUILD_DIR}/${PRODUCT_NAME}.app/Contents/Resources/\n# Download diane CLI for current architecture\nARCH=$(uname -m)\nif [ \"$ARCH\" = \"arm64\" ]; then\n  curl -L -o ${TARGET_BUILD_DIR}/${PRODUCT_NAME}.app/Contents/Resources/diane https://github.com/emergent-company/diane/releases/latest/download/diane-darwin-arm64\nelse\n  curl -L -o ${TARGET_BUILD_DIR}/${PRODUCT_NAME}.app/Contents/Resources/diane https://github.com/emergent-company/diane/releases/latest/download/diane-darwin-amd64\nfi\nchmod +x ${TARGET_BUILD_DIR}/${PRODUCT_NAME}.app/Contents/Resources/diane\"
+        name: "Copy diane CLI"
+    info:
+      path: DianeCompanion/Info.plist
+    entitlements:
+      path: DianeCompanion/DianeCompanion.entitlements
+
+  DianeCompanionTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources:
+      - path: DianeCompanionTests
+    dependencies:
+      - target: DianeCompanion
+    settings:
+      base:
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/DianeCompanion.app/Contents/MacOS/DianeCompanion"
+
+  DianeCompanionUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources:
+      - path: DianeCompanionUITests
+    dependencies:
+      - target: DianeCompanion
+    settings:
+      base:
+        TEST_TARGET_NAME: DianeCompanion

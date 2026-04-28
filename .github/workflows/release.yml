@@ -61,9 +61,73 @@ jobs:
             dist/${{ matrix.name }}.tar.gz
             dist/${{ matrix.name }}.tar.gz.sha256
 
+  companion:
+    name: Build Companion App
+    runs-on: macos-14
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+
+      - name: Install tools
+        run: |
+          brew install xcodegen create-dmg
+
+      - name: Download diane binary
+        uses: actions/download-artifact@v4
+        with:
+          name: diane-darwin-arm64
+          path: server/swift/DianeCompanion/Resources/
+
+      - name: Extract binary
+        run: |
+          mkdir -p server/swift/DianeCompanion/Resources
+          cd server/swift/DianeCompanion/Resources
+          tar xzf diane-darwin-arm64.tar.gz 2>/dev/null || true
+          chmod +x diane 2>/dev/null || true
+          rm -f diane-darwin-arm64.tar.gz
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+        working-directory: server/swift/DianeCompanion
+
+      - name: Import signing certificate
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: temp-keychain-password
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          echo "$CERTIFICATE_BASE64" | base64 --decode -o "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -P "$CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+      - name: Build, sign, notarize, and package
+        run: |
+          chmod +x Scripts/build-dmg.sh
+          ./Scripts/build-dmg.sh --notarize
+        working-directory: server/swift/DianeCompanion
+        env:
+          DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
+          NOTARIZE_APPLE_ID: ${{ secrets.NOTARIZE_APPLE_ID }}
+          NOTARIZE_PASSWORD: ${{ secrets.NOTARIZE_PASSWORD }}
+          NOTARIZE_TEAM_ID: ${{ secrets.NOTARIZE_TEAM_ID }}
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: diane-companion-dmg
+          path: server/swift/DianeCompanion/build/DianeCompanion-*.dmg
+
   release:
     name: Release
-    needs: build
+    needs: [build, companion]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -86,6 +150,7 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/checksums.txt
+            dist/DianeCompanion-*.dmg
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
