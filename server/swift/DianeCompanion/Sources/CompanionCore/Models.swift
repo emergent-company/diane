@@ -226,23 +226,22 @@ public struct Agent: Identifiable, Codable, Hashable, Sendable {
     public static func == (lhs: Agent, rhs: Agent) -> Bool { lhs.id == rhs.id }
 }
 
-// MARK: - MCP Server
+// MARK: - MCP Server (local API format from diane serve)
 
 public struct MCPServer: Identifiable, Codable, Hashable, Sendable {
-    public let id: String
     public let name: String
-    public let serverType: String?  // "sse" | "stdio"
+    public let enabled: Bool
+    public let type: String     // "stdio" | "http" | "sse" | "streamable-http"
     public let url: String?
-    public let status: String?
-    public let tools: [MCPTool]?
+    public let command: String?
+    public let args: [String]?
+    public let env: [String: String]?
+    public let timeout: Int?
 
-    enum CodingKeys: String, CodingKey {
-        case id, name, url, status, tools
-        case serverType = "server_type"
-    }
+    public var id: String { name }
 
-    public func hash(into hasher: inout Hasher) { hasher.combine(id) }
-    public static func == (lhs: MCPServer, rhs: MCPServer) -> Bool { lhs.id == rhs.id }
+    public func hash(into hasher: inout Hasher) { hasher.combine(name) }
+    public static func == (lhs: MCPServer, rhs: MCPServer) -> Bool { lhs.name == rhs.name }
 }
 
 public struct MCPTool: Identifiable, Codable, Sendable {

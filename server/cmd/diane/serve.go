@@ -13,9 +13,8 @@ import (
 
 // cmdServe is the unified service command for Diane.
 //
-// It starts both the Discord bot and the MCP relay in a single process,
-// eliminating the possibility of duplicate instances (one Gateway connection,
-// one WebSocket relay, one PID file).
+// It starts the Discord bot, the MCP relay, and the local companion API
+// in a single process, eliminating the possibility of duplicate instances.
 //
 // Usage: diane serve [flags]
 //
@@ -24,16 +23,13 @@ import (
 //	--pidfile <path>    PID lock file path (default: ~/.diane/serve.pid)
 //	                    Set to "" to disable locking (force-start)
 //	--instance <name>   MCP relay instance ID (from config if empty)
-//
-// What starts depends on config:
-//   - Master nodes (mode: "" or "master") with DiscordBotToken set → Discord bot
-//   - Master nodes with InstanceID set → MCP relay
-//   - Slave nodes (mode: "slave") → MCP relay only
+//	--api-port <port>   Local companion API port (default: 8890, set to 0 to disable)
 func cmdServe() {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	pidfileDefault := filepath.Join(os.Getenv("HOME"), ".diane", "serve.pid")
 	pidfilePtr := fs.String("pidfile", pidfileDefault, "PID lock file path (empty = disable)")
 	instancePtr := fs.String("instance", "", "MCP relay instance ID (from config if empty)")
+	apiPort := fs.Int("api-port", 8890, "Local companion API port (0 = disable)")
 	fs.Parse(os.Args[2:])
 
 	// ── PID lock: atomic flock guards against duplicate instances ──
@@ -55,26 +51,31 @@ func cmdServe() {
 	hasInstance := instancePtr != nil && *instancePtr != "" || pc.InstanceID != ""
 	startBot := isMaster && hasDiscord
 	startRelay := hasInstance
+	startAPI := *apiPort > 0
 
 	if !startBot && !startRelay {
-		// On a master without any services configured, give a helpful message
-		if isMaster && !hasDiscord && !hasInstance {
-			log.Fatal(
-				"[SERVE] Nothing to serve.\n" +
-					"       Configure a Discord bot token or an instance ID in ~/.config/diane.yml\n" +
-					"       Or run one of:\n" +
-					"         diane bot          (Discord bot only)\n" +
-					"         diane mcp relay    (MCP relay only)",
-			)
-		}
-		if isMaster && !hasDiscord {
-			log.Println("[SERVE] No Discord bot token configured — skipping Discord bot")
-		}
-		if !hasInstance {
-			log.Println("[SERVE] No instance ID configured — skipping MCP relay")
-		}
-		if !startBot && !startRelay {
-			return
+		if startAPI {
+			log.Printf("[SERVE] Local API running on port %d (no bot or relay configured)", *apiPort)
+		} else {
+			// On a master without any services configured, give a helpful message
+			if isMaster && !hasDiscord && !hasInstance {
+				log.Fatal(
+					"[SERVE] Nothing to serve.\n" +
+						"       Configure a Discord bot token or an instance ID in ~/.config/diane.yml\n" +
+						"       Or run one of:\n" +
+						"         diane bot          (Discord bot only)\n" +
+						"         diane mcp relay    (MCP relay only)",
+				)
+			}
+			if isMaster && !hasDiscord {
+				log.Println("[SERVE] No Discord bot token configured — skipping Discord bot")
+			}
+			if !hasInstance {
+				log.Println("[SERVE] No instance ID configured — skipping MCP relay")
+			}
+			if !startBot && !startRelay && !startAPI {
+				return
+			}
 		}
 	}
 
@@ -86,9 +87,24 @@ func cmdServe() {
 	if startRelay {
 		log.Printf("  Relay:    ✓ instance=%s", resolveInstanceID(pc, *instancePtr))
 	}
+	if startAPI {
+		log.Printf("  LocalAPI: ✓ port=%d", *apiPort)
+	}
 
 	// ── Error collector ──
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
+
+	// ── Start local companion API ──
+	var apiServer *localAPIServer
+	if startAPI {
+		as, err := startLocalAPI(pc, *apiPort)
+		if err != nil {
+			log.Printf("[SERVE] Failed to start local API: %v", err)
+		} else {
+			apiServer = as
+			defer apiServer.close()
+		}
+	}
 
 	// ── Start Discord bot ──
 	if startBot {

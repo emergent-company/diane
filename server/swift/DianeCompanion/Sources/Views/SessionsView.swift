@@ -1,24 +1,23 @@
 import SwiftUI
 
-/// Sessions view — lists Diane conversation sessions with message transcripts.
+/// Sessions view — lists Diane conversation sessions from the local API.
 struct SessionsView: View {
     @EnvironmentObject var appState: AppState
-    @EnvironmentObject var apiClient: EmergentAPIClient
     @EnvironmentObject var serverConfig: ServerConfiguration
-    
+    @EnvironmentObject var dianeAPI: DianeAPIClient
+
     @State private var sessions: [DianeSession] = []
     @State private var selectedSession: DianeSession? = nil
     @State private var messages: [DianeMessage] = []
     @State private var isLoading = false
     @State private var isLoadingMessages = false
     @State private var error: String? = nil
-    @State private var statusFilter: String? = nil
-    
+
     var body: some View {
         HSplitView {
             sessionsList
                 .frame(minWidth: 300)
-            
+
             if let session = selectedSession {
                 sessionDetailPanel(session)
                     .frame(minWidth: 350)
@@ -34,39 +33,19 @@ struct SessionsView: View {
         .navigationTitle("Sessions")
         .task { await load() }
     }
-    
+
     // MARK: - Sessions List
-    
+
     @ViewBuilder
     private var sessionsList: some View {
         VStack(spacing: 0) {
-            // Filter bar
-            HStack(spacing: 6) {
-                Picker("Status", selection: $statusFilter) {
-                    Text("All").tag(Optional<String>.none)
-                    Text("Active").tag(Optional("active"))
-                    Text("Completed").tag(Optional("completed"))
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .onChange(of: statusFilter) { _ in
-                    Task { await load() }
-                }
-                
-                Spacer()
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            
-            Divider()
-            
             if let err = error {
                 ErrorBannerView(message: err) {
                     Task { await load() }
                 }
                 .padding(8)
             }
-            
+
             if isLoading && sessions.isEmpty {
                 LoadingStateView(message: "Loading sessions…")
             } else if sessions.isEmpty {
@@ -82,7 +61,7 @@ struct SessionsView: View {
                 }
                 .listStyle(.plain)
             }
-            
+
             Divider()
             HStack {
                 Text("\(sessions.count) session\(sessions.count == 1 ? "" : "s")")
@@ -102,7 +81,7 @@ struct SessionsView: View {
             }
         }
     }
-    
+
     private func sessionRow(_ session: DianeSession) -> some View {
         HStack(spacing: 8) {
             Circle()
@@ -134,9 +113,9 @@ struct SessionsView: View {
         }
         .padding(.vertical, 2)
     }
-    
+
     // MARK: - Session Detail (Message Transcript)
-    
+
     private func sessionDetailPanel(_ session: DianeSession) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             // Header
@@ -155,9 +134,9 @@ struct SessionsView: View {
             }
             .padding(12)
             .background(Color.primary.opacity(0.04))
-            
+
             Divider()
-            
+
             if isLoadingMessages {
                 LoadingStateView(message: "Loading messages…")
             } else if messages.isEmpty {
@@ -186,19 +165,19 @@ struct SessionsView: View {
             }
         }
     }
-    
+
     private func messageBubble(_ message: DianeMessage) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 roleBadge(message.role)
                 if let seq = message.sequenceNumber {
-                    Text("##\(seq)")
+                    Text("#\(seq)")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
                 Spacer()
             }
-            
+
             Text(message.content)
                 .font(.system(.body, design: .monospaced))
                 .textSelection(.enabled)
@@ -207,7 +186,7 @@ struct SessionsView: View {
         .padding(10)
         .background(message.role == "assistant" ? Color.primary.opacity(0.03) : Color.clear)
     }
-    
+
     private func roleBadge(_ role: String) -> some View {
         Text(role.capitalized)
             .font(.caption2)
@@ -218,7 +197,7 @@ struct SessionsView: View {
             .background(roleColor(role).opacity(0.1))
             .cornerRadius(4)
     }
-    
+
     private func roleColor(_ role: String) -> Color {
         switch role.lowercased() {
         case "user": return .blue
@@ -227,31 +206,26 @@ struct SessionsView: View {
         default: return .secondary
         }
     }
-    
+
     // MARK: - Data Loading
-    
+
     @MainActor
     private func load() async {
-        guard !serverConfig.projectID.isEmpty else {
-            error = "No project configured in Settings"
-            return
-        }
         isLoading = true
         do {
-            sessions = try await apiClient.fetchSessions(projectID: serverConfig.projectID)
+            sessions = try await dianeAPI.fetchSessions()
             error = nil
         } catch {
             self.error = error.localizedDescription
         }
         isLoading = false
     }
-    
+
     @MainActor
     private func loadMessages(session: DianeSession) async {
-        guard !serverConfig.projectID.isEmpty else { return }
         isLoadingMessages = true
         do {
-            messages = try await apiClient.fetchSessionMessages(projectID: serverConfig.projectID, sessionID: session.id)
+            messages = try await dianeAPI.fetchSessionMessages(sessionID: session.id)
         } catch {
             messages = []
         }

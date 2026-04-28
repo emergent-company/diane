@@ -10,6 +10,7 @@ struct DianeCompanionApp: App {
     @StateObject private var serverConfig   = ServerConfiguration()
     @StateObject private var cliManager     = CLIManager()
     @StateObject private var appState       = AppState()
+    @StateObject private var dianeAPI       = DianeAPIClient()
     @StateObject private var apiClient      = EmergentAPIClient()
     @State private var hasStarted           = false
 
@@ -34,6 +35,7 @@ struct DianeCompanionApp: App {
                 .environmentObject(apiClient)
                 .environmentObject(statusMonitor)
                 .environmentObject(serverConfig)
+                .environmentObject(dianeAPI)
                 .task { await startIfNeeded() }
         }
         .windowStyle(.titleBar)
@@ -78,6 +80,13 @@ struct DianeCompanionApp: App {
 
         // Configure the API client from persisted server settings
         apiClient.configure(serverURL: serverConfig.serverURL, apiKey: serverConfig.apiKey)
+
+        // Check if the local Diane API is reachable
+        let reachable = await dianeAPI.checkReachability()
+        logger.info("Local Diane API reachable: \(reachable)")
+        if reachable {
+            statusMonitor.connectionState = .connected
+        }
 
         await updateChecker.start()
     }

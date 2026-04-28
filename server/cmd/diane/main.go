@@ -46,6 +46,7 @@ func main() {
 		fmt.Println("  mcp             Manage MCP servers (list, relay, serve)")
 		fmt.Println("  tool            Test MCP tools through the proxy (test)")
 		fmt.Println("  schema apply    Apply embedded schema definitions to Memory Platform")
+		fmt.Println("  serve           Start bot, relay, and local companion API (--api-port 0 to disable)")
 		fmt.Println()
 		os.Exit(0)
 	}
