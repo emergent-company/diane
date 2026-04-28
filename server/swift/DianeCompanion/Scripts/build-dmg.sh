@@ -77,6 +77,19 @@ if [ "$NO_SIGN" = true ]; then
     mkdir -p "${EXPORT_PATH}"
     cp -R "$APP_PATH" "${EXPORT_PATH}/${SCHEME}.app"
     APP_PATH="${EXPORT_PATH}/${SCHEME}.app"
+
+    # Ad-hoc sign the app bundle so macOS Gatekeeper doesn't flag it as "damaged"
+    # This creates a CMS signature without an Apple Developer certificate.
+    # Users will still get "unverified developer" on first launch (right-click → Open)
+    # but NOT the "app is damaged and can't be opened" fatal error.
+    echo "==> Ad-hoc signing bundle (unsigned build)..."
+    # Must sign all nested dylibs and frameworks first, then the app
+    find "${APP_PATH}" -name "*.dylib" -o -name "*.framework" -type d | while read -r f; do
+        codesign --force --deep --sign - "${f}" 2>/dev/null || true
+    done
+    codesign --force --deep --sign - "${APP_PATH}" 2>/dev/null || true
+    echo "==> Ad-hoc signature:"
+    codesign -dvv "${APP_PATH}" 2>&1 | head -5 || echo "     (signature not present — non-fatal)"
 else
     # ── Signed/archived build ──
     echo "==> Archiving..."
