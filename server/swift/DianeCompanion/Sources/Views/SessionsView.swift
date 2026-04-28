@@ -1,10 +1,11 @@
 import SwiftUI
 
-/// Sessions view — lists Diane conversation sessions from the local API.
+/// Sessions view — lists Diane conversation sessions from the local API (or remote fallback).
 struct SessionsView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var serverConfig: ServerConfiguration
     @EnvironmentObject var dianeAPI: DianeAPIClient
+    @EnvironmentObject var apiClient: EmergentAPIClient
 
     @State private var sessions: [DianeSession] = []
     @State private var selectedSession: DianeSession? = nil
@@ -213,7 +214,11 @@ struct SessionsView: View {
     private func load() async {
         isLoading = true
         do {
-            sessions = try await dianeAPI.fetchSessions()
+            if dianeAPI.isReachable {
+                sessions = try await dianeAPI.fetchSessions()
+            } else {
+                sessions = try await apiClient.fetchSessions(projectID: serverConfig.projectID)
+            }
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -225,7 +230,11 @@ struct SessionsView: View {
     private func loadMessages(session: DianeSession) async {
         isLoadingMessages = true
         do {
-            messages = try await dianeAPI.fetchSessionMessages(sessionID: session.id)
+            if dianeAPI.isReachable {
+                messages = try await dianeAPI.fetchSessionMessages(sessionID: session.id)
+            } else {
+                messages = try await apiClient.fetchSessionMessages(projectID: serverConfig.projectID, sessionID: session.id)
+            }
         } catch {
             messages = []
         }

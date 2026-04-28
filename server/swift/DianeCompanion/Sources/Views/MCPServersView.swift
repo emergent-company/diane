@@ -1,10 +1,11 @@
 import SwiftUI
 
-/// MCP Servers view — reads from Diane's local API (served by `diane serve`).
+/// MCP Servers view — reads from Diane's local API (served by `diane serve`) or remote fallback.
 struct MCPServersView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var serverConfig: ServerConfiguration
     @EnvironmentObject var dianeAPI: DianeAPIClient
+    @EnvironmentObject var apiClient: EmergentAPIClient
 
     @State private var servers: [MCPServer] = []
     @State private var selectedServer: MCPServer? = nil
@@ -244,7 +245,11 @@ struct MCPServersView: View {
     private func load() async {
         isLoading = true
         do {
-            servers = try await dianeAPI.fetchMCPServers()
+            if dianeAPI.isReachable {
+                servers = try await dianeAPI.fetchMCPServers()
+            } else {
+                servers = try await apiClient.fetchMCPServers(projectID: serverConfig.projectID)
+            }
             await loadNodes()
             error = nil
         } catch {
@@ -257,7 +262,14 @@ struct MCPServersView: View {
     private func loadNodes() async {
         isLoadingNodes = true
         do {
-            nodes = try await dianeAPI.fetchRelayNodes()
+            if dianeAPI.isReachable {
+                nodes = try await dianeAPI.fetchRelayNodes()
+            } else {
+                let relaySessions = try await apiClient.fetchRelaySessions(projectID: serverConfig.projectID)
+                nodes = relaySessions.map { r in
+                    RelayNode(instanceID: r.instanceID ?? r.id, hostname: r.nodeName, version: nil, toolCount: r.toolCount, connectedAt: r.connectedAt)
+                }
+            }
             nodeError = nil
         } catch {
             nodeError = error.localizedDescription

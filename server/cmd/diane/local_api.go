@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -229,6 +230,15 @@ func (a *localAPIServer) handleMCPServers(w http.ResponseWriter, r *http.Request
 	})
 }
 
+// relaySessionData represents a connected MCP relay instance from the MP API.
+type relaySessionData struct {
+	InstanceID  string `json:"instance_id"`
+	Hostname    string `json:"hostname,omitempty"`
+	Version     string `json:"version,omitempty"`
+	Tools       any    `json:"tools,omitempty"`
+	ConnectedAt string `json:"connected_at,omitempty"`
+}
+
 // GET /api/nodes — list connected MCP relay nodes
 func (a *localAPIServer) handleNodes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -256,13 +266,35 @@ func (a *localAPIServer) handleNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Relay response can be a bare array or wrapped
-	var rawItems []json.RawMessage
-	if err := json.NewDecoder(resp.Body).Decode(&rawItems); err != nil {
-		// Try wrapped formats
-		resp.Body.Close()
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("parse nodes: %v", err))
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("read response: %v", err))
 		return
+	}
+
+	// Parse response — could be array, {"items":[...]}, {"data":[...]}, or {"sessions":[...]}
+	var sessions []relaySessionData
+	if err := json.Unmarshal(body, &sessions); err != nil {
+		// Try wrapped response formats
+		var wrapped struct {
+			Items    []relaySessionData `json:"items"`
+			Data     []relaySessionData `json:"data"`
+			Sessions []relaySessionData `json:"sessions"`
+		}
+		if err2 := json.Unmarshal(body, &wrapped); err2 == nil {
+			switch {
+			case wrapped.Sessions != nil:
+				sessions = wrapped.Sessions
+			case wrapped.Items != nil:
+				sessions = wrapped.Items
+			case wrapped.Data != nil:
+				sessions = wrapped.Data
+			}
+		}
+		if sessions == nil {
+			jsonError(w, http.StatusInternalServerError, fmt.Sprintf("failed to parse relay sessions: %s", string(body)))
+			return
+		}
 	}
 
 	type nodeJSON struct {
@@ -273,25 +305,11 @@ func (a *localAPIServer) handleNodes(w http.ResponseWriter, r *http.Request) {
 		ConnectedAt string `json:"connected_at,omitempty"`
 	}
 
-	nodes := make([]nodeJSON, 0, len(rawItems))
-	for _, raw := range rawItems {
-		// Try to parse tool count from various formats
-		var node struct {
-			InstanceID  string      `json:"instance_id"`
-			Hostname    string      `json:"hostname,omitempty"`
-			Version     string      `json:"version,omitempty"`
-			Tools       interface{} `json:"tools,omitempty"`
-			ToolCount   int         `json:"tool_count"`
-			ConnectedAt string      `json:"connected_at,omitempty"`
-		}
-		if err := json.Unmarshal(raw, &node); err != nil {
-			continue
-		}
-
-		toolCount := node.ToolCount
-		if toolCount == 0 && node.Tools != nil {
-			// Try to count tools from tools object
-			if toolsMap, ok := node.Tools.(map[string]interface{}); ok {
+	nodes := make([]nodeJSON, 0, len(sessions))
+	for _, s := range sessions {
+		toolCount := 0
+		if s.Tools != nil {
+			if toolsMap, ok := s.Tools.(map[string]interface{}); ok {
 				if tl, ok := toolsMap["tools"].([]interface{}); ok {
 					toolCount = len(tl)
 				}
@@ -299,11 +317,11 @@ func (a *localAPIServer) handleNodes(w http.ResponseWriter, r *http.Request) {
 		}
 
 		nodes = append(nodes, nodeJSON{
-			InstanceID:  node.InstanceID,
-			Hostname:    node.Hostname,
-			Version:     node.Version,
+			InstanceID:  s.InstanceID,
+			Hostname:    s.Hostname,
+			Version:     s.Version,
 			ToolCount:   toolCount,
-			ConnectedAt: node.ConnectedAt,
+			ConnectedAt: s.ConnectedAt,
 		})
 	}
 
