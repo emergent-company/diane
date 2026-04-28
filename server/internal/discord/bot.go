@@ -159,6 +159,10 @@ type Config struct {
 	// SSEEventStream enables the agent_question notification listener.
 	// Requires MemoryServerURL, MemoryAPIKey, and MemoryProjectID.
 	SSEEventStream bool
+	// TestBotIDs is a list of bot user IDs that bypass the m.Author.Bot filter.
+	// This allows test harness bots to send messages that Diane will process.
+	// Empty = only human messages are processed (default, production-safe).
+	TestBotIDs []string
 }
 
 // DefaultConfig returns sensible defaults.
@@ -808,7 +812,9 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) 
 	if m.Author.ID == b.api.BotUserID() {
 		return
 	}
-	if m.Author.Bot {
+
+	// Allow test bots through — bypass the Author.Bot filter for configured IDs
+	if m.Author.Bot && !b.isTestBot(m.Author.ID) {
 		return
 	}
 
@@ -1287,6 +1293,21 @@ func (b *Bot) isChannelAllowed(channelID string) bool {
 	}
 	for _, id := range b.config.AllowedChannels {
 		if id == channelID {
+			return true
+		}
+	}
+	return false
+}
+
+// isTestBot checks if a given user ID is in the configured test bot allowlist.
+// Test bots bypass the Author.Bot filter so the harness can send messages
+// that Diane will actually process.
+func (b *Bot) isTestBot(userID string) bool {
+	if len(b.config.TestBotIDs) == 0 {
+		return false
+	}
+	for _, id := range b.config.TestBotIDs {
+		if id == userID {
 			return true
 		}
 	}

@@ -320,6 +320,17 @@ func (b *Bridge) UpsertOrgProvider(ctx context.Context, orgID, providerType stri
 	return b.client.Provider.UpsertOrgConfig(ctx, orgID, providerType, req)
 }
 
+// UpsertProjectProvider creates or updates a project-level provider config with credentials.
+// Runs a live credential test and syncs model catalog on success.
+func (b *Bridge) UpsertProjectProvider(ctx context.Context, projectID, providerType string, apiKey, model, baseURL string) (*sdkprovider.ProviderConfig, error) {
+	req := &sdkprovider.UpsertProviderConfigRequest{
+		APIKey:          apiKey,
+		GenerativeModel: model,
+		BaseURL:         baseURL,
+	}
+	return b.client.Provider.UpsertProjectConfig(ctx, projectID, providerType, req)
+}
+
 // TestProvider sends a live generation call to verify provider credentials work.
 func (b *Bridge) TestProvider(ctx context.Context, orgID, providerType string) (*sdkprovider.TestProviderResponse, error) {
 	return b.client.Provider.TestProvider(ctx, providerType, b.projectID, orgID)

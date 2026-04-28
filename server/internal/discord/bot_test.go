@@ -916,3 +916,89 @@ func TestThreadRouting_BotUserID(t *testing.T) {
 		t.Errorf("Expected BotUserID bot-123, got %s", bot.api.BotUserID())
 	}
 }
+
+// ── TestBotIDs / isTestBot Tests ──────────────────────────────────────
+
+func TestIsTestBot_Empty(t *testing.T) {
+	// Empty TestBotIDs list — no bot should pass
+	bot := &Bot{config: Config{}}
+	if bot.isTestBot("any-bot-id") {
+		t.Error("Expected false for empty TestBotIDs")
+	}
+}
+
+func TestIsTestBot_Match(t *testing.T) {
+	bot := &Bot{config: Config{
+		TestBotIDs: []string{"test-bot-1", "test-bot-2"},
+	}}
+	if !bot.isTestBot("test-bot-1") {
+		t.Error("Expected true for matching test bot ID")
+	}
+	if !bot.isTestBot("test-bot-2") {
+		t.Error("Expected true for other matching test bot ID")
+	}
+}
+
+func TestIsTestBot_NoMatch(t *testing.T) {
+	bot := &Bot{config: Config{
+		TestBotIDs: []string{"test-bot-1", "test-bot-2"},
+	}}
+	if bot.isTestBot("unknown-bot") {
+		t.Error("Expected false for non-matching bot ID")
+	}
+}
+
+// TestTestBotBypassesBotFilter verifies that a message from a configured
+// test bot ID is NOT filtered out by the Author.Bot check.
+func TestTestBotBypassesBotFilter(t *testing.T) {
+	bot, fake := testBot(t, []string{"parent-1"})
+	fake.AddParentChannel("parent-1", "general")
+
+	// Configure test bot IDs
+	bot.config.TestBotIDs = []string{"test-bot-123"}
+
+	// Create a message FROM a test bot (Author.Bot = true)
+	msg := &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			ID:        "test-bot-msg-1",
+			ChannelID: "parent-1",
+			Content:   "hello from test bot",
+			Author:    &discordgo.User{ID: "test-bot-123", Username: "testbot", Bot: true},
+		},
+	}
+
+	// Process — should NOT be filtered out
+	bot.onMessageCreate(nil, msg)
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Should create a thread (test bot message was processed)
+	if len(fake.ThreadCreateCalls) != 1 {
+		t.Fatalf("Expected 1 thread creation (test bot allowed), got %d", len(fake.ThreadCreateCalls))
+	}
+
+	// Now try with a NON-allowed test bot (same code path: Author.Bot = true, not in list)
+	bot2, fake2 := testBot(t, []string{"parent-1"})
+	fake2.AddParentChannel("parent-1", "general")
+	bot2.config.TestBotIDs = []string{"some-other-bot"}
+
+	msg2 := &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			ID:        "test-bot-msg-2",
+			ChannelID: "parent-1",
+			Content:   "hello from unknown bot",
+			Author:    &discordgo.User{ID: "unknown-bot-456", Username: "unknownbot", Bot: true},
+		},
+	}
+
+	bot2.onMessageCreate(nil, msg2)
+	time.Sleep(50 * time.Millisecond)
+
+	// Should NOT create a thread (bot not in allowlist)
+	if len(fake2.ThreadCreateCalls) != 0 {
+		t.Errorf("Expected 0 thread creation (unknown bot filtered), got %d", len(fake2.ThreadCreateCalls))
+	}
+	if len(fake2.MessageSendCalls) != 0 {
+		t.Errorf("Expected 0 messages (unknown bot filtered), got %d", len(fake2.MessageSendCalls))
+	}
+}
