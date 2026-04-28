@@ -18,7 +18,7 @@ final class UpdateChecker: ObservableObject {
 
     private let repoOwner    = "emergent-company"
     private let repoName     = "diane"
-    private let checkInterval: TimeInterval = 3600
+    private let checkInterval: TimeInterval = 300 // 5 minutes
     private var timer: Timer?
     private var hasStarted = false
     private var releaseData: GitHubRelease?
