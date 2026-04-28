@@ -56,16 +56,28 @@ echo "==> Building Diane v${VERSION}"
 if [ "$NO_SIGN" = true ]; then
     # ── Unsigned build ──
     echo "==> Building unsigned (--no-sign)..."
-    xcodebuild build \
-        -project "${PROJECT}" \
-        -scheme "${SCHEME}" \
-        -configuration "${CONFIGURATION}" \
-        -derivedDataPath "${DERIVED_DATA}" \
-        CODE_SIGN_IDENTITY="" \
-        CODE_SIGNING_REQUIRED=NO \
-        CODE_SIGN_ENTITLEMENTS="" \
-        CODE_SIGNING_ALLOWED=NO \
-        | xcpretty
+    if command -v xcpretty &>/dev/null; then
+        xcodebuild build \
+            -project "${PROJECT}" \
+            -scheme "${SCHEME}" \
+            -configuration "${CONFIGURATION}" \
+            -derivedDataPath "${DERIVED_DATA}" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_ENTITLEMENTS="" \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcpretty
+    else
+        xcodebuild build \
+            -project "${PROJECT}" \
+            -scheme "${SCHEME}" \
+            -configuration "${CONFIGURATION}" \
+            -derivedDataPath "${DERIVED_DATA}" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_ENTITLEMENTS="" \
+            CODE_SIGNING_ALLOWED=NO
+    fi
 
     APP_PATH=$(find "${DERIVED_DATA}/Build/Products/${CONFIGURATION}" -name "${SCHEME}.app" -type d | head -1)
     if [ -z "$APP_PATH" ]; then
@@ -93,15 +105,26 @@ if [ "$NO_SIGN" = true ]; then
 else
     # ── Signed/archived build ──
     echo "==> Archiving..."
-    xcodebuild archive \
-        -project "${PROJECT}" \
-        -scheme "${SCHEME}" \
-        -configuration "${CONFIGURATION}" \
-        -archivePath "${ARCHIVE_PATH}" \
-        -derivedDataPath "${DERIVED_DATA}" \
-        DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-}" \
-        CODE_SIGN_STYLE="${DEVELOPMENT_TEAM:+Manual}" \
-        | xcpretty
+    if command -v xcpretty &>/dev/null; then
+        xcodebuild archive \
+            -project "${PROJECT}" \
+            -scheme "${SCHEME}" \
+            -configuration "${CONFIGURATION}" \
+            -archivePath "${ARCHIVE_PATH}" \
+            -derivedDataPath "${DERIVED_DATA}" \
+            DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-}" \
+            CODE_SIGN_STYLE="${DEVELOPMENT_TEAM:+Manual}" \
+            | xcpretty
+    else
+        xcodebuild archive \
+            -project "${PROJECT}" \
+            -scheme "${SCHEME}" \
+            -configuration "${CONFIGURATION}" \
+            -archivePath "${ARCHIVE_PATH}" \
+            -derivedDataPath "${DERIVED_DATA}" \
+            DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-}" \
+            CODE_SIGN_STYLE="${DEVELOPMENT_TEAM:+Manual}"
+    fi
 
     echo "==> Exporting .app..."
     mkdir -p "${EXPORT_PATH}"
