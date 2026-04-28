@@ -31,7 +31,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
     var systemIcon: String {
         switch self {
         case .sessions:    return "message"
-        case .mcpServers:  return "plug"
+        case .mcpServers:  return "cable.connector.horizontal"
         case .permissions: return "lock.shield"
         }
     }

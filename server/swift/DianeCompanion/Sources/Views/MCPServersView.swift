@@ -1,7 +1,9 @@
 import SwiftUI
+import OSLog
 
 /// MCP Servers view — reads from Diane's local API (served by `diane serve`) or remote fallback.
 struct MCPServersView: View {
+    private let logger = Logger(subsystem: "com.emergent-company.diane-companion", category: "MCPView")
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var serverConfig: ServerConfiguration
     @EnvironmentObject var dianeAPI: DianeAPIClient
@@ -245,15 +247,20 @@ struct MCPServersView: View {
     private func load() async {
         isLoading = true
         do {
-            if dianeAPI.isReachable {
-                servers = try await dianeAPI.fetchMCPServers()
-            } else {
-                servers = try await apiClient.fetchMCPServers(projectID: serverConfig.projectID)
-            }
+            // Always try local API first — it's fresh for each request
+            servers = try await dianeAPI.fetchMCPServers()
             await loadNodes()
             error = nil
-        } catch {
-            self.error = error.localizedDescription
+        } catch let localError {
+            // Fall back to remote API if local fails
+            logger.warning("Local API failed: \(localError.localizedDescription), trying remote...")
+            do {
+                servers = try await apiClient.fetchMCPServers(projectID: serverConfig.projectID)
+                await loadNodes()
+                error = nil
+            } catch {
+                self.error = error.localizedDescription
+            }
         }
         isLoading = false
     }
@@ -262,17 +269,19 @@ struct MCPServersView: View {
     private func loadNodes() async {
         isLoadingNodes = true
         do {
-            if dianeAPI.isReachable {
-                nodes = try await dianeAPI.fetchRelayNodes()
-            } else {
+            // Always try local API first
+            nodes = try await dianeAPI.fetchRelayNodes()
+            nodeError = nil
+        } catch {
+            do {
                 let relaySessions = try await apiClient.fetchRelaySessions(projectID: serverConfig.projectID)
                 nodes = relaySessions.map { r in
                     RelayNode(instanceID: r.instanceID ?? r.id, hostname: r.nodeName, version: nil, toolCount: r.toolCount, connectedAt: r.connectedAt)
                 }
+                nodeError = nil
+            } catch {
+                nodeError = error.localizedDescription
             }
-            nodeError = nil
-        } catch {
-            nodeError = error.localizedDescription
         }
         isLoadingNodes = false
     }

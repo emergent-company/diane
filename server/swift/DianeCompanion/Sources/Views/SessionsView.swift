@@ -15,20 +15,22 @@ struct SessionsView: View {
     @State private var error: String? = nil
 
     var body: some View {
-        HSplitView {
-            sessionsList
-                .frame(minWidth: 300)
+        GeometryReader { geometry in
+            HSplitView {
+                sessionsList
+                    .frame(width: geometry.size.width * 0.5, minWidth: 250)
 
-            if let session = selectedSession {
-                sessionDetailPanel(session)
-                    .frame(minWidth: 350)
-            } else {
-                EmptyStateView(
-                    title: "Select a Session",
-                    icon: "message",
-                    description: "Select a conversation session to view its transcript."
-                )
-                .frame(minWidth: 350)
+                if let session = selectedSession {
+                    sessionDetailPanel(session)
+                        .frame(minWidth: 250)
+                } else {
+                    EmptyStateView(
+                        title: "Select a Session",
+                        icon: "message",
+                        description: "Select a conversation session to view its transcript."
+                    )
+                    .frame(minWidth: 250)
+                }
             }
         }
         .navigationTitle("Sessions")
