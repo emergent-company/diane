@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 
 /// Persistent app configuration backed by UserDefaults, with auto-discovery
-/// from Diane's config files (~/.diane/config.yaml + ~/.diane/secrets/memory-config.json).
+/// from Diane's primary config file (~/.config/diane.yml).
 @MainActor
 final class ServerConfiguration: ObservableObject {
     @Published var serverURL: String {
@@ -62,27 +62,6 @@ final class ServerConfiguration: ObservableObject {
             if projectID.isEmpty {
                 projectID = Self.parseProjectIDFromYAML(yamlStr)
             }
-        }
-
-        // Read ~/.diane/secrets/memory-config.json — fallback for server URL + API key
-        let secretsPath = home + "/.diane/secrets/memory-config.json"
-        if serverURL.isEmpty || apiKey.isEmpty,
-           let jsonData = try? Data(contentsOf: URL(fileURLWithPath: secretsPath)),
-           let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: String] {
-            if serverURL.isEmpty, let url = json["server_url"] {
-                serverURL = url
-            }
-            if apiKey.isEmpty, let token = json["project_token"] {
-                apiKey = token
-            }
-        }
-
-        // Read ~/.diane/config.yaml as fallback
-        let altYamlPath = home + "/.diane/config.yaml"
-        if projectID.isEmpty,
-           let yamlData = try? Data(contentsOf: URL(fileURLWithPath: altYamlPath)),
-           let yamlStr = String(data: yamlData, encoding: .utf8) {
-            projectID = Self.parseProjectIDFromYAML(yamlStr)
         }
     }
 
