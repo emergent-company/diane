@@ -33,22 +33,12 @@ struct MenuBarView: View {
 
             Divider()
 
-            // Projects list (task 4.1–4.3)
-            projectsSection
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-
-            Divider()
-
             // Footer: Quit (left) + Open App (right) (task 4.4)
             footerSection
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
         }
         .frame(width: 320)
-        .task {
-            await loadProjects()
-        }
     }
 
     // MARK: - Header
@@ -119,71 +109,6 @@ struct MenuBarView: View {
         case .disconnected: return .secondary
         case .error:        return .orange
         case .unknown:      return .secondary
-        }
-    }
-
-    // MARK: - Projects Section (tasks 4.1, 4.2, 4.3)
-
-    @ViewBuilder
-    private var projectsSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Projects")
-                .font(.caption)
-                .fontWeight(.semibold)
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-
-            if appState.isLoadingProjects {
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.mini)
-                    Text("Loading projects…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            } else if let error = appState.projectLoadError {
-                // Task 4.2: Inline error with retry
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                        .font(.caption)
-                    Text(error)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    Spacer()
-                    Button {
-                        Task { await loadProjects() }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.caption)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                }
-            } else if appState.projects.isEmpty {
-                Text("No projects found")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .italic()
-            } else {
-                // Task 4.3: Single line per project with stats
-                ForEach(appState.projects) { project in
-                    projectRow(project)
-                }
-            }
-        }
-    }
-
-    private func projectRow(_ project: Project) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: "doc.text")
-                .foregroundStyle(.secondary)
-                .font(.caption2)
-                .frame(width: 12)
-            Text(project.name)
-                .font(.caption)
-                .lineLimit(1)
-            Spacer()
         }
     }
 
@@ -273,19 +198,5 @@ struct MenuBarView: View {
     private func openMainWindow() {
         openWindow(id: "main")
         NSApp.activate(ignoringOtherApps: true)
-    }
-
-    @MainActor
-    private func loadProjects() async {
-        guard statusMonitor.connectionState == .connected else { return }
-        appState.isLoadingProjects = true
-        appState.projectLoadError = nil
-        do {
-            appState.projects = try await apiClient.fetchProjects()
-        } catch {
-            // Task 4.2: Show inline error message
-            appState.projectLoadError = "Failed to load projects"
-        }
-        appState.isLoadingProjects = false
     }
 }

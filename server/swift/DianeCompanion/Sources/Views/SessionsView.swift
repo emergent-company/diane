@@ -4,6 +4,7 @@ import SwiftUI
 struct SessionsView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var apiClient: EmergentAPIClient
+    @EnvironmentObject var serverConfig: ServerConfiguration
     
     @State private var sessions: [DianeSession] = []
     @State private var selectedSession: DianeSession? = nil
@@ -32,7 +33,7 @@ struct SessionsView: View {
         }
         .navigationTitle("Sessions")
         .task { await load() }
-        .onChange(of: appState.selectedProject) { _ in
+        .onChange(of: serverConfig.projectID) { _ in
             Task { await load() }
         }
     }
@@ -234,10 +235,11 @@ struct SessionsView: View {
     
     @MainActor
     private func load() async {
-        guard let projectID = appState.selectedProject?.id else {
-            error = "No project selected"
+        guard !serverConfig.projectID.isEmpty else {
+            error = "No project configured"
             return
         }
+        let projectID = serverConfig.projectID
         isLoading = true
         do {
             sessions = try await apiClient.fetchSessions(projectID: projectID, status: statusFilter)
@@ -250,7 +252,8 @@ struct SessionsView: View {
     
     @MainActor
     private func loadMessages(session: DianeSession) async {
-        guard let projectID = appState.selectedProject?.id else { return }
+        guard !serverConfig.projectID.isEmpty else { return }
+        let projectID = serverConfig.projectID
         isLoadingMessages = true
         do {
             messages = try await apiClient.fetchSessionMessages(projectID: projectID, sessionID: session.id)

@@ -4,8 +4,8 @@ import SwiftUI
 ///
 /// Configuration task 8.2
 struct MCPServersView: View {
-    @EnvironmentObject var appState: AppState
     @EnvironmentObject var apiClient: EmergentAPIClient
+    @EnvironmentObject var serverConfig: ServerConfiguration
 
     @State private var servers: [MCPServer] = []
     @State private var selectedServer: MCPServer? = nil
@@ -34,7 +34,7 @@ struct MCPServersView: View {
         }
         .navigationTitle("MCP Servers")
         .task { await load() }
-        .onChange(of: appState.selectedProject) { _ in
+        .onChange(of: serverConfig.projectID) { _ in
             Task { await load() }
         }
     }
@@ -257,10 +257,11 @@ struct MCPServersView: View {
 
     @MainActor
     private func load() async {
-        guard let projectID = appState.selectedProject?.id else {
-            error = "No project selected"
+        guard !serverConfig.projectID.isEmpty else {
+            error = "No project configured"
             return
         }
+        let projectID = serverConfig.projectID
         isLoading = true
         do {
             servers = try await apiClient.fetchMCPServers(projectID: projectID)
@@ -274,9 +275,8 @@ struct MCPServersView: View {
 
     @MainActor
     private func loadRelays() async {
-        guard let projectID = appState.selectedProject?.id else {
-            return
-        }
+        guard !serverConfig.projectID.isEmpty else { return }
+        let projectID = serverConfig.projectID
         isLoadingRelays = true
         do {
             relaySessions = try await apiClient.fetchRelaySessions(projectID: projectID)

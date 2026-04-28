@@ -27,7 +27,7 @@ struct DianeCompanionApp: App {
     }
 
     var body: some Scene {
-        // Main application window (task 5.x)
+        // Main application window
         Window("Diane", id: "main") {
             MainWindowView()
                 .environmentObject(appState)
@@ -56,7 +56,7 @@ struct DianeCompanionApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        // Dedicated settings window opened via openWindow(id: "settings").
+        // Dedicated settings window
         Window("Diane Settings", id: "settings") {
             SettingsView()
                 .environmentObject(statusMonitor)
@@ -64,18 +64,6 @@ struct DianeCompanionApp: App {
                 .environmentObject(apiClient)
         }
         .windowResizability(.contentSize)
-        .defaultPosition(.center)
-
-        // Document content viewer — opened via openWindow(id: "document-content").
-        // The document to display is stored on AppState.contentViewDocument.
-        Window("Document Content", id: "document-content") {
-            DocumentContentView()
-                .environmentObject(appState)
-                .environmentObject(apiClient)
-        }
-        .windowStyle(.titleBar)
-        .windowToolbarStyle(.unified)
-        .defaultSize(width: 1000, height: 680)
         .defaultPosition(.center)
     }
 

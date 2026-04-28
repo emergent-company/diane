@@ -2,7 +2,6 @@ import Foundation
 import SwiftUI
 
 /// Persistent app configuration backed by UserDefaults.
-/// Injected into the view hierarchy via `.environmentObject()`.
 @MainActor
 final class ServerConfiguration: ObservableObject {
     @Published var serverURL: String {
@@ -16,6 +15,9 @@ final class ServerConfiguration: ObservableObject {
     @Published var launchAtLogin: Bool {
         didSet { UserDefaults.standard.set(launchAtLogin, forKey: Keys.launchAtLogin) }
     }
+
+    /// Project ID used for scoped API calls, auto-discovered from diane config.
+    @Published var projectID: String = ""
 
     var isConfigured: Bool { !serverURL.isEmpty }
 
@@ -36,28 +38,32 @@ final class ServerConfiguration: ObservableObject {
         self.launchAtLogin = UserDefaults.standard.bool(forKey: Keys.launchAtLogin)
 
         // Auto-discover from ~/.diane/ config if not already persisted
-        if self.serverURL.isEmpty || self.apiKey.isEmpty {
-            let (discoveredURL, discoveredKey) = Self.discoverFromDianeConfig()
+        if self.serverURL.isEmpty || self.apiKey.isEmpty || self.projectID.isEmpty {
+            let (discoveredURL, discoveredKey, discoveredProjectID) = Self.discoverFromDianeConfig()
             if self.serverURL.isEmpty { self.serverURL = discoveredURL }
             if self.apiKey.isEmpty    { self.apiKey = discoveredKey }
+            if self.projectID.isEmpty { self.projectID = discoveredProjectID }
         }
     }
 
     /// Reads ~/.diane/config.yaml and ~/.diane/secrets/memory-config.json
-    /// to auto-populate server URL and API key.
-    private static func discoverFromDianeConfig() -> (url: String, key: String) {
+    /// to auto-populate server URL, API key, and project ID.
+    private static func discoverFromDianeConfig() -> (url: String, key: String, projectID: String) {
         var url = ""
         var key = ""
+        var pid = ""
 
-        // 1. Try ~/.diane/config.yaml for server_url
+        // 1. Try ~/.diane/config.yaml for server_url and project_id
         let configPath = NSString(string: "~/.diane/config.yaml").expandingTildeInPath
         if let content = try? String(contentsOfFile: configPath, encoding: .utf8) {
             for line in content.components(separatedBy: .newlines) {
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
-                let prefix = "server_url:"
-                if trimmed.hasPrefix(prefix) {
-                    let value = trimmed.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("server_url:") {
+                    let value = trimmed.dropFirst("server_url:".count).trimmingCharacters(in: .whitespaces)
                     if !value.isEmpty { url = value }
+                } else if trimmed.hasPrefix("project_id:") {
+                    let value = trimmed.dropFirst("project_id:".count).trimmingCharacters(in: .whitespaces)
+                    if !value.isEmpty { pid = value }
                 }
             }
         }
@@ -71,6 +77,6 @@ final class ServerConfiguration: ObservableObject {
             }
         }
 
-        return (url, key)
+        return (url, key, pid)
     }
 }

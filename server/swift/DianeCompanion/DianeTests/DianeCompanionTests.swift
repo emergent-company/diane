@@ -1,11 +1,8 @@
 import XCTest
 @testable import Diane
-import EmergentKit
 
 /// Unit tests for the EmergentAPIClient — verifies HTTP routing, decoding,
 /// and error mapping without hitting a real server.
-///
-/// Task 10.1
 final class EmergentAPIClientTests: XCTestCase {
 
     // MARK: - Configure
@@ -14,8 +11,7 @@ final class EmergentAPIClientTests: XCTestCase {
         let client = EmergentAPIClient()
         // Configuring with an empty URL should make requests throw .notConfigured
         client.configure(serverURL: "", apiKey: "")
-        // We can't directly test the private baseURL, but we verify via behavior
-        // (tested indirectly through fetchProjects in integration tests)
+        // Verified through behavior in integration tests
     }
 
     // MARK: - Error mapping
@@ -46,171 +42,112 @@ final class EmergentAPIClientTests: XCTestCase {
             "Decoding failed: bad key"
         )
     }
-}
 
-/// Unit tests for shared data models — verifies Codable round-trips.
-///
-/// Task 10.1
-final class ModelsTests: XCTestCase {
+    // MARK: - MCP Model decoding
 
-    // MARK: - Project decoding
-
-    func testProjectDecoding() throws {
+    func testMCPServerDecoding() throws {
         let json = """
         {
-            "id": "proj-1",
-            "name": "Test Project",
-            "org_id": "org-42",
-            "object_count": 100,
-            "relation_count": 250,
-            "agent_count": 3
+            "id": "mcp-1",
+            "name": "Test Server",
+            "server_type": "sse",
+            "url": "http://localhost:8080",
+            "status": "connected",
+            "tools": [{"id": "t1", "name": "tool1", "description": "A test tool"}]
         }
         """.data(using: .utf8)!
 
-        let project = try JSONDecoder().decode(Project.self, from: json)
-        XCTAssertEqual(project.id, "proj-1")
-        XCTAssertEqual(project.name, "Test Project")
-        XCTAssertEqual(project.orgID, "org-42")
-        XCTAssertEqual(project.objectCount, 100)
-        XCTAssertEqual(project.relationCount, 250)
-        XCTAssertEqual(project.agentCount, 3)
+        let server = try JSONDecoder().decode(MCPServer.self, from: json)
+        XCTAssertEqual(server.id, "mcp-1")
+        XCTAssertEqual(server.name, "Test Server")
+        XCTAssertEqual(server.serverType, "sse")
+        XCTAssertEqual(server.tools?.count, 1)
+        XCTAssertEqual(server.tools?.first?.name, "tool1")
     }
 
-    func testProjectDecodingWithMissingOptionals() throws {
-        let json = """{"id": "proj-2", "name": "Minimal"}""".data(using: .utf8)!
-        let project = try JSONDecoder().decode(Project.self, from: json)
-        XCTAssertNil(project.objectCount)
-        XCTAssertNil(project.agentCount)
-    }
+    // MARK: - Session model decoding
 
-    // MARK: - Trace decoding
-
-    func testTraceDecoding() throws {
+    func testDianeSessionDecoding() throws {
         let json = """
         {
-            "id": "trace-abc",
-            "status": "completed",
-            "span_count": 12,
-            "source_type": "document"
+            "id": "session-abc",
+            "key": "conv-123",
+            "title": "Test conversation",
+            "status": "active",
+            "message_count": 5,
+            "total_tokens": 1500,
+            "created_at": "2026-04-28T10:00:00Z"
         }
         """.data(using: .utf8)!
 
-        let trace = try JSONDecoder().decode(Trace.self, from: json)
-        XCTAssertEqual(trace.id, "trace-abc")
-        XCTAssertEqual(trace.status, "completed")
-        XCTAssertEqual(trace.spanCount, 12)
-        XCTAssertEqual(trace.sourceType, "document")
+        let session = try JSONDecoder().decode(DianeSession.self, from: json)
+        XCTAssertEqual(session.id, "session-abc")
+        XCTAssertEqual(session.title, "Test conversation")
+        XCTAssertEqual(session.status, "active")
+        XCTAssertEqual(session.messageCount, 5)
     }
 
-    // MARK: - Worker decoding
-
-    func testWorkerStatusDecoding() throws {
-        XCTAssertEqual(WorkerStatus(rawValue: "idle"), .idle)
-        XCTAssertEqual(WorkerStatus(rawValue: "busy"), .busy)
-        XCTAssertEqual(WorkerStatus(rawValue: "offline"), .offline)
-        XCTAssertNil(WorkerStatus(rawValue: "invalid"))
-    }
-
-    func testWorkerStatusDisplayLabel() {
-        XCTAssertEqual(WorkerStatus.idle.displayLabel, "Idle")
-        XCTAssertEqual(WorkerStatus.busy.displayLabel, "Busy")
-        XCTAssertEqual(WorkerStatus.offline.displayLabel, "Offline")
-    }
-
-    // MARK: - AnyCodable round-trip
-
-    func testAnyCodableString() throws {
-        let json = #""hello""#.data(using: .utf8)!
-        let decoded = try JSONDecoder().decode(AnyCodable.self, from: json)
-        XCTAssertEqual(decoded.value as? String, "hello")
-    }
-
-    func testAnyCodableInt() throws {
-        let json = "42".data(using: .utf8)!
-        let decoded = try JSONDecoder().decode(AnyCodable.self, from: json)
-        XCTAssertEqual(decoded.value as? Int, 42)
-    }
-
-    func testAnyCodableBool() throws {
-        let json = "true".data(using: .utf8)!
-        let decoded = try JSONDecoder().decode(AnyCodable.self, from: json)
-        XCTAssertEqual(decoded.value as? Bool, true)
-    }
-
-    // MARK: - QueryResult decoding
-
-    func testQueryResultDecoding() throws {
+    func testDianeMessageDecoding() throws {
         let json = """
         {
-            "row_count": 0,
-            "columns": ["id", "name"],
-            "rows": []
+            "id": "msg-1",
+            "role": "user",
+            "content": "Hello",
+            "sequence_number": 1,
+            "token_count": 10
         }
         """.data(using: .utf8)!
 
-        let result = try JSONDecoder().decode(QueryResult.self, from: json)
-        XCTAssertEqual(result.rowCount, 0)
-        XCTAssertEqual(result.columns, ["id", "name"])
-        XCTAssertNil(result.error)
+        let msg = try JSONDecoder().decode(DianeMessage.self, from: json)
+        XCTAssertEqual(msg.role, "user")
+        XCTAssertEqual(msg.content, "Hello")
+        XCTAssertEqual(msg.sequenceNumber, 1)
     }
 
-    func testQueryResultWithError() throws {
+    // MARK: - Relay Session decoding
+
+    func testRelaySessionDecoding() throws {
         let json = """
-        {"row_count": 0, "error": "Syntax error near 'SLECT'"}
+        {
+            "id": "relay-1",
+            "instance_id": "macmini-1",
+            "node_name": "mcj-mini",
+            "tool_count": 12,
+            "connected_at": "2026-04-28T08:00:00Z"
+        }
         """.data(using: .utf8)!
 
-        let result = try JSONDecoder().decode(QueryResult.self, from: json)
-        XCTAssertEqual(result.error, "Syntax error near 'SLECT'")
+        let session = try JSONDecoder().decode(RelaySession.self, from: json)
+        XCTAssertEqual(session.id, "relay-1")
+        XCTAssertEqual(session.nodeName, "mcj-mini")
+        XCTAssertEqual(session.toolCount, 12)
     }
 }
 
 /// Unit tests for AppState — verifies observable state logic.
-///
-/// Task 10.2
 @MainActor
 final class AppStateTests: XCTestCase {
 
     func testInitialState() {
         let state = AppState()
-        XCTAssertNil(state.selectedProject)
         XCTAssertFalse(state.isConnected)
-        XCTAssertTrue(state.projects.isEmpty)
-        XCTAssertFalse(state.isLoadingProjects)
-        XCTAssertNil(state.projectLoadError)
+        XCTAssertFalse(state.isReady)
     }
 
-    func testIsReadyRequiresConnectionAndProject() {
+    func testIsReadyRequiresConnection() {
         let state = AppState()
         XCTAssertFalse(state.isReady)
 
         state.isConnected = true
-        XCTAssertFalse(state.isReady) // still no project
-
-        state.selectedProject = Project(id: "p1", name: "Test")
         XCTAssertTrue(state.isReady)
 
         state.isConnected = false
         XCTAssertFalse(state.isReady)
     }
 
-    func testActiveProjectID() {
-        let state = AppState()
-        XCTAssertNil(state.activeProjectID)
-
-        state.selectedProject = Project(id: "proj-xyz", name: "Alpha")
-        XCTAssertEqual(state.activeProjectID, "proj-xyz")
-    }
-
-    func testSidebarItemSectionGroups() {
-        XCTAssertEqual(SidebarItem.query.sectionGroup, .project)
-        XCTAssertEqual(SidebarItem.traces.sectionGroup, .project)
-        XCTAssertEqual(SidebarItem.status.sectionGroup, .project)
-        XCTAssertEqual(SidebarItem.workers.sectionGroup, .project)
-        XCTAssertEqual(SidebarItem.objects.sectionGroup, .project)
-        XCTAssertEqual(SidebarItem.documents.sectionGroup, .project)
-        XCTAssertEqual(SidebarItem.accountStatus.sectionGroup, .account)
-        XCTAssertEqual(SidebarItem.profile.sectionGroup, .account)
-        XCTAssertEqual(SidebarItem.agents.sectionGroup, .configuration)
-        XCTAssertEqual(SidebarItem.mcpServers.sectionGroup, .configuration)
+    func testSidebarItemIcons() {
+        XCTAssertEqual(SidebarItem.sessions.systemIcon, "message")
+        XCTAssertEqual(SidebarItem.mcpServers.systemIcon, "plug")
+        XCTAssertEqual(SidebarItem.permissions.systemIcon, "lock.shield")
     }
 }
