@@ -60,6 +60,10 @@ if [ "$NO_SIGN" = true ]; then
         exit 1
     fi
     echo "==> Found app at: ${APP_PATH}"
+    # Copy to export path for DMG creation
+    mkdir -p "${EXPORT_PATH}"
+    cp -R "$APP_PATH" "${EXPORT_PATH}/${SCHEME}.app"
+    APP_PATH="${EXPORT_PATH}/${SCHEME}.app"
 else
     # ── Signed/archived build ──
     echo "==> Archiving..."
