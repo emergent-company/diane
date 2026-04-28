@@ -12,6 +12,7 @@ struct SessionsView: View {
     @State private var isLoading = false
     @State private var isLoadingMessages = false
     @State private var error: String? = nil
+    @State private var messagesError: String? = nil
 
     var body: some View {
         HSplitView {
@@ -139,6 +140,15 @@ struct SessionsView: View {
 
             if isLoadingMessages {
                 LoadingStateView(message: "Loading messages…")
+            } else if let err = messagesError {
+                ErrorBannerView(message: err) {
+                    Task {
+                        if let session = selectedSession {
+                            await loadMessages(session: session)
+                        }
+                    }
+                }
+                .padding(8)
             } else if messages.isEmpty {
                 EmptyStateView(
                     title: "No Messages",
@@ -224,10 +234,12 @@ struct SessionsView: View {
     @MainActor
     private func loadMessages(session: DianeSession) async {
         isLoadingMessages = true
+        messagesError = nil
         do {
             messages = try await dianeAPI.fetchSessionMessages(sessionID: session.id)
         } catch {
             messages = []
+            messagesError = error.localizedDescription
         }
         isLoadingMessages = false
     }

@@ -51,6 +51,12 @@ final class DianeAPIClient: ObservableObject {
 
     // MARK: - Sessions
 
+    /// Log a snippet of response data when JSON decoding fails, so we can debug API mismatches.
+    private func logDecodeFailure<T>(_ type: T.Type, data: Data, context: String) {
+        let prefix = String(data: data.prefix(1024), encoding: .utf8) ?? "<non-utf8>"
+        logger.warning("JSON decode failed for \(context) — expected \(T.self). Response prefix: \(prefix)")
+    }
+
     func fetchSessions(status: String? = nil) async throws -> [DianeSession] {
         var path = "/api/sessions"
         if let s = status {
@@ -61,6 +67,7 @@ final class DianeAPIClient: ObservableObject {
         if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.items {
             return list
         }
+        logDecodeFailure([DianeSession].self, data: data, context: "fetchSessions")
         return (try? JSONDecoder().decode([DianeSession].self, from: data)) ?? []
     }
 
@@ -71,6 +78,7 @@ final class DianeAPIClient: ObservableObject {
         if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.items {
             return list
         }
+        logDecodeFailure([DianeMessage].self, data: data, context: "fetchSessionMessages")
         return (try? JSONDecoder().decode([DianeMessage].self, from: data)) ?? []
     }
 
@@ -82,6 +90,7 @@ final class DianeAPIClient: ObservableObject {
         if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.servers {
             return list
         }
+        logDecodeFailure([MCPServer].self, data: data, context: "fetchMCPServers")
         return (try? JSONDecoder().decode([MCPServer].self, from: data)) ?? []
     }
 
@@ -93,6 +102,7 @@ final class DianeAPIClient: ObservableObject {
         if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.nodes {
             return list
         }
+        logDecodeFailure([RelayNode].self, data: data, context: "fetchRelayNodes")
         return (try? JSONDecoder().decode([RelayNode].self, from: data)) ?? []
     }
 
@@ -112,6 +122,7 @@ final class DianeAPIClient: ObservableObject {
         if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.tools {
             return list
         }
+        logDecodeFailure([MCPToolInfo].self, data: data, context: "fetchNodeTools")
         return []
     }
 

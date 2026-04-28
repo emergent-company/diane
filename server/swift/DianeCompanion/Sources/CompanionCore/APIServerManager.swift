@@ -14,6 +14,12 @@ final class APIServerManager: ObservableObject {
     private var process: Process?
     private var apiClient: DianeAPIClient?
 
+    // Circuit breaker state
+    private var restartCount = 0
+    private var firstRestartTime: Date? = nil
+    private static let maxRestarts = 3
+    private static let circuitBreakerWindow: TimeInterval = 60
+
     func configure(apiClient: DianeAPIClient) {
         self.apiClient = apiClient
     }
@@ -42,14 +48,39 @@ final class APIServerManager: ObservableObject {
         proc.standardOutput = Pipe()
         proc.standardError = Pipe()
 
-        // Set up termination handler for auto-restart
+        // Set up termination handler with circuit breaker for auto-restart
         proc.terminationHandler = { [weak self] _ in
             Task { @MainActor in
-                self?.logger.warning("diane serve process terminated — restarting in 3s")
-                self?.isRunning = false
+                guard let self else { return }
+
+                // Circuit breaker: check restart rate within window
+                let now = Date()
+                if let first = self.firstRestartTime {
+                    if now.timeIntervalSince(first) > Self.circuitBreakerWindow {
+                        // Window expired — reset counter
+                        self.restartCount = 0
+                        self.firstRestartTime = nil
+                    }
+                }
+
+                self.restartCount += 1
+                if self.firstRestartTime == nil {
+                    self.firstRestartTime = now
+                }
+
+                guard self.restartCount <= Self.maxRestarts else {
+                    let msg = "diane serve terminated \(self.restartCount) times in \(Self.circuitBreakerWindow)s — stopping auto-restart"
+                    self.logger.error("\(msg)")
+                    self.lastError = msg
+                    self.isRunning = false
+                    return
+                }
+
+                self.logger.warning("diane serve process terminated (restart \(self.restartCount)/\(Self.maxRestarts)) — restarting in 3s")
+                self.isRunning = false
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
-                if let client = self?.apiClient {
-                    await self?.ensureRunning(dianeAPI: client)
+                if let client = self.apiClient {
+                    await self.ensureRunning(dianeAPI: client)
                 }
             }
         }

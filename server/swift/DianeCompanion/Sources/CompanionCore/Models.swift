@@ -199,9 +199,30 @@ public struct AnyCodable: Codable, Sendable {
         case let i as Int:    try container.encode(i)
         case let d as Double: try container.encode(d)
         case let s as String: try container.encode(s)
+        case let arr as [Any]:
+            var nested = container.unkeyedContainer()
+            for item in arr {
+                try nested.encode(AnyCodable(item))
+            }
+        case let dict as [String: Any]:
+            var nested = container.nestedContainer(keyedBy: AnyCodingKey.self)
+            for (key, val) in dict {
+                if let k = AnyCodingKey(stringValue: key) {
+                    try nested.encode(AnyCodable(val), forKey: k)
+                }
+            }
         default: try container.encodeNil()
         }
     }
+}
+
+/// Dynamic coding key used by AnyCodable for dictionary encoding.
+private struct AnyCodingKey: CodingKey {
+    var stringValue: String
+    var intValue: Int?
+
+    init?(stringValue: String) { self.stringValue = stringValue; self.intValue = nil }
+    init?(intValue: Int) { self.stringValue = "\(intValue)"; self.intValue = intValue }
 }
 
 // MARK: - Agent

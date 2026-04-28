@@ -27,6 +27,7 @@ type MCPClient struct {
 	timeout    time.Duration // Per-request timeout for tool calls
 	pendingMu  sync.Mutex
 	pending    map[interface{}]chan MCPResponse
+	closeOnce  sync.Once // Ensures notifyChan is closed only once
 }
 
 // MCPRequest represents a JSON-RPC request
@@ -347,6 +348,9 @@ func (c *MCPClient) Close() error {
 		}
 		c.cmd.Wait()
 	}
+	// Close notification channel to stop monitoring goroutines
+	// (only if messageLoop has already stopped due to closed pipes above)
+	c.closeOnce.Do(func() { close(c.notifyChan) })
 	return nil
 }
 

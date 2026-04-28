@@ -258,7 +258,7 @@ func (a *localAPIServer) handleNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Header.Set("Authorization", "Bearer "+a.config.Token)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("query nodes: %v", err))
 		return
@@ -377,7 +377,7 @@ func (a *localAPIServer) handleNodeByID(w http.ResponseWriter, r *http.Request) 
 	}
 	req.Header.Set("Authorization", "Bearer "+a.config.Token)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("query tools: %v", err))
 		return

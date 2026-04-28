@@ -125,13 +125,17 @@ final class PermissionManager: ObservableObject {
     func openSystemSettings(_ type: PermissionType) {
         switch type {
         case .accessibility:
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+            guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") else { return }
+            NSWorkspace.shared.open(url)
         case .automation:
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!)
+            guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") else { return }
+            NSWorkspace.shared.open(url)
         case .notifications:
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.notifications")!)
+            guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") else { return }
+            NSWorkspace.shared.open(url)
         default:
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy")!)
+            guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy") else { return }
+            NSWorkspace.shared.open(url)
         }
     }
     

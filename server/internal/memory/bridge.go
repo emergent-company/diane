@@ -27,6 +27,9 @@ import (
 	sdkagentrun "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agents"
 )
 
+// bridgeHTTPClient is a shared HTTP client with a 15-second timeout.
+var bridgeHTTPClient = &http.Client{Timeout: 15 * time.Second}
+
 // Bridge is the main interface to the Memory Platform.
 // Each Bridge is scoped to a single Memory project.
 type Bridge struct {
@@ -428,7 +431,7 @@ func (b *Bridge) TriggerAgentWithInput(ctx context.Context, agentID, prompt, ses
 	req.Header.Set("Authorization", "Bearer "+b.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	httpResp, err := http.DefaultClient.Do(req)
+	httpResp, err := bridgeHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("trigger http: %w", err)
 	}
