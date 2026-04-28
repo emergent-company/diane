@@ -1,6 +1,5 @@
 import SwiftUI
 import OSLog
-import AppKit
 
 @main
 struct DianeCompanionApp: App {
@@ -13,8 +12,8 @@ struct DianeCompanionApp: App {
     @StateObject private var appState       = AppState()
     @StateObject private var dianeAPI       = DianeAPIClient()
     @StateObject private var apiClient      = EmergentAPIClient()
+    @StateObject private var apiServer      = APIServerManager()
     @State private var hasStarted           = false
-    @State private var dianeProcess: Process?
 
     init() {
         logger.info("Diane is launching.")
@@ -83,10 +82,11 @@ struct DianeCompanionApp: App {
         // Configure the API client from persisted server settings
         apiClient.configure(serverURL: serverConfig.serverURL, apiKey: serverConfig.apiKey)
 
-        // Ensure local diane serve is running with API port
-        await ensureLocalAPIRunning()
+        // Configure the API server manager and ensure local diane serve is running
+        apiServer.configure(apiClient: dianeAPI)
+        await apiServer.ensureRunning(dianeAPI: dianeAPI)
 
-        // Check if the local Diane API is reachable
+        // Check reachability after trying to start
         let reachable = await dianeAPI.checkReachability()
         logger.info("Local Diane API reachable: \(reachable)")
         if !reachable {
@@ -94,49 +94,5 @@ struct DianeCompanionApp: App {
         }
 
         await updateChecker.start()
-    }
-
-    /// Ensure `diane serve --api-port 8890` is running using the bundled binary.
-    /// Starts it as a child process of the companion app (TCC visibility).
-    @MainActor
-    private func ensureLocalAPIRunning() async {
-        // First check if it's already running
-        if await dianeAPI.checkReachability() {
-            logger.info("Local Diane API already running.")
-            return
-        }
-
-        guard let bundledURL = Bundle.main.url(forResource: "diane", withExtension: nil) else {
-            logger.warning("No bundled diane binary found — cannot start local API.")
-            return
-        }
-
-        logger.info("Starting diane serve --api-port 8890 from \(bundledURL.path)")
-        
-        let process = Process()
-        process.executableURL = bundledURL
-        process.arguments = ["serve", "--api-port", "8890"]
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
-        
-        // Set up termination handler for auto-restart
-        process.terminationHandler = { [weak self] proc in
-            Task { @MainActor in
-                self?.logger.warning("diane serve process terminated (reason: \(proc.terminationReason.rawValue)) — restarting in 3s")
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
-                await self?.ensureLocalAPIRunning()
-            }
-        }
-
-        do {
-            try process.run()
-            self.dianeProcess = process
-            // Wait a moment for it to start
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            let reachable = await dianeAPI.checkReachability()
-            logger.info("Local API reachable after start: \(reachable)")
-        } catch {
-            logger.error("Failed to start diane serve: \(error.localizedDescription)")
-        }
     }
 }
