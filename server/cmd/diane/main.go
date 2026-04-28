@@ -82,6 +82,8 @@ func main() {
 		cmdMonitor()
 	case "nodes":
 		cmdNodes()
+	case "serve":
+		cmdServe()
 	case "upgrade":
 		cmdUpgrade()
 	case "service":
