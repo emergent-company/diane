@@ -1666,11 +1666,11 @@ pollLoop:
 				}
 			}
 
-			// Combine reasoning + response in Claude-style format
+			// Combine reasoning + response — wrap thinking in spoiler tags for foldable display
 			if reasoningText != "" && responseText == "" {
-				responseText = reasoningText
+				responseText = "||" + reasoningText + "||"
 			} else if reasoningText != "" {
-				responseText = "🤔 *Thinking...*\n" + reasoningText + "\n\n" + responseText
+				responseText = "🤔 ||*Thinking...*\n" + reasoningText + "||\n\n" + responseText
 			}
 
 			if responseText != "" {
