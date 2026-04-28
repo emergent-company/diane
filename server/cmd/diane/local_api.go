@@ -109,10 +109,15 @@ func (a *localAPIServer) handleSessions(w http.ResponseWriter, r *http.Request) 
 		MessageCount int    `json:"message_count,omitempty"`
 		TotalTokens  int    `json:"total_tokens,omitempty"`
 		CreatedAt    string `json:"created_at,omitempty"`
+		UpdatedAt    string `json:"updated_at,omitempty"`
 	}
 
 	items := make([]sessionJSON, 0, len(sessions))
 	for _, s := range sessions {
+		updatedAt := s.CreatedAt.Format(time.RFC3339)
+		if !s.UpdatedAt.IsZero() {
+			updatedAt = s.UpdatedAt.Format(time.RFC3339)
+		}
 		items = append(items, sessionJSON{
 			ID:           s.ID,
 			Key:          s.Key,
@@ -121,6 +126,7 @@ func (a *localAPIServer) handleSessions(w http.ResponseWriter, r *http.Request) 
 			MessageCount: s.MessageCount,
 			TotalTokens:  s.TotalTokens,
 			CreatedAt:    s.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:    updatedAt,
 		})
 	}
 
@@ -157,22 +163,42 @@ func (a *localAPIServer) handleSessionByID(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	type toolCallJSON struct {
+		ID        string `json:"id"`
+		Name      string `json:"name"`
+		Arguments string `json:"arguments,omitempty"`
+	}
+
 	type messageJSON struct {
-		ID             string `json:"id"`
-		Role           string `json:"role"`
-		Content        string `json:"content"`
-		SequenceNumber int    `json:"sequence_number,omitempty"`
-		TokenCount     int    `json:"token_count,omitempty"`
+		ID               string         `json:"id"`
+		Role             string         `json:"role"`
+		Content          string         `json:"content"`
+		SequenceNumber   int            `json:"sequence_number,omitempty"`
+		TokenCount       int            `json:"token_count,omitempty"`
+		ToolCalls        []toolCallJSON `json:"tool_calls,omitempty"`
+		ReasoningContent string         `json:"reasoning_content,omitempty"`
+		CreatedAt        string         `json:"created_at,omitempty"`
 	}
 
 	items := make([]messageJSON, 0, len(messages))
 	for _, m := range messages {
+		tcs := make([]toolCallJSON, 0, len(m.ToolCalls))
+		for _, tc := range m.ToolCalls {
+			tcs = append(tcs, toolCallJSON{
+				ID:        tc.ID,
+				Name:      tc.Name,
+				Arguments: tc.Arguments,
+			})
+		}
 		items = append(items, messageJSON{
-			ID:             m.ID,
-			Role:           m.Role,
-			Content:        m.Content,
-			SequenceNumber: m.Seq,
-			TokenCount:     m.TokenCount,
+			ID:               m.ID,
+			Role:             m.Role,
+			Content:          m.Content,
+			SequenceNumber:   m.Seq,
+			TokenCount:       m.TokenCount,
+			ToolCalls:        tcs,
+			ReasoningContent: m.ReasoningContent,
+			CreatedAt:        m.CreatedAt.Format(time.RFC3339),
 		})
 	}
 

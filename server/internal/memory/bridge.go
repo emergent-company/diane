@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	sdk "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk"
@@ -48,15 +49,26 @@ type Session struct {
 	TotalTokens  int // auto-maintained by server when messages have token_count
 	Status       string
 	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // Message represents a single turn in a session.
 type Message struct {
-	ID         string
-	Role       string
-	Content    string
-	Seq        int
-	TokenCount int // 0 if unknown; populated when stored with token counting
+	ID               string
+	Role             string
+	Content          string
+	Seq              int
+	TokenCount       int        // 0 if unknown; populated when stored with token counting
+	ToolCalls        []ToolCall // tool calls made by the assistant (if any)
+	ReasoningContent string     // thinking/reasoning content (e.g. from DeepSeek)
+	CreatedAt        time.Time  // when this message was created
+}
+
+// ToolCall represents a single tool invocation embedded in an assistant message.
+type ToolCall struct {
+	ID        string
+	Name      string
+	Arguments string // JSON string of arguments
 }
 
 // SearchResult is a single match from memory recall.
@@ -505,15 +517,45 @@ func graphObjectToSession(obj *graph.GraphObject) *Session {
 
 func graphObjectToMessage(obj *graph.GraphObject) *Message {
 	m := &Message{
-		ID:      obj.EntityID,
-		Role:    safePropStr(obj.Properties, "role"),
-		Content: safePropStr(obj.Properties, "content"),
+		ID:               obj.EntityID,
+		Role:             safePropStr(obj.Properties, "role"),
+		Content:          safePropStr(obj.Properties, "content"),
+		ReasoningContent: safePropStr(obj.Properties, "reasoning_content"),
+		CreatedAt:        obj.CreatedAt,
+	}
+	if m.ReasoningContent == "" {
+		m.ReasoningContent = safePropStr(obj.Properties, "reasoningContent")
 	}
 	if seq, ok := obj.Properties["sequence_number"].(float64); ok {
 		m.Seq = int(seq)
 	}
 	if tc, ok := obj.Properties["token_count"].(float64); ok {
 		m.TokenCount = int(tc)
+	}
+	// Extract tool calls from the graph object properties.
+	// The server stores toolCalls as a JSON array in the properties.
+	if raw, ok := obj.Properties["toolCalls"]; ok {
+		if arr, ok := raw.([]any); ok {
+			for _, item := range arr {
+				if tc, ok := item.(map[string]any); ok {
+					toolCall := ToolCall{
+						ID:   safeAnyStr(tc, "id"),
+						Name: safeAnyStr(tc, "name"),
+					}
+					if args, ok := tc["arguments"]; ok {
+						switch v := args.(type) {
+						case string:
+							toolCall.Arguments = v
+						case map[string]any, []any:
+							if b, err := json.Marshal(v); err == nil {
+								toolCall.Arguments = string(b)
+							}
+						}
+					}
+					m.ToolCalls = append(m.ToolCalls, toolCall)
+				}
+			}
+		}
 	}
 	return m
 }
@@ -533,11 +575,36 @@ func safePropStr(props map[string]any, key string) string {
 	if !ok {
 		return ""
 	}
-	s, ok := v.(string)
+	return safeAnyToStr(v)
+}
+
+// safeAnyToStr converts an any value to a string, handling all JSON-compatible types.
+func safeAnyToStr(v any) string {
+	switch s := v.(type) {
+	case string:
+		return s
+	case float64:
+		return strconv.FormatFloat(s, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(s)
+	default:
+		if b, err := json.Marshal(v); err == nil {
+			return string(b)
+		}
+		return ""
+	}
+}
+
+// safeAnyStr extracts a string from a map by key, handling type flexibility.
+func safeAnyStr(m map[string]any, key string) string {
+	if m == nil {
+		return ""
+	}
+	v, ok := m[key]
 	if !ok {
 		return ""
 	}
-	return s
+	return safeAnyToStr(v)
 }
 
 func boolPtr(v bool) *bool {
