@@ -617,8 +617,8 @@ func TestDedupSurvivesRestartedBot(t *testing.T) {
 	// Bot v1: processes a message
 	bot1 := &Bot{
 		dedupCache:      make(map[string]time.Time),
-		dedupCookie:     "cookie-v1",
-		restartCount:    1,
+		DedupCookie:     "cookie-v1",
+		RestartCount:    1,
 		activeChans:     make(map[string]*ActiveChannel),
 		runChannels:     make(map[string]string),
 		msgGuard:        make(map[string]struct{}),
@@ -641,8 +641,8 @@ func TestDedupSurvivesRestartedBot(t *testing.T) {
 	// WITHOUT SQLite persistence, this is where the bug lives.
 	bot2 := &Bot{
 		dedupCache:      make(map[string]time.Time),
-		dedupCookie:     "cookie-v2",
-		restartCount:    2,
+		DedupCookie:     "cookie-v2",
+		RestartCount:    2,
 		activeChans:     make(map[string]*ActiveChannel),
 		runChannels:     make(map[string]string),
 		msgGuard:        make(map[string]struct{}),
@@ -671,5 +671,248 @@ func TestDedupCookieChangesOnRestart(t *testing.T) {
 	}
 	if len(cookie1) != 16 { // 8 bytes → 16 hex chars
 		t.Errorf("Expected 16-char hex cookie, got %d chars: %s", len(cookie1), cookie1)
+	}
+}
+
+// ── Thread Routing Tests ──────────────────────────────────────────────────
+
+// testBot creates a Bot with a FakeDiscordAPI and canned response for testing.
+// Returns the bot, fake API, and a cleanup function.
+func testBot(t *testing.T, allowedChannels []string) (*Bot, *FakeDiscordAPI) {
+	t.Helper()
+	fake := NewFakeDiscordAPI()
+	bot := &Bot{
+		api:             fake,
+		config:          Config{AllowedChannels: allowedChannels},
+		sessions:        make(map[string]*ChannelSession),
+		typingCancel:    make(map[string]context.CancelFunc),
+		dedupCache:      make(map[string]time.Time),
+		activeChans:     make(map[string]*ActiveChannel),
+		msgGuard:        make(map[string]struct{}),
+		runChannels:     make(map[string]string),
+		sseNotifications: make(chan map[string]interface{}, 100),
+		buildResponseFn: func(ctx context.Context, m *discordgo.Message, responseChannel string) string {
+			return "test response"
+		},
+	}
+	return bot, fake
+}
+
+// testMessage creates a discordgo.MessageCreate suitable for testing.
+func testMessage(channelID, authorID, content string) *discordgo.MessageCreate {
+	return &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			ID:        "test-msg-" + channelID,
+			ChannelID: channelID,
+			Content:   content,
+			Author:    &discordgo.User{ID: authorID, Username: "testuser"},
+		},
+	}
+}
+
+// TestThreadRouting_ParentChannelCreatesThread verifies that a message in the
+// parent channel creates a new thread and routes the response there.
+func TestThreadRouting_ParentChannelCreatesThread(t *testing.T) {
+	bot, fake := testBot(t, []string{"parent-1"})
+	fake.AddParentChannel("parent-1", "general")
+
+	msg := testMessage("parent-1", "user-1", "hello bot")
+	bot.onMessageCreate(nil, msg)
+
+	// Wait for the goroutine to finish
+	time.Sleep(100 * time.Millisecond)
+
+	// Should have created a thread
+	if len(fake.ThreadCreateCalls) != 1 {
+		t.Fatalf("Expected 1 thread creation, got %d", len(fake.ThreadCreateCalls))
+	}
+	tc := fake.ThreadCreateCalls[0]
+	if tc.ChannelID != "parent-1" {
+		t.Errorf("Thread should be created on parent channel, got %s", tc.ChannelID)
+	}
+
+	// Typing should be in the thread
+	lastTyping := fake.LastTypingChannel()
+	if lastTyping != tc.CreatedID {
+		t.Errorf("Typing should be in thread %s, got %s", tc.CreatedID, lastTyping)
+	}
+
+	// Response should be sent to the thread
+	lastMsg := fake.LastMessageChannel()
+	if lastMsg != tc.CreatedID {
+		t.Errorf("Response should be sent to thread %s, got %s", tc.CreatedID, lastMsg)
+	}
+
+	// 👀 reaction should be on the PARENT channel message
+	eyes := fake.ReactionsByEmoji("👀")
+	if len(eyes) < 1 {
+		t.Fatal("Expected at least one 👀 reaction")
+	}
+	firstEyes := eyes[0]
+	if firstEyes.ChannelID != "parent-1" {
+		t.Errorf("👀 reaction should be on parent channel, got %s", firstEyes.ChannelID)
+	}
+
+	// ✅ or ❌ reactions should be on the parent channel (original message)
+	okReactions := fake.ReactionsByEmoji("✅")
+	errReactions := fake.ReactionsByEmoji("❌")
+	finalReactions := append(okReactions, errReactions...)
+	if len(finalReactions) > 0 {
+		if finalReactions[0].ChannelID != "parent-1" {
+			t.Errorf("Final reaction should be on parent channel, got %s", finalReactions[0].ChannelID)
+		}
+	}
+}
+
+// TestThreadRouting_FollowUpInExistingThread verifies that a message sent in
+// an existing thread is detected and handled within the same thread.
+func TestThreadRouting_FollowUpInExistingThread(t *testing.T) {
+	bot, fake := testBot(t, []string{"parent-1"})
+	fake.AddParentChannel("parent-1", "general")
+	fake.AddThread("thread-1", "parent-1", "💬 Chat: hello bot")
+
+	msg := testMessage("thread-1", "user-1", "follow up")
+	bot.onMessageCreate(nil, msg)
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Should NOT create a new thread
+	if len(fake.ThreadCreateCalls) != 0 {
+		t.Errorf("Should NOT create a new thread for follow-up, got %d", len(fake.ThreadCreateCalls))
+	}
+
+	// Typing should be in the existing thread
+	lastTyping := fake.LastTypingChannel()
+	if lastTyping != "thread-1" {
+		t.Errorf("Typing should be in thread 'thread-1', got %s", lastTyping)
+	}
+
+	// Response should be sent to the thread
+	lastMsg := fake.LastMessageChannel()
+	if lastMsg != "thread-1" {
+		t.Errorf("Response should be sent to thread 'thread-1', got %s", lastMsg)
+	}
+
+	// 👀 reaction should be on the THREAD message
+	eyes := fake.ReactionsByEmoji("👀")
+	if len(eyes) == 0 {
+		t.Fatal("Expected at least one 👀 reaction")
+	}
+	if eyes[0].ChannelID != "thread-1" {
+		t.Errorf("👀 reaction should be on thread channel, got %s", eyes[0].ChannelID)
+	}
+}
+
+// TestThreadRouting_UnallowedParentChannel verifies that messages in a thread
+// whose parent is NOT in the allowed list are silently ignored.
+func TestThreadRouting_UnallowedParentChannel(t *testing.T) {
+	bot, fake := testBot(t, []string{"allowed-parent"})
+	fake.AddParentChannel("allowed-parent", "allowed")
+	fake.AddParentChannel("other-parent", "other")
+	fake.AddThread("other-thread", "other-parent", "💬 Chat: something")
+
+	// Send a message in a thread under a non-allowed parent
+	msg := testMessage("other-thread", "user-1", "hello")
+	bot.onMessageCreate(nil, msg)
+
+	time.Sleep(50 * time.Millisecond)
+
+	// No reactions, no thread creation, no response
+	if len(fake.ThreadCreateCalls) != 0 {
+		t.Errorf("Should not create thread for unallowed parent")
+	}
+	if len(fake.MessageSendCalls) != 0 {
+		t.Errorf("Should not send response for unallowed parent")
+	}
+	if len(fake.ReactionCalls) != 0 {
+		t.Errorf("Should not react for unallowed parent")
+	}
+}
+
+// TestThreadRouting_BotMessageIgnored verifies the bot ignores its own messages.
+func TestThreadRouting_BotMessageIgnored(t *testing.T) {
+	bot, fake := testBot(t, []string{"parent-1"})
+	fake.AddParentChannel("parent-1", "general")
+
+	// Simulate the bot sending a message
+	msg := testMessage("parent-1", fake.BotID, "I am the bot")
+	bot.onMessageCreate(nil, msg)
+
+	time.Sleep(50 * time.Millisecond)
+
+	// No reactions, no thread creation, no response
+	if len(fake.MessageSendCalls) != 0 {
+		t.Errorf("Bot should not respond to its own messages")
+	}
+	if len(fake.ThreadCreateCalls) != 0 {
+		t.Errorf("Bot should not create thread for its own messages")
+	}
+}
+
+// TestThreadRouting_QueueInThread verifies that when processing a parent channel
+// message, a follow-up in the thread gets queued (not lost or double-processed).
+func TestThreadRouting_QueueInThread(t *testing.T) {
+	bot, fake := testBot(t, []string{"parent-1"})
+	fake.AddParentChannel("parent-1", "general")
+
+	// Register thread as an existing thread under parent-1
+	threadID := "thread-queue-test"
+	fake.AddThread(threadID, "parent-1", "💬 Chat: existing thread")
+
+	// Acquire the channel to simulate an active processing
+	bot.acquireChannel(threadID)
+	defer bot.releaseChannel(threadID)
+
+	fake.Reset()
+
+	// Send a message in the thread while it's busy
+	msg := testMessage(threadID, "user-1", "queued message")
+	bot.onMessageCreate(nil, msg)
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify the 👀 reaction was added (confirms message wasn't silently dropped)
+	eyes := fake.ReactionsByEmoji("👀")
+	if len(eyes) == 0 {
+		t.Error("Expected 👀 reaction on thread message even when queued")
+	}
+}
+
+// TestThreadRouting_DiscordMessageCheck verifies the log format shows
+// thread=true for follow-ups and thread=false for parent messages.
+func TestThreadRouting_MessageClassification(t *testing.T) {
+	fake := NewFakeDiscordAPI()
+	fake.AddParentChannel("parent-1", "general")
+	fake.AddThread("thread-1", "parent-1", "Thread 1")
+
+	// Verify parent channel
+	ch, err := fake.Channel("parent-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch.IsThread() {
+		t.Error("parent-1 should NOT be a thread")
+	}
+
+	// Verify thread channel
+	ch, err = fake.Channel("thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ch.IsThread() {
+		t.Error("thread-1 SHOULD be a thread")
+	}
+	if ch.ParentID != "parent-1" {
+		t.Errorf("Expected ParentID=parent-1, got %s", ch.ParentID)
+	}
+}
+
+// TestThreadRouting_BotUserIDFiltersSelf verifies BotUserID() works for self-filtering.
+func TestThreadRouting_BotUserID(t *testing.T) {
+	bot, fake := testBot(t, []string{"ch-1"})
+	fake.AddParentChannel("ch-1", "general")
+
+	if bot.api.BotUserID() != "bot-123" {
+		t.Errorf("Expected BotUserID bot-123, got %s", bot.api.BotUserID())
 	}
 }

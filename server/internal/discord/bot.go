@@ -8,6 +8,8 @@ package discord
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -67,6 +69,7 @@ func dlog(tag string, fields ...interface{}) {
 type Bot struct {
 	config Config
 	dg     *discordgo.Session
+	api    DiscordAPI // wraps dg; can be swapped for testing
 
 	mu         sync.RWMutex
 	sessions   map[string]*ChannelSession // channelID → session
@@ -77,6 +80,20 @@ type Bot struct {
 
 	dedupMu     sync.RWMutex
 	dedupCache  map[string]time.Time // messageID → timestamp (for dedup on reconnect)
+
+	// dedupCookie / restartCount — used for detecting bot restarts in logs.
+	// Each bot instance generates a random hex cookie at startup. If the
+	// cookie changes between log entries, the bot restarted.
+	DedupCookie  string // random hex — changes on every restart
+	RestartCount int    // incremented at startup
+
+	// msgGuard prevents simultaneous duplicate MessageCreate events from
+	// Discord Gateway. Unlike dedupCache (which handles RESUME replay across
+	// time), msgGuard catches two events arriving at nearly the same instant.
+	// Guard is set BEFORE spawning handleMessage goroutine and cleared via
+	// defer inside handleMessage.
+	msgGuardMu sync.Mutex
+	msgGuard   map[string]struct{} // message IDs currently being processed
 
 	activeMu     sync.Mutex
 	activeChans  map[string]*ActiveChannel // responseChannel → active processing
@@ -93,6 +110,10 @@ type Bot struct {
 	// questionChannelID is the persistent channel for agent questions, set via
 	// /set_ask_channel command. Gets priority after thread-local routing.
 	questionChannelID string
+
+	// buildResponseFn, if set, overrides buildAndSendResponse for testing.
+	// Allows thread routing tests without needing a real memory bridge.
+	buildResponseFn func(ctx context.Context, m *discordgo.Message, responseChannel string) string
 }
 
 const dedupTTL = 5 * time.Minute // keep dedup entries for 5 minutes
@@ -173,12 +194,16 @@ func New(cfg Config) (*Bot, error) {
 	}
 
 	bot := &Bot{
-		config:   cfg,
+		config:    cfg,
 		dg:       dg,
+		api:      newDiscordAPI(dg),
 		sessions: make(map[string]*ChannelSession),
 
 		typingCancel:  make(map[string]context.CancelFunc),
 		dedupCache:    make(map[string]time.Time),
+		DedupCookie:   generateDedupCookie(),
+		RestartCount:  1,
+		msgGuard:      make(map[string]struct{}),
 		activeChans:   make(map[string]*ActiveChannel),
 		sseNotifications: make(chan map[string]interface{}, 100),
 		sendChannelID: notifChannel,
@@ -358,7 +383,7 @@ func (b *Bot) handleSelectMenu(s *discordgo.Session, i *discordgo.Interaction, c
 
 // openTextModal shows a Discord modal for free-text input.
 func (b *Bot) openTextModal(s *discordgo.Session, i *discordgo.Interaction, questionID string) {
-	err := s.InteractionRespond(i, &discordgo.InteractionResponse{
+	err := b.api.InteractionRespond(i, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseModal,
 		Data: &discordgo.InteractionResponseData{
 			CustomID: fmt.Sprintf("aq-modal:%s", questionID),
@@ -436,7 +461,7 @@ func (b *Bot) respondToQuestion(s *discordgo.Session, i *discordgo.Interaction, 
 	log.Printf("[INT] Responding to question %s with %q", questionID[:12], responseValue)
 
 	// Acknowledge the interaction immediately (Discord requires this within 3s)
-	err := s.InteractionRespond(i, &discordgo.InteractionResponse{
+	err := b.api.InteractionRespond(i, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredMessageUpdate,
 	})
 	if err != nil {
@@ -451,7 +476,7 @@ func (b *Bot) respondToQuestion(s *discordgo.Session, i *discordgo.Interaction, 
 	notifResp, err := globalBridge.RespondToAgentQuestion(ctx, questionID, responseValue)
 	if err != nil {
 		log.Printf("[INT] Failed to respond to question %s: %v", questionID[:12], err)
-		_, editErr := s.InteractionResponseEdit(i, &discordgo.WebhookEdit{
+		_, editErr := b.api.InteractionResponseEdit(i, &discordgo.WebhookEdit{
 			Content: toPtr(fmt.Sprintf("❌ Failed to respond: %v", err)),
 		})
 		if editErr != nil {
@@ -463,7 +488,7 @@ func (b *Bot) respondToQuestion(s *discordgo.Session, i *discordgo.Interaction, 
 	log.Printf("[INT] Question %s answered successfully (%s → %s)", questionID[:12], responseValue, notifResp.Status)
 
 	// Update the original embed to show the response was submitted
-	_, editErr := s.InteractionResponseEdit(i, &discordgo.WebhookEdit{
+	_, editErr := b.api.InteractionResponseEdit(i, &discordgo.WebhookEdit{
 		Content:    toPtr(fmt.Sprintf("🧠 **Agent Question**\nResponded: **%s**\n_Agent resuming..._ ✅", responseLabel)),
 		Components: &[]discordgo.MessageComponent{}, // remove buttons
 	})
@@ -780,7 +805,7 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) 
 	}
 
 	// Ignore our own messages
-	if m.Author.ID == s.State.User.ID {
+	if m.Author.ID == b.api.BotUserID() {
 		return
 	}
 	if m.Author.Bot {
@@ -789,7 +814,7 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) 
 
 	// Resolve effective channel: for threads, check parent channel
 	effectiveChannelID := m.ChannelID
-	ch, err := s.Channel(m.ChannelID)
+	ch, err := b.api.Channel(m.ChannelID)
 	isThread := err == nil && ch.IsThread()
 	if isThread {
 		effectiveChannelID = ch.ParentID
@@ -800,6 +825,9 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) 
 
 	log.Printf("[IN]  channel=%s author=%s#%s msg=%q (thread=%v)", m.ChannelID, m.Author.Username, m.Author.Discriminator, truncateStr(m.Content, 80), isThread)
 
+	log.Printf("[RESTART] dedup_cookie=%s restart_count=%d dedup_count=%d",
+		b.DedupCookie, b.RestartCount, len(b.dedupCache))
+
 	// Quick /stop check — respond fast when nothing is running
 	if strings.TrimSpace(m.Content) == "/stop" {
 		b.activeMu.Lock()
@@ -807,8 +835,8 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) 
 		b.activeMu.Unlock()
 		if !hasActive {
 			log.Printf("[STOP] Nothing running for channel %s — replying idle", m.ChannelID)
-			s.MessageReactionAdd(m.ChannelID, m.ID, "🛑")
-			b.sendMessage(s, m.ChannelID, "Nothing is currently running.")
+			b.api.MessageReactionAdd(m.ChannelID, m.ID, "🛑")
+			b.sendMessage(m.ChannelID, "Nothing is currently running.")
 			return
 		}
 		// Active — fall through to handleMessage which handles /stop in the guard
@@ -824,34 +852,54 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) 
 		}
 		// Fetch channel name for confirmation
 		chName := m.ChannelID
-		if ch, err := s.Channel(m.ChannelID); err == nil {
+		if ch, err := b.api.Channel(m.ChannelID); err == nil {
 			chName = "#" + ch.Name
 		}
-		s.MessageReactionAdd(m.ChannelID, m.ID, "✅")
-		b.sendMessage(s, m.ChannelID, fmt.Sprintf("✅ Agent questions will now be sent to %s", chName))
+		b.api.MessageReactionAdd(m.ChannelID, m.ID, "✅")
+		b.sendMessage(m.ChannelID, fmt.Sprintf("✅ Agent questions will now be sent to %s", chName))
 		log.Printf("[CFG] ask_channel set to %s (%s)", m.ChannelID, chName)
 		return
 	}
 
 	// React with 👀 to show we've seen it
-	if err := s.MessageReactionAdd(m.ChannelID, m.ID, "👀"); err != nil {
+	if err := b.api.MessageReactionAdd(m.ChannelID, m.ID, "👀"); err != nil {
 		log.Printf("Reaction add error: %v", err)
 	}
 
-	go b.handleMessage(s, m.Message)
+	// ── Message processing guard ──
+	// Prevents simultaneous duplicate events (Discord Gateway can dispatch
+	// two MessageCreate events at the same instant). Unlike dedupCache
+	// (RESUME replay across time), this catches near-simultaneous events.
+	b.msgGuardMu.Lock()
+	if _, exists := b.msgGuard[m.ID]; exists {
+		b.msgGuardMu.Unlock()
+		log.Printf("[GUARD] Already processing message %s — skipping duplicate", m.ID)
+		return
+	}
+	b.msgGuard[m.ID] = struct{}{}
+	b.msgGuardMu.Unlock()
+
+	go b.handleMessage(m.Message)
 }
 
 // ============================================================================
 // Message Handling
 // ============================================================================
 
-func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.Message) {
+func (b *Bot) handleMessage(m *discordgo.Message) {
 	start := time.Now()
 	channelID := m.ChannelID
-	botID := s.State.User.ID
+	botID := b.api.BotUserID()
+
+	// Clear the processing guard when we're done
+	defer func() {
+		b.msgGuardMu.Lock()
+		delete(b.msgGuard, m.ID)
+		b.msgGuardMu.Unlock()
+	}()
 
 	// ── Determine response channel (thread or inline) ──
-	ch, err := s.Channel(channelID)
+	ch, err := b.api.Channel(channelID)
 	isThread := err == nil && ch.IsThread()
 	var responseChannel string
 	var createdNewThread bool
@@ -888,10 +936,10 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.Message) {
 			if threadName == "" || threadName == emoji+" "+category+": " {
 				threadName = emoji + " " + category
 			}
-			thread, err := s.MessageThreadStart(channelID, m.ID, threadName, 60*24)
+			thread, err := b.api.MessageThreadStart(channelID, m.ID, threadName, 60*24)
 			if err != nil {
 				log.Printf("[WARN] Thread creation failed: %v", err)
-				b.sendResponse(s, channelID, m, start)
+				b.sendResponse(channelID, m, start)
 				return
 			}
 			responseChannel = thread.ID
@@ -906,8 +954,8 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.Message) {
 		_, active := b.activeChans[responseChannel]
 		b.activeMu.Unlock()
 		if !active {
-			s.MessageReactionAdd(channelID, m.ID, "🛑")
-			b.sendMessage(s, responseChannel, "Nothing is currently running.")
+			b.api.MessageReactionAdd(channelID, m.ID, "🛑")
+			b.sendMessage(responseChannel, "Nothing is currently running.")
 			log.Printf("[STOP] Nothing running — replied idle")
 			return
 		}
@@ -920,17 +968,17 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.Message) {
 		// Channel is busy with another message
 		if strings.TrimSpace(m.Content) == "/stop" {
 			// /stop bypasses the queue — cancel the active run
-			s.MessageReactionAdd(channelID, m.ID, "🛑")
+			b.api.MessageReactionAdd(channelID, m.ID, "🛑")
 			b.stopActiveRun(responseChannel)
-			b.sendMessage(s, responseChannel, "🛑 **Stopped**")
+			b.sendMessage(responseChannel, "🛑 **Stopped**")
 			log.Printf("[STOP] Stopped active run for channel %s", responseChannel)
 			return
 		}
 
 		// Non-stop message while busy — queue it
-		s.MessageReactionAdd(channelID, m.ID, "👀")
+		b.api.MessageReactionAdd(channelID, m.ID, "👀")
 		b.queueMessage(responseChannel, m)
-		log.Printf("[QUEUE] Channel %s busy, queued msg %s", responseChannel, m.ID[:8])
+		log.Printf("[QUEUE] Channel %s busy, queued msg %s", responseChannel, truncateStr(m.ID, 8))
 		return
 	}
 
@@ -946,22 +994,27 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.Message) {
 			queueSize = len(ac.Pending)
 		}
 		b.activeMu.Unlock()
-		dlog("PRC", "channel", responseChannel, "msg", currentMsg.ID[:8], "queue_size", queueSize)
+		dlog("PRC", "channel", responseChannel, "msg", truncateStr(currentMsg.ID, 8), "queue_size", queueSize)
 
-		b.startTyping(s, responseChannel)
-		response := b.buildAndSendResponse(ctx, currentMsg, responseChannel)
+		b.startTyping(responseChannel)
+		var response string
+		if b.buildResponseFn != nil {
+			response = b.buildResponseFn(ctx, currentMsg, responseChannel)
+		} else {
+			response = b.buildAndSendResponse(ctx, currentMsg, responseChannel)
+		}
 		b.stopTyping(responseChannel)
 
 		// Check if cancelled by /stop
 		if ctx.Err() != nil {
-			b.sendMessage(s, responseChannel, "🛑 **Stopped**")
+			b.sendMessage(responseChannel, "🛑 **Stopped**")
 			processingOK = true
 			break
 		}
 
 		// Send response
 		if response != "" {
-			b.sendMessage(s, responseChannel, response)
+			b.sendMessage(responseChannel, response)
 			processingOK = true
 
 			// For new threads, check for session title update
@@ -972,7 +1025,7 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.Message) {
 				if exists && cs.SessionID != "" {
 					sd, sdErr := globalBridge.GetSession(context.Background(), cs.SessionID)
 					if sdErr == nil && sd.Title != "" && !strings.HasPrefix(sd.Title, "Discord #") {
-						if _, editErr := s.ChannelEdit(responseChannel, &discordgo.ChannelEdit{
+						if _, editErr := b.api.ChannelEdit(responseChannel, &discordgo.ChannelEdit{
 							Name: sd.Title,
 						}); editErr != nil {
 							log.Printf("[THR] Title update failed: %v", editErr)
@@ -990,7 +1043,7 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.Message) {
 			break // queue empty, done
 		}
 		currentMsg = nextMsg
-		log.Printf("[QUEUE] Processing queued msg %s (channel %s)", currentMsg.ID[:8], responseChannel)
+		log.Printf("[QUEUE] Processing queued msg %s (channel %s)", truncateStr(currentMsg.ID, 8), responseChannel)
 	}
 
 	// ── Cleanup ──
@@ -998,11 +1051,11 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.Message) {
 	b.releaseChannel(responseChannel)
 
 	// Swap reactions on ORIGINAL message only
-	s.MessageReactionRemove(channelID, m.ID, "👀", botID)
+	b.api.MessageReactionRemove(channelID, m.ID, "👀", botID)
 	if processingOK {
-		s.MessageReactionAdd(channelID, m.ID, "✅")
+		b.api.MessageReactionAdd(channelID, m.ID, "✅")
 	} else {
-		s.MessageReactionAdd(channelID, m.ID, "❌")
+		b.api.MessageReactionAdd(channelID, m.ID, "❌")
 	}
 
 	log.Printf("[RES] channel=%s duration=%v chars=%d", responseChannel, time.Since(start).Round(time.Millisecond), len(m.Content))
@@ -1010,9 +1063,14 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.Message) {
 
 // sendResponse handles the full response flow (fallback path, no active guard).
 // Uses a plain background context since this path doesn't support /stop.
-func (b *Bot) sendResponse(s *discordgo.Session, channelID string, m *discordgo.Message, start time.Time) {
-	response := b.buildAndSendResponse(context.Background(), m, channelID)
-	b.sendMessage(s, channelID, response)
+func (b *Bot) sendResponse(channelID string, m *discordgo.Message, start time.Time) {
+	var response string
+	if b.buildResponseFn != nil {
+		response = b.buildResponseFn(context.Background(), m, channelID)
+	} else {
+		response = b.buildAndSendResponse(context.Background(), m, channelID)
+	}
+	b.sendMessage(channelID, response)
 	log.Printf("[RES] channel=%s duration=%v chars=%d", channelID, time.Since(start).Round(time.Millisecond), len(response))
 }
 
@@ -1174,7 +1232,7 @@ func (b *Bot) queueMessage(channelID string, msg *discordgo.Message) {
 	defer b.activeMu.Unlock()
 	if ac, exists := b.activeChans[channelID]; exists {
 		ac.Pending = append(ac.Pending, msg)
-		log.Printf("[QUEUE] Queued msg %s for channel %s (size=%d)", msg.ID[:8], channelID, len(ac.Pending))
+		log.Printf("[QUEUE] Queued msg %s for channel %s (size=%d)", truncateStr(msg.ID, 8), channelID, len(ac.Pending))
 	}
 }
 
@@ -1259,20 +1317,20 @@ func (b *Bot) resolveQuestionChannel(runID string) string {
 	return b.sendChannelID
 }
 
-func (b *Bot) sendMessage(s *discordgo.Session, channelID, content string) {
+func (b *Bot) sendMessage(channelID, content string) {
 	const maxLen = 1900
 	if content == "" {
 		return
 	}
 	if len(content) <= maxLen {
-		_, err := s.ChannelMessageSend(channelID, content)
+		_, err := b.api.ChannelMessageSend(channelID, content)
 		if err != nil {
 			log.Printf("[ERR] Send message: %v", err)
 		}
 		return
 	}
 	for _, part := range splitMessage(content, maxLen) {
-		_, err := s.ChannelMessageSend(channelID, part)
+		_, err := b.api.ChannelMessageSend(channelID, part)
 		if err != nil {
 			log.Printf("[ERR] Send message part: %v", err)
 			return
@@ -1283,7 +1341,7 @@ func (b *Bot) sendMessage(s *discordgo.Session, channelID, content string) {
 // startTyping starts a persistent typing indicator loop (Hermes pattern).
 // Discord's typing indicator lasts ~10s, so we re-trigger it every 8s
 // until stopTyping is called.
-func (b *Bot) startTyping(s *discordgo.Session, channelID string) {
+func (b *Bot) startTyping(channelID string) {
 	b.typingMu.Lock()
 	defer b.typingMu.Unlock()
 
@@ -1300,12 +1358,12 @@ func (b *Bot) startTyping(s *discordgo.Session, channelID string) {
 		defer ticker.Stop()
 
 		// Send the first typing indicator immediately
-		s.ChannelTyping(channelID)
+		b.api.ChannelTyping(channelID)
 
 		for {
 			select {
 			case <-ticker.C:
-				s.ChannelTyping(channelID)
+				b.api.ChannelTyping(channelID)
 			case <-ctx.Done():
 				return
 			}
@@ -1920,4 +1978,15 @@ func categorizeMessage(content string) (emoji, category string) {
 	}
 	// Default
 	return "💬", "Chat"
+}
+
+// generateDedupCookie creates a random 16-char hex string used as a dedup
+// instance identifier. Each bot instance generates a unique cookie at startup,
+// allowing dedup persistence to be validated across restarts in logs.
+func generateDedupCookie() string {
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return "0000000000000000"
+	}
+	return hex.EncodeToString(buf)
 }
