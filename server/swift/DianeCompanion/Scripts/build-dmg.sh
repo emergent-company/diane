@@ -20,22 +20,6 @@ DMG_NAME="Diane"
 CONFIGURATION="Release"
 NO_SIGN=false
 
-# Allow VERSION override from env (CI provides github.ref_name)
-if [ -n "${VERSION:-}" ]; then
-    echo "==> Setting version from environment: ${VERSION}"
-    PLIST="$(pwd)/DianeCompanion/Info.plist"
-    plutil -replace CFBundleShortVersionString -string "${VERSION}" "${PLIST}" 2>/dev/null || \
-        /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "${PLIST}" 2>/dev/null || \
-        defaults write "${PLIST%.plist}" CFBundleShortVersionString "${VERSION}"
-    plutil -replace CFBundleVersion -string "${VERSION#v}" "${PLIST}" 2>/dev/null || \
-        /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${VERSION#v}" "${PLIST}" 2>/dev/null || \
-        defaults write "${PLIST%.plist}" CFBundleVersion "${VERSION#v}"
-else
-    VERSION=$(defaults read "$(pwd)/DianeCompanion/Info" CFBundleShortVersionString 2>/dev/null || echo "0.0.0-DEVELOPMENT")
-fi
-
-echo "==> Building Diane v${VERSION}"
-
 # Parse arguments
 for arg in "$@"; do
   case "$arg" in
@@ -45,13 +29,29 @@ for arg in "$@"; do
   esac
 done
 
-# Step 1: Generate Xcode project (requires xcodegen)
+# Step 1: Generate Xcode project (requires xcodegen) — this also generates Info.plist
 if command -v xcodegen &>/dev/null; then
     echo "==> Generating Xcode project with XcodeGen..."
     xcodegen generate
 else
     echo "⚠️  xcodegen not found — using existing .xcodeproj"
 fi
+
+# Step 2: Set version from environment (runs AFTER xcodegen so plist doesn't get overwritten)
+if [ -n "${VERSION:-}" ]; then
+    echo "==> Setting version: ${VERSION}"
+    PLIST="$(pwd)/DianeCompanion/Info.plist"
+    # Strip "v" prefix for CFBundleShortVersionString (Apple convention)
+    CLEAN_VERSION="${VERSION#v}"
+    plutil -replace CFBundleShortVersionString -string "${CLEAN_VERSION}" "${PLIST}" 2>/dev/null || \
+        /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${CLEAN_VERSION}" "${PLIST}" 2>/dev/null
+    plutil -replace CFBundleVersion -string "${CLEAN_VERSION}" "${PLIST}" 2>/dev/null || \
+        /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${CLEAN_VERSION}" "${PLIST}" 2>/dev/null
+else
+    VERSION=$(defaults read "$(pwd)/DianeCompanion/Info" CFBundleShortVersionString 2>/dev/null || echo "0.0.0-DEVELOPMENT")
+fi
+
+echo "==> Building Diane v${VERSION}"
 
 if [ "$NO_SIGN" = true ]; then
     # ── Unsigned build ──

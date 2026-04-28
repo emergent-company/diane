@@ -18,7 +18,7 @@ struct SessionsView: View {
         GeometryReader { geometry in
             HSplitView {
                 sessionsList
-                    .frame(width: geometry.size.width * 0.5, minWidth: 250)
+                    .frame(width: max(250, geometry.size.width * 0.5))
 
                 if let session = selectedSession {
                     sessionDetailPanel(session)
