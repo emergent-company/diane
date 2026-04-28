@@ -651,13 +651,13 @@ func cmdAgentSeed() {
 func syncOneAgent(ctx context.Context, bridge *memory.Bridge, name string, ac *config.AgentConfig) error {
 	// Build the SDK create request
 	req := &sdkagents.CreateAgentDefinitionRequest{
-		Name:        name,
-		FlowType:    orDefault(ac.FlowType, "standard"),
-		Visibility:  orDefault(ac.Visibility, "project"),
+		Name:         name,
+		FlowType:     orDefault(ac.FlowType, "standard"),
+		Visibility:   orDefault(ac.Visibility, "project"),
 		DispatchMode: orDefault(ac.DispatchMode, "auto"),
-		Description: strPtr(ac.Description),
-		Tools:       ac.Tools,
-		Skills:      ac.Skills,
+		Description:  strPtr(ac.Description),
+		Tools:        ac.Tools,
+		Skills:       ac.Skills,
 	}
 
 	if ac.SystemPrompt != "" {
@@ -841,7 +841,7 @@ func cmdAgentTrigger(name, prompt string) {
 
 	// 4. Poll for completion
 	fmt.Print("⏳ Waiting for result")
-	const maxPolls = 60  // 60 * 2s = 120s
+	const maxPolls = 60 // 60 * 2s = 120s
 	for i := 0; i < maxPolls; i++ {
 		time.Sleep(2 * time.Second)
 		fmt.Print(".")
@@ -1449,7 +1449,7 @@ func cmdAgentTrace(runID string) {
 	}
 
 	// Tool calls
-		if len(full.Data.ToolCalls) > 0 {
+	if len(full.Data.ToolCalls) > 0 {
 		fmt.Printf("\n── Tool Calls (%d) ──\n", len(full.Data.ToolCalls))
 		for _, tc := range full.Data.ToolCalls {
 			inputPreview := ""

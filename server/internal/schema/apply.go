@@ -76,17 +76,17 @@ type packRelationshipType struct {
 
 // packPayload is the complete Memory Schema pack request body.
 type packPayload struct {
-	Name                     string                `json:"name"`
-	Version                  string                `json:"version"`
-	Description              string                `json:"description,omitempty"`
-	ObjectTypeSchemas        []packObjectType      `json:"object_type_schemas"`
-	RelationshipTypeSchemas  []packRelationshipType `json:"relationship_type_schemas,omitempty"`
+	Name                    string                 `json:"name"`
+	Version                 string                 `json:"version"`
+	Description             string                 `json:"description,omitempty"`
+	ObjectTypeSchemas       []packObjectType       `json:"object_type_schemas"`
+	RelationshipTypeSchemas []packRelationshipType `json:"relationship_type_schemas,omitempty"`
 }
 
 func (d *SchemaDefinition) toPackType() packObjectType {
 	var schema struct {
-		Label       string          `json:"label"`
-		Properties  json.RawMessage `json:"properties"`
+		Label      string          `json:"label"`
+		Properties json.RawMessage `json:"properties"`
 	}
 	json.Unmarshal(d.JSONSchema, &schema)
 	return packObjectType{

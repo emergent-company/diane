@@ -71,15 +71,15 @@ type Bot struct {
 	dg     *discordgo.Session
 	api    DiscordAPI // wraps dg; can be swapped for testing
 
-	mu         sync.RWMutex
-	sessions   map[string]*ChannelSession // channelID → session
-	sqliteDB   *db.DB                     // SQLite connection for session persistence
+	mu       sync.RWMutex
+	sessions map[string]*ChannelSession // channelID → session
+	sqliteDB *db.DB                     // SQLite connection for session persistence
 
-	typingMu    sync.RWMutex
+	typingMu     sync.RWMutex
 	typingCancel map[string]context.CancelFunc // channelID → cancel for typing indicator loop
 
-	dedupMu     sync.RWMutex
-	dedupCache  map[string]time.Time // messageID → timestamp (for dedup on reconnect)
+	dedupMu    sync.RWMutex
+	dedupCache map[string]time.Time // messageID → timestamp (for dedup on reconnect)
 
 	// dedupCookie / restartCount — used for detecting bot restarts in logs.
 	// Each bot instance generates a random hex cookie at startup. If the
@@ -95,8 +95,8 @@ type Bot struct {
 	msgGuardMu sync.Mutex
 	msgGuard   map[string]struct{} // message IDs currently being processed
 
-	activeMu     sync.Mutex
-	activeChans  map[string]*ActiveChannel // responseChannel → active processing
+	activeMu    sync.Mutex
+	activeChans map[string]*ActiveChannel // responseChannel → active processing
 
 	sseClient        *events.Client
 	sseNotifications chan map[string]interface{} // buffered channel for all SSE notification events
@@ -121,10 +121,10 @@ const dedupTTL = 5 * time.Minute // keep dedup entries for 5 minutes
 // ActiveChannel tracks an in-progress agent run for a channel.
 // Used for concurrency guard, interrupt support, and /stop.
 type ActiveChannel struct {
-	Cancel  context.CancelFunc    // cancels the poll loop in triggerAgentWithContext
-	AgentID string                // runtime agent ID (for CancelRun API)
-	RunID   string                // current run ID (for CancelRun API)
-	Pending []*discordgo.Message  // queued messages waiting to be processed
+	Cancel  context.CancelFunc   // cancels the poll loop in triggerAgentWithContext
+	AgentID string               // runtime agent ID (for CancelRun API)
+	RunID   string               // current run ID (for CancelRun API)
+	Pending []*discordgo.Message // queued messages waiting to be processed
 }
 
 // ChannelSession tracks a Discord channel's conversation in the graph.
@@ -147,15 +147,15 @@ const (
 
 // Config holds the bot's configuration.
 type Config struct {
-	BotToken         string   // Discord bot token (required)
-	AllowedChannels  []string // Allowed channel IDs (empty = all)
-	ThreadChannels   []string // Channel IDs where auto-thread creation happens (empty = thread everywhere)
-	SystemPrompt     string   // System prompt for the bot
-	ContextMessages  int      // Max messages to include as context per turn
-	MemoryServerURL  string
-	MemoryAPIKey     string
-	MemoryProjectID  string
-	MemoryOrgID      string
+	BotToken        string   // Discord bot token (required)
+	AllowedChannels []string // Allowed channel IDs (empty = all)
+	ThreadChannels  []string // Channel IDs where auto-thread creation happens (empty = thread everywhere)
+	SystemPrompt    string   // System prompt for the bot
+	ContextMessages int      // Max messages to include as context per turn
+	MemoryServerURL string
+	MemoryAPIKey    string
+	MemoryProjectID string
+	MemoryOrgID     string
 	// SSEEventStream enables the agent_question notification listener.
 	// Requires MemoryServerURL, MemoryAPIKey, and MemoryProjectID.
 	SSEEventStream bool
@@ -164,8 +164,8 @@ type Config struct {
 // DefaultConfig returns sensible defaults.
 func DefaultConfig() Config {
 	return Config{
-		ContextMessages:  10,
-		SystemPrompt: "You are Diane, a helpful and natural AI assistant. Be conversational and direct. Answer questions clearly — whether they're about weather, code, or anything else. Do NOT try to use tools, create scenarios, or plan execution unless the user explicitly asks you to. Just talk like a normal person and answer the question.",
+		ContextMessages: 10,
+		SystemPrompt:    "You are Diane, a helpful and natural AI assistant. Be conversational and direct. Answer questions clearly — whether they're about weather, code, or anything else. Do NOT try to use tools, create scenarios, or plan execution unless the user explicitly asks you to. Just talk like a normal person and answer the question.",
 	}
 }
 
@@ -194,20 +194,20 @@ func New(cfg Config) (*Bot, error) {
 	}
 
 	bot := &Bot{
-		config:    cfg,
+		config:   cfg,
 		dg:       dg,
 		api:      newDiscordAPI(dg),
 		sessions: make(map[string]*ChannelSession),
 
-		typingCancel:  make(map[string]context.CancelFunc),
-		dedupCache:    make(map[string]time.Time),
-		DedupCookie:   generateDedupCookie(),
-		RestartCount:  1,
-		msgGuard:      make(map[string]struct{}),
-		activeChans:   make(map[string]*ActiveChannel),
+		typingCancel:     make(map[string]context.CancelFunc),
+		dedupCache:       make(map[string]time.Time),
+		DedupCookie:      generateDedupCookie(),
+		RestartCount:     1,
+		msgGuard:         make(map[string]struct{}),
+		activeChans:      make(map[string]*ActiveChannel),
 		sseNotifications: make(chan map[string]interface{}, 100),
-		sendChannelID: notifChannel,
-		runChannels:    make(map[string]string),
+		sendChannelID:    notifChannel,
+		runChannels:      make(map[string]string),
 	}
 
 	// Initialize SQLite for session persistence
@@ -1101,8 +1101,6 @@ func (b *Bot) buildAndSendResponse(ctx context.Context, m *discordgo.Message, re
 	return response
 }
 
-
-
 // ============================================================================
 // Session Management
 // ============================================================================
@@ -1297,8 +1295,8 @@ func (b *Bot) isChannelAllowed(channelID string) bool {
 
 // resolveQuestionChannel determines where to send an agent question.
 // Priority: 1) thread-local (runID maps to a Discord channel/thread)
-//           2) configured question channel (/set_ask_channel)
-//           3) default notification channel (first allowed channel)
+//  2. configured question channel (/set_ask_channel)
+//  3. default notification channel (first allowed channel)
 func (b *Bot) resolveQuestionChannel(runID string) string {
 	// 1. Thread-local — if this run is associated with a Discord thread/channel
 	if runID != "" {
@@ -1628,54 +1626,56 @@ pollLoop:
 			msg := msgs.Data[i]
 			dlog("EXTR", "check_idx", i, "role", msg.Role, "keys", fmt.Sprintf("%v", func() []string {
 				var keys []string
-				for k := range msg.Content { keys = append(keys, k) }
+				for k := range msg.Content {
+					keys = append(keys, k)
+				}
 				return keys
 			}()))
 			if msg.Role == "user" || msg.Role == "tool" {
 				continue
-		}
-		var reasoningText string
-
-		// Get reasoning content if present
-		if val, ok := msg.Content["reasoning"]; ok {
-			if s := extractText(val); len(s) > 20 {
-				reasoningText = s
-				dlog("EXTR", "found_reasoning", "len", len(reasoningText), "preview", truncateStr(reasoningText, 80))
 			}
-		}
+			var reasoningText string
 
-		// Get the main text content — prefer "text" key, fall back to others
-		if val, ok := msg.Content["text"]; ok {
-			if s := extractText(val); len(s) > 0 {
-				responseText = s
-				dlog("EXTR", "found_text", "len", len(responseText), "preview", truncateStr(responseText, 80))
-			}
-		}
-		if responseText == "" {
-			// Fallback: scan other keys for content
-			for key, val := range msg.Content {
-				if key == "reasoning" {
-					continue
+			// Get reasoning content if present
+			if val, ok := msg.Content["reasoning"]; ok {
+				if s := extractText(val); len(s) > 20 {
+					reasoningText = s
+					dlog("EXTR", "found_reasoning", "len", len(reasoningText), "preview", truncateStr(reasoningText, 80))
 				}
-				s := extractText(val)
-				if len(s) > 20 {
-					dlog("EXTR", "found_in_key", key, "len", len(s), "preview", truncateStr(s, 80))
+			}
+
+			// Get the main text content — prefer "text" key, fall back to others
+			if val, ok := msg.Content["text"]; ok {
+				if s := extractText(val); len(s) > 0 {
 					responseText = s
-					break
+					dlog("EXTR", "found_text", "len", len(responseText), "preview", truncateStr(responseText, 80))
 				}
 			}
-		}
+			if responseText == "" {
+				// Fallback: scan other keys for content
+				for key, val := range msg.Content {
+					if key == "reasoning" {
+						continue
+					}
+					s := extractText(val)
+					if len(s) > 20 {
+						dlog("EXTR", "found_in_key", key, "len", len(s), "preview", truncateStr(s, 80))
+						responseText = s
+						break
+					}
+				}
+			}
 
-		// Combine reasoning + response in Claude-style format
-		if reasoningText != "" && responseText == "" {
-			responseText = reasoningText
-		} else if reasoningText != "" {
-			responseText = "🤔 *Thinking...*\n" + reasoningText + "\n\n" + responseText
-		}
+			// Combine reasoning + response in Claude-style format
+			if reasoningText != "" && responseText == "" {
+				responseText = reasoningText
+			} else if reasoningText != "" {
+				responseText = "🤔 *Thinking...*\n" + reasoningText + "\n\n" + responseText
+			}
 
-		if responseText != "" {
-			break
-		}
+			if responseText != "" {
+				break
+			}
 			dlog("EXTR", "skip_msg", i, "no_content_found", fmt.Sprintf("%v", msg.Content))
 		}
 	}
@@ -1803,25 +1803,25 @@ func (b *Bot) buildToolTrail(ctx context.Context, runID string) string {
 // toolEmoji returns an emoji for a tool name (Hermes-style).
 func toolEmoji(name string) string {
 	m := map[string]string{
-		"web-search-brave":    "🌐",
-		"web-search-reddit":   "🌐",
-		"web-fetch":           "🌐",
-		"search-hybrid":       "🔍",
-		"search-knowledge":    "🔍",
-		"search-semantic":     "🔍",
-		"search-similar":      "🔍",
-		"entity-query":        "📄",
-		"entity-search":       "📄",
-		"entity-edges-get":    "📄",
-		"entity-type-list":    "📄",
-		"entity-create":       "✏️",
-		"graph-traverse":      "🗺️",
-		"tag-list":            "🏷️",
+		"web-search-brave":      "🌐",
+		"web-search-reddit":     "🌐",
+		"web-fetch":             "🌐",
+		"search-hybrid":         "🔍",
+		"search-knowledge":      "🔍",
+		"search-semantic":       "🔍",
+		"search-similar":        "🔍",
+		"entity-query":          "📄",
+		"entity-search":         "📄",
+		"entity-edges-get":      "📄",
+		"entity-type-list":      "📄",
+		"entity-create":         "✏️",
+		"graph-traverse":        "🗺️",
+		"tag-list":              "🏷️",
 		"list_available_agents": "💬",
-		"spawn_agents":        "🔧",
-		"skill":               "📚",
-		"skill-list":          "📚",
-		"skill-get":           "📚",
+		"spawn_agents":          "🔧",
+		"skill":                 "📚",
+		"skill-list":            "📚",
+		"skill-get":             "📚",
 	}
 	if e, ok := m[name]; ok {
 		return e
@@ -1832,25 +1832,25 @@ func toolEmoji(name string) string {
 // shortToolName returns a readable short version of a tool name for display.
 func shortToolName(name string) string {
 	short := map[string]string{
-		"web-search-brave":  "web-search",
-		"web-search-reddit": "reddit",
-		"search-hybrid":     "hybrid-search",
-		"search-knowledge":  "k-search",
-		"search-semantic":   "semantic-search",
-		"search-similar":    "similar-search",
-		"entity-query":      "entity-query",
-		"entity-search":     "entity-search",
-		"entity-edges-get":  "entity-edges",
-		"entity-type-list":  "entity-types",
-		"entity-create":     "entity-create",
-		"web-fetch":         "fetch",
-		"graph-traverse":    "graph-traverse",
-		"tag-list":          "tags",
+		"web-search-brave":      "web-search",
+		"web-search-reddit":     "reddit",
+		"search-hybrid":         "hybrid-search",
+		"search-knowledge":      "k-search",
+		"search-semantic":       "semantic-search",
+		"search-similar":        "similar-search",
+		"entity-query":          "entity-query",
+		"entity-search":         "entity-search",
+		"entity-edges-get":      "entity-edges",
+		"entity-type-list":      "entity-types",
+		"entity-create":         "entity-create",
+		"web-fetch":             "fetch",
+		"graph-traverse":        "graph-traverse",
+		"tag-list":              "tags",
 		"list_available_agents": "agents",
-		"spawn_agents":      "spawn",
-		"skill":             "skill",
-		"skill-list":        "skills",
-		"skill-get":         "skill-get",
+		"spawn_agents":          "spawn",
+		"skill":                 "skill",
+		"skill-list":            "skills",
+		"skill-get":             "skill-get",
 	}
 	if s, ok := short[name]; ok {
 		return s

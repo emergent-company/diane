@@ -13,7 +13,7 @@ type mockMCPServer struct {
 	server     *httptest.Server
 	tools      []map[string]interface{}
 	methods    map[string]func(params json.RawMessage) (interface{}, int) // method -> handler, returns (result, statusCode)
-	statusCode int                                                         // override status for error testing
+	statusCode int                                                        // override status for error testing
 }
 
 func newMockMCPServer(t *testing.T) *mockMCPServer {

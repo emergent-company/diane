@@ -1,0 +1,71 @@
+#!/bin/bash
+# Pre-commit hook: lint + unit tests + build
+# Runs from repo root, cds into server/ where the Go module lives.
+#
+# Install: git config core.hooksPath .githooks
+
+set -e
+set -u
+
+GO_DIR="server"
+GO_CMD="go"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+PASS=0
+FAIL=1
+
+print_step() {
+  echo ""
+  echo -e "${YELLOW}═══ $1 ═══${NC}"
+}
+
+print_result() {
+  if [ $? -eq 0 ]; then
+    echo -e "${GREEN}✅ $1 passed${NC}"
+  else
+    echo -e "${RED}❌ $1 failed${NC}"
+    exit $FAIL
+  fi
+}
+
+cd "$(git rev-parse --show-toplevel)"
+
+# ── Check if go is available ──
+if ! command -v "$GO_CMD" &>/dev/null; then
+  echo -e "${RED}❌ go not found — skipping pre-commit checks${NC}"
+  exit 0
+fi
+
+cd "$GO_DIR"
+
+# ── Step 1: go fmt check ──
+print_step "go fmt"
+UNFORMATTED=$(find . -name '*.go' -exec gofmt -l {} +)
+if [ -z "$UNFORMATTED" ]; then
+  echo -e "${GREEN}✅ All files formatted${NC}"
+else
+  echo -e "${RED}❌ Unformatted files (run 'go fmt ./...'):${NC}"
+  echo "$UNFORMATTED"
+  exit $FAIL
+fi
+
+# ── Step 2: go vet ──
+print_step "go vet"
+$GO_CMD vet ./... 2>&1
+print_result "go vet"
+
+# ── Step 3: go test (exclude integration tests) ──
+print_step "go test"
+$GO_CMD test ./internal/... ./cmd/diane ./mcp/... -count=1 -timeout 60s 2>&1
+print_result "go test"
+
+# ── Step 4: go build ──
+print_step "go build"
+$GO_CMD build -o /dev/null ./cmd/diane 2>&1
+print_result "go build"
+
+echo ""
+echo -e "${GREEN}✅ All pre-commit checks passed${NC}"

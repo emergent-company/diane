@@ -115,7 +115,7 @@ struct MainWindowView: View {
             }
         }
         .listStyle(.sidebar)
-        .navigationTitle("Diane Companion")
+        .navigationTitle("Diane")
     }
 
     private func sidebarRow(_ item: SidebarItem) -> some View {

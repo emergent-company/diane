@@ -513,7 +513,7 @@ func TestMemoryPipeline_ExtractedFromRelationships(t *testing.T) {
 	for i, factID := range factIDs {
 		rel, err := gc.CreateRelationship(ctx, &graph.CreateRelationshipRequest{
 			Type:  "extracted_from",
-			SrcID: factID, // fact is the source
+			SrcID: factID,           // fact is the source
 			DstID: session.EntityID, // session is the destination
 			Properties: map[string]any{
 				"source_message_id": msgIDs[i%len(msgIDs)],

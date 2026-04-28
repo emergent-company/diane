@@ -14,7 +14,7 @@ struct DianeCompanionApp: App {
     @State private var hasStarted           = false
 
     init() {
-        logger.info("Diane Companion is launching.")
+        logger.info("Diane is launching.")
     }
 
     private var menuBarIconName: String {
@@ -28,7 +28,7 @@ struct DianeCompanionApp: App {
 
     var body: some Scene {
         // Main application window (task 5.x)
-        Window("Diane Companion", id: "main") {
+        Window("Diane", id: "main") {
             MainWindowView()
                 .environmentObject(appState)
                 .environmentObject(apiClient)
@@ -57,7 +57,7 @@ struct DianeCompanionApp: App {
         .menuBarExtraStyle(.window)
 
         // Dedicated settings window opened via openWindow(id: "settings").
-        Window("Diane Companion Settings", id: "settings") {
+        Window("Diane Settings", id: "settings") {
             SettingsView()
                 .environmentObject(statusMonitor)
                 .environmentObject(serverConfig)

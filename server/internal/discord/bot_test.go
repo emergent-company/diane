@@ -569,13 +569,13 @@ func TestDedupEntryFormat(t *testing.T) {
 
 func TestNewBotHasEmptyMaps(t *testing.T) {
 	bot := &Bot{
-		sessions:        make(map[string]*ChannelSession),
-		typingCancel:    make(map[string]context.CancelFunc),
-		dedupCache:      make(map[string]time.Time),
-		activeChans:     make(map[string]*ActiveChannel),
+		sessions:         make(map[string]*ChannelSession),
+		typingCancel:     make(map[string]context.CancelFunc),
+		dedupCache:       make(map[string]time.Time),
+		activeChans:      make(map[string]*ActiveChannel),
 		sseNotifications: make(chan map[string]interface{}, 100),
-		runChannels:     make(map[string]string),
-		msgGuard:        make(map[string]struct{}),
+		runChannels:      make(map[string]string),
+		msgGuard:         make(map[string]struct{}),
 	}
 
 	for name, m := range map[string]interface{}{
@@ -616,12 +616,12 @@ func TestDedupSurvivesRestartedBot(t *testing.T) {
 
 	// Bot v1: processes a message
 	bot1 := &Bot{
-		dedupCache:      make(map[string]time.Time),
-		DedupCookie:     "cookie-v1",
-		RestartCount:    1,
-		activeChans:     make(map[string]*ActiveChannel),
-		runChannels:     make(map[string]string),
-		msgGuard:        make(map[string]struct{}),
+		dedupCache:       make(map[string]time.Time),
+		DedupCookie:      "cookie-v1",
+		RestartCount:     1,
+		activeChans:      make(map[string]*ActiveChannel),
+		runChannels:      make(map[string]string),
+		msgGuard:         make(map[string]struct{}),
 		sseNotifications: make(chan map[string]interface{}, 100),
 	}
 
@@ -640,12 +640,12 @@ func TestDedupSurvivesRestartedBot(t *testing.T) {
 	// Bot v2: simulates restart — fresh in-memory dedup cache
 	// WITHOUT SQLite persistence, this is where the bug lives.
 	bot2 := &Bot{
-		dedupCache:      make(map[string]time.Time),
-		DedupCookie:     "cookie-v2",
-		RestartCount:    2,
-		activeChans:     make(map[string]*ActiveChannel),
-		runChannels:     make(map[string]string),
-		msgGuard:        make(map[string]struct{}),
+		dedupCache:       make(map[string]time.Time),
+		DedupCookie:      "cookie-v2",
+		RestartCount:     2,
+		activeChans:      make(map[string]*ActiveChannel),
+		runChannels:      make(map[string]string),
+		msgGuard:         make(map[string]struct{}),
 		sseNotifications: make(chan map[string]interface{}, 100),
 	}
 
@@ -682,14 +682,14 @@ func testBot(t *testing.T, allowedChannels []string) (*Bot, *FakeDiscordAPI) {
 	t.Helper()
 	fake := NewFakeDiscordAPI()
 	bot := &Bot{
-		api:             fake,
-		config:          Config{AllowedChannels: allowedChannels},
-		sessions:        make(map[string]*ChannelSession),
-		typingCancel:    make(map[string]context.CancelFunc),
-		dedupCache:      make(map[string]time.Time),
-		activeChans:     make(map[string]*ActiveChannel),
-		msgGuard:        make(map[string]struct{}),
-		runChannels:     make(map[string]string),
+		api:              fake,
+		config:           Config{AllowedChannels: allowedChannels},
+		sessions:         make(map[string]*ChannelSession),
+		typingCancel:     make(map[string]context.CancelFunc),
+		dedupCache:       make(map[string]time.Time),
+		activeChans:      make(map[string]*ActiveChannel),
+		msgGuard:         make(map[string]struct{}),
+		runChannels:      make(map[string]string),
 		sseNotifications: make(chan map[string]interface{}, 100),
 		buildResponseFn: func(ctx context.Context, m *discordgo.Message, responseChannel string) string {
 			return "test response"

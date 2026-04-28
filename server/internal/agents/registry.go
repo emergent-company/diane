@@ -14,8 +14,8 @@ import (
 	"strings"
 
 	"github.com/Emergent-Comapny/diane/internal/config"
-	sdkagents "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agentdefinitions"
 	sdk "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk"
+	sdkagents "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agentdefinitions"
 )
 
 // ---------------------------------------------------------------------------
@@ -26,17 +26,17 @@ import (
 
 // BuiltInAgent describes an immutable agent shipped with Diane.
 type BuiltInAgent struct {
-	Name        string
-	Description string
+	Name         string
+	Description  string
 	SystemPrompt string
-	Model       *config.AgentModelConfig
-	Tools       []string
-	Skills      []string
-	FlowType    string
-	Visibility  string
-	MaxSteps    int
-	Timeout     int
-	Sandbox     *config.SandboxConfig
+	Model        *config.AgentModelConfig
+	Tools        []string
+	Skills       []string
+	FlowType     string
+	Visibility   string
+	MaxSteps     int
+	Timeout      int
+	Sandbox      *config.SandboxConfig
 
 	// Delegation heuristics for orchestrator routing.
 	// Only agents the orchestrator should consider delegating TO get this populated.
@@ -582,7 +582,6 @@ tool usage patterns, and decisions made.`,
 			Visibility: "project",
 			MaxSteps:   100,
 			Timeout:    600,
-
 		},
 		{
 			Name:        "diane-codebase",
@@ -779,7 +778,6 @@ Respect phase order strictly — each phase builds on the previous one.`,
 			Visibility: "project",
 			MaxSteps:   200,
 			Timeout:    900,
-
 		},
 		{
 			Name:        "diane-skill-monitor",
@@ -827,11 +825,10 @@ If nothing is worth saving from a session, skip it.`,
 				// Graph — write checkpoint entity
 				"entity-create", "entity-update",
 			},
-Skills:     []string{},
+			Skills:     []string{},
 			Visibility: "project",
 			MaxSteps:   100,
 			Timeout:    600,
-
 		},
 	}
 }
@@ -905,13 +902,13 @@ func SeedBuiltInAgents(ctx context.Context, client *sdk.Client) error {
 
 func toCreateRequest(ba BuiltInAgent) *sdkagents.CreateAgentDefinitionRequest {
 	r := &sdkagents.CreateAgentDefinitionRequest{
-		Name:        ba.Name,
-		Description: strPtr(ba.Description),
-		SystemPrompt: strPtr(ba.SystemPrompt),
-		Visibility:  orDefault(ba.Visibility, "project"),
-		Tools:       ba.Tools,
-		Skills:      ba.Skills,
-		MaxSteps:    intPtr(ba.MaxSteps),
+		Name:           ba.Name,
+		Description:    strPtr(ba.Description),
+		SystemPrompt:   strPtr(ba.SystemPrompt),
+		Visibility:     orDefault(ba.Visibility, "project"),
+		Tools:          ba.Tools,
+		Skills:         ba.Skills,
+		MaxSteps:       intPtr(ba.MaxSteps),
 		DefaultTimeout: intPtr(ba.Timeout),
 	}
 	if ba.Model != nil {
@@ -932,13 +929,13 @@ func toCreateRequest(ba BuiltInAgent) *sdkagents.CreateAgentDefinitionRequest {
 
 func toUpdateRequest(ba BuiltInAgent) *sdkagents.UpdateAgentDefinitionRequest {
 	r := &sdkagents.UpdateAgentDefinitionRequest{
-		Name:         &ba.Name,
-		Description:  strPtr(ba.Description),
-		SystemPrompt: strPtr(ba.SystemPrompt),
-		Visibility:   strPtr(orDefault(ba.Visibility, "project")),
-		Tools:        ba.Tools,
-		Skills:       ba.Skills,
-		MaxSteps:     intPtr(ba.MaxSteps),
+		Name:           &ba.Name,
+		Description:    strPtr(ba.Description),
+		SystemPrompt:   strPtr(ba.SystemPrompt),
+		Visibility:     strPtr(orDefault(ba.Visibility, "project")),
+		Tools:          ba.Tools,
+		Skills:         ba.Skills,
+		MaxSteps:       intPtr(ba.MaxSteps),
 		DefaultTimeout: intPtr(ba.Timeout),
 	}
 	if ba.Model != nil {

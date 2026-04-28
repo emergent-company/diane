@@ -27,10 +27,10 @@ type dianeConfig struct {
 }
 
 type dianeProjectCfg struct {
-	ServerURL   string   `yaml:"server_url"`
-	ProjectID   string   `yaml:"project_id"`
-	Token       string   `yaml:"token"`
-	Mode        string   `yaml:"mode,omitempty"`
+	ServerURL string `yaml:"server_url"`
+	ProjectID string `yaml:"project_id"`
+	Token     string `yaml:"token"`
+	Mode      string `yaml:"mode,omitempty"`
 }
 
 // =========================================================================

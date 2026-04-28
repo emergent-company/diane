@@ -63,22 +63,22 @@ func SeedToDB(d *db.DB) error {
 		}
 
 		ad := &db.AgentDefinition{
-			Name:           ba.Name,
-			Description:    ba.Description,
-			SystemPrompt:   ba.SystemPrompt,
-			ToolsJSON:      string(toolsJSON),
-			SkillsJSON:     string(skillsJSON),
+			Name:            ba.Name,
+			Description:     ba.Description,
+			SystemPrompt:    ba.SystemPrompt,
+			ToolsJSON:       string(toolsJSON),
+			SkillsJSON:      string(skillsJSON),
 			ModelConfigJSON: "",
-			FlowType:       ba.FlowType,
-			Visibility:     visibility,
-			MaxSteps:       maxSteps,
-			DefaultTimeout: timeout,
-			TagsJSON:       string(tagsJSON),
-			RoutingWeight:  1.0,
-			IsDefault:      ba.Name == "diane-default",
-			IsExperimental: false,
-			Status:         "active",
-			Source:         "built-in",
+			FlowType:        ba.FlowType,
+			Visibility:      visibility,
+			MaxSteps:        maxSteps,
+			DefaultTimeout:  timeout,
+			TagsJSON:        string(tagsJSON),
+			RoutingWeight:   1.0,
+			IsDefault:       ba.Name == "diane-default",
+			IsExperimental:  false,
+			Status:          "active",
+			Source:          "built-in",
 		}
 
 		if err := d.UpsertAgentDefinition(ad); err != nil {

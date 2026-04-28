@@ -262,9 +262,9 @@ func (c *HTTPMCPClient) discoverOAuthFromHeader(headers http.Header) (*OAuthConf
 
 	var oauthMeta struct {
 		AuthorizationEndpoint string   `json:"authorization_endpoint"`
-		TokenEndpoint        string   `json:"token_endpoint"`
-		RegistrationEndpoint *string  `json:"registration_endpoint,omitempty"`
-		ScopesSupported      []string `json:"scopes_supported,omitempty"`
+		TokenEndpoint         string   `json:"token_endpoint"`
+		RegistrationEndpoint  *string  `json:"registration_endpoint,omitempty"`
+		ScopesSupported       []string `json:"scopes_supported,omitempty"`
 	}
 	if err := json.NewDecoder(resp2.Body).Decode(&oauthMeta); err != nil {
 		return nil, fmt.Errorf("failed to parse OAuth server metadata: %w", err)

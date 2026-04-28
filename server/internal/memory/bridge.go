@@ -42,17 +42,17 @@ type Session struct {
 	Key          string
 	Title        string
 	MessageCount int
-	TotalTokens  int  // auto-maintained by server when messages have token_count
+	TotalTokens  int // auto-maintained by server when messages have token_count
 	Status       string
 	CreatedAt    time.Time
 }
 
 // Message represents a single turn in a session.
 type Message struct {
-	ID      string
-	Role    string
-	Content string
-	Seq     int
+	ID         string
+	Role       string
+	Content    string
+	Seq        int
 	TokenCount int // 0 if unknown; populated when stored with token counting
 }
 
@@ -229,8 +229,8 @@ func (b *Bridge) GetMessages(ctx context.Context, sessionID string) ([]Message, 
 // Returns matched objects ranked by relevance.
 func (b *Bridge) SearchMemory(ctx context.Context, query string, limit int) ([]SearchResult, error) {
 	resp, err := b.client.Graph.HybridSearch(ctx, &graph.HybridSearchRequest{
-		Query:   query,
-		Limit:   limit,
+		Query: query,
+		Limit: limit,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("search memory: %w", err)

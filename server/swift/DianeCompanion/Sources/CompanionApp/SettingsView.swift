@@ -146,7 +146,7 @@ struct SettingsView: View {
                         .onChange(of: serverConfig.launchAtLogin) { newValue in
                             applyLaunchAtLogin(newValue)
                         }
-                    Text("Automatically start Diane Companion when you log in.")
+                    Text("Automatically start Diane when you log in.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

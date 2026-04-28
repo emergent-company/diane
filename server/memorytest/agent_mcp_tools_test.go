@@ -28,14 +28,14 @@ import (
 	"testing"
 	"time"
 
-	sdkagents "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agentdefinitions"
 	"github.com/Emergent-Comapny/diane/internal/config"
+	sdkagents "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agentdefinitions"
 )
 
 const (
-	echoMCPBin  = "/tmp/mcp-relay-test/echo-mcp"
-	dianeBin    = "/tmp/diane-test-binary"
-	mcpCfgFile  = "/tmp/diane-test-binary-mcp-servers.json"
+	echoMCPBin = "/tmp/mcp-relay-test/echo-mcp"
+	dianeBin   = "/tmp/diane-test-binary"
+	mcpCfgFile = "/tmp/diane-test-binary-mcp-servers.json"
 )
 
 func TestAgentMCPTools(t *testing.T) {

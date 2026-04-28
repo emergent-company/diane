@@ -62,11 +62,11 @@ func runBotOnce(pc *config.ProjectConfig) error {
 
 	// Build Memory bridge
 	memCfg := memory.Config{
-		ServerURL:          pc.ServerURL,
-		APIKey:             pc.Token,
-		ProjectID:          pc.ProjectID,
-		OrgID:              pc.OrgID,
-		HTTPClientTimeout:  120 * time.Second,
+		ServerURL:         pc.ServerURL,
+		APIKey:            pc.Token,
+		ProjectID:         pc.ProjectID,
+		OrgID:             pc.OrgID,
+		HTTPClientTimeout: 120 * time.Second,
 	}
 
 	bridge, err := memory.New(memCfg)

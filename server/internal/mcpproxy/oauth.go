@@ -341,12 +341,12 @@ func GenerateCodeChallenge(verifier string) string {
 // as its standard OAuth callback port.
 func DynamicClientRegistration(registrationURL string) (string, error) {
 	body := map[string]interface{}{
-		"client_name":                  "Diane AI Assistant",
-		"redirect_uris":                []string{"http://localhost:28561/callback"},
-		"grant_types":                  []string{"authorization_code", "refresh_token"},
-		"response_types":               []string{"code"},
-		"token_endpoint_auth_method":   "none",
-		"application_type":             "native",
+		"client_name":                "Diane AI Assistant",
+		"redirect_uris":              []string{"http://localhost:28561/callback"},
+		"grant_types":                []string{"authorization_code", "refresh_token"},
+		"response_types":             []string{"code"},
+		"token_endpoint_auth_method": "none",
+		"application_type":           "native",
 	}
 	bodyBytes, err := json.Marshal(body)
 	if err != nil {

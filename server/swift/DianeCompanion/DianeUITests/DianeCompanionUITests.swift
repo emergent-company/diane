@@ -3,7 +3,7 @@ import XCTest
 /// Basic UI tests verifying main window navigation and project selector state flow.
 ///
 /// Task 10.3
-final class DianeCompanionUITests: XCTestCase {
+final class DianeUITests: XCTestCase {
 
     var app: XCUIApplication!
 

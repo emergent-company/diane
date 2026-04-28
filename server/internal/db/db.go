@@ -44,24 +44,24 @@ type JobExecution struct {
 // AgentDefinition represents an agent definition stored in SQLite.
 // This is the single source of truth for all agents (built-in + user-defined).
 type AgentDefinition struct {
-	Name           string    `json:"name"`
-	Description    string    `json:"description"`
-	SystemPrompt   string    `json:"system_prompt"`
-	ToolsJSON      string    `json:"tools_json"`
-	SkillsJSON     string    `json:"skills_json"`
-	ModelConfigJSON string   `json:"model_config_json"`
-	FlowType       string    `json:"flow_type"`
-	Visibility     string    `json:"visibility"`
-	MaxSteps       int       `json:"max_steps"`
-	DefaultTimeout int       `json:"default_timeout"`
-	TagsJSON       string    `json:"tags_json"`
-	RoutingWeight  float64   `json:"routing_weight"`
-	IsDefault      bool      `json:"is_default"`
-	IsExperimental bool      `json:"is_experimental"`
-	Status         string    `json:"status"`
-	Source         string    `json:"source"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	Name            string    `json:"name"`
+	Description     string    `json:"description"`
+	SystemPrompt    string    `json:"system_prompt"`
+	ToolsJSON       string    `json:"tools_json"`
+	SkillsJSON      string    `json:"skills_json"`
+	ModelConfigJSON string    `json:"model_config_json"`
+	FlowType        string    `json:"flow_type"`
+	Visibility      string    `json:"visibility"`
+	MaxSteps        int       `json:"max_steps"`
+	DefaultTimeout  int       `json:"default_timeout"`
+	TagsJSON        string    `json:"tags_json"`
+	RoutingWeight   float64   `json:"routing_weight"`
+	IsDefault       bool      `json:"is_default"`
+	IsExperimental  bool      `json:"is_experimental"`
+	Status          string    `json:"status"`
+	Source          string    `json:"source"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // AgentRunStat records a single agent run for A/B analytics.

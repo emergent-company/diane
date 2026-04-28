@@ -17,10 +17,10 @@ import (
 )
 
 const (
-	dreamerDefName      = "diane-dreamer"
-	dreamerTestTimeout  = 180 * time.Second
-	dreamerTestPoll     = 2 * time.Second
-	dreamerTestMaxPoll  = 60
+	dreamerDefName     = "diane-dreamer"
+	dreamerTestTimeout = 180 * time.Second
+	dreamerTestPoll    = 2 * time.Second
+	dreamerTestMaxPoll = 60
 )
 
 // TestAgentDreamer_DefinitionExists checks the dreamer agent definition is synced to MP.
@@ -259,6 +259,7 @@ func TestAgentDreamer_NewFieldsInPrompt(t *testing.T) {
 
 	t.Log("✅ Dreamer definition validated with updated prompt")
 }
+
 // ── Helpers ──
 
 // pollDreamerRunCompletion polls GetProjectRun until the run finishes or times out.

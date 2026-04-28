@@ -75,7 +75,7 @@ type MCPSession struct {
 	wsConn  *websocket.Conn
 	wsMutex sync.Mutex
 	mcpMu   sync.Mutex // protects mcpIn writes from tool watch vs forward loops
-	pending sync.Map // map[requestID]chan response
+	pending sync.Map   // map[requestID]chan response
 	done    chan struct{}
 
 	// Dynamic tool registration: register immediately on connect, then
@@ -667,12 +667,12 @@ func mergeProxyConfigs(configs []scoredConfig) string {
 
 	// Parse all configs and merge servers
 	type serverDef struct {
-		Name    string              `json:"name"`
-		Enabled bool                `json:"enabled"`
-		Type    string              `json:"type"`
-		Command string              `json:"command"`
-		Args    []string            `json:"args"`
-		Env     map[string]string   `json:"env"`
+		Name    string            `json:"name"`
+		Enabled bool              `json:"enabled"`
+		Type    string            `json:"type"`
+		Command string            `json:"command"`
+		Args    []string          `json:"args"`
+		Env     map[string]string `json:"env"`
 	}
 	type proxyCfg struct {
 		Servers []serverDef `json:"servers"`

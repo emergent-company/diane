@@ -220,8 +220,8 @@ func TestRecordAndGetRunStats(t *testing.T) {
 	d := setupDB(t)
 
 	stat := &db.AgentRunStat{
-		AgentName:  "stats-agent",
-		DurationMs: 5000,
+		AgentName:    "stats-agent",
+		DurationMs:   5000,
 		InputTokens:  1000,
 		OutputTokens: 200,
 		Status:       "success",
@@ -251,9 +251,9 @@ func TestGetAgentRunStatsFiltersByHours(t *testing.T) {
 
 	// Record a stat
 	stat := &db.AgentRunStat{
-		AgentName: "old-agent",
+		AgentName:  "old-agent",
 		DurationMs: 100,
-		Status:    "success",
+		Status:     "success",
 	}
 	if err := d.RecordRunStat(stat); err != nil {
 		t.Fatalf("RecordRunStat: %v", err)
@@ -275,8 +275,8 @@ func TestGetAgentStatsSummary(t *testing.T) {
 	// Record a few stats for different agents
 	for i := 0; i < 3; i++ {
 		stat := &db.AgentRunStat{
-			AgentName:   "summary-agent",
-			DurationMs:  1000 * (i + 1),
+			AgentName:    "summary-agent",
+			DurationMs:   1000 * (i + 1),
 			InputTokens:  500,
 			OutputTokens: 100,
 			Status:       "success",
@@ -363,10 +363,10 @@ func TestDiscordSessionRoundTrip(t *testing.T) {
 
 	// Upsert
 	s := &db.DiscordSession{
-		ChannelID: "12345",
-		SessionID: "sess-abc",
+		ChannelID:    "12345",
+		SessionID:    "sess-abc",
 		Conversation: "test-conversation",
-		AgentType: "default",
+		AgentType:    "default",
 	}
 	if err := d.UpsertDiscordSession(s); err != nil {
 		t.Fatalf("UpsertDiscordSession: %v", err)
@@ -505,22 +505,22 @@ func TestAgentWithAllFields(t *testing.T) {
 	d := setupDB(t)
 
 	def := &db.AgentDefinition{
-		Name:             "full-agent",
-		Description:      "Agent with all fields",
-		SystemPrompt:     "You are a test agent.",
-		ToolsJSON:        `["search-hybrid","web-search-brave","entity-query"]`,
-		SkillsJSON:       `["diane-coding"]`,
-		ModelConfigJSON:  `{"provider":"deepseek","model":"deepseek-v4-flash"}`,
-		FlowType:         "standard",
-		Visibility:       "project",
-		MaxSteps:         50,
-		DefaultTimeout:   300,
-		TagsJSON:         `["prod","important"]`,
-		RoutingWeight:    0.75,
-		IsDefault:        false,
-		IsExperimental:   true,
-		Status:           "active",
-		Source:           "built-in",
+		Name:            "full-agent",
+		Description:     "Agent with all fields",
+		SystemPrompt:    "You are a test agent.",
+		ToolsJSON:       `["search-hybrid","web-search-brave","entity-query"]`,
+		SkillsJSON:      `["diane-coding"]`,
+		ModelConfigJSON: `{"provider":"deepseek","model":"deepseek-v4-flash"}`,
+		FlowType:        "standard",
+		Visibility:      "project",
+		MaxSteps:        50,
+		DefaultTimeout:  300,
+		TagsJSON:        `["prod","important"]`,
+		RoutingWeight:   0.75,
+		IsDefault:       false,
+		IsExperimental:  true,
+		Status:          "active",
+		Source:          "built-in",
 	}
 	if err := d.UpsertAgentDefinition(def); err != nil {
 		t.Fatalf("UpsertAgentDefinition: %v", err)

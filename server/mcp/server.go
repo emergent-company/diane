@@ -18,10 +18,10 @@ import (
 	githubbot "github.com/Emergent-Comapny/diane/mcp/tools/github"
 	"github.com/Emergent-Comapny/diane/mcp/tools/google"
 	"github.com/Emergent-Comapny/diane/mcp/tools/infrastructure"
+	"github.com/Emergent-Comapny/diane/mcp/tools/memorytools"
 	"github.com/Emergent-Comapny/diane/mcp/tools/notifications"
 	"github.com/Emergent-Comapny/diane/mcp/tools/places"
 	"github.com/Emergent-Comapny/diane/mcp/tools/weather"
-	"github.com/Emergent-Comapny/diane/mcp/tools/memorytools"
 )
 
 // MCP Server for Diane

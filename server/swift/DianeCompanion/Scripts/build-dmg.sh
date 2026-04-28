@@ -1,5 +1,5 @@
 #!/bin/bash
-# build-dmg.sh — Build, sign, notarize, and package the Diane Companion Mac app as a .dmg
+# build-dmg.sh — Build, sign, notarize, and package the Diane Mac app as a .dmg
 # Usage: ./Scripts/build-dmg.sh [--release] [--notarize]
 #
 # Environment variables (for CI / notarization):
@@ -11,16 +11,16 @@
 
 set -euo pipefail
 
-SCHEME="DianeCompanion"
-PROJECT="DianeCompanion.xcodeproj"
+SCHEME="Diane"
+PROJECT="Diane.xcodeproj"
 DERIVED_DATA="build/DerivedData"
-ARCHIVE_PATH="build/DianeCompanion.xcarchive"
+ARCHIVE_PATH="build/Diane.xcarchive"
 EXPORT_PATH="build/Export"
-DMG_NAME="DianeCompanion"
+DMG_NAME="Diane"
 VERSION=$(defaults read "$(pwd)/DianeCompanion/Info.plist" CFBundleShortVersionString 2>/dev/null || echo "1.0.0")
 CONFIGURATION="Release"
 
-echo "==> Building Diane Companion v${VERSION}"
+echo "==> Building Diane v${VERSION}"
 
 # Step 1: Generate Xcode project (requires xcodegen)
 if command -v xcodegen &>/dev/null; then
@@ -55,8 +55,8 @@ APP_PATH="${EXPORT_PATH}/${SCHEME}.app"
 # Step 4: Notarize (optional)
 if [[ "${1:-}" == "--notarize" ]]; then
     echo "==> Notarizing..."
-    ditto -c -k --keepParent "${APP_PATH}" "${EXPORT_PATH}/DianeCompanion.zip"
-    xcrun notarytool submit "${EXPORT_PATH}/DianeCompanion.zip" \
+    ditto -c -k --keepParent "${APP_PATH}" "${EXPORT_PATH}/Diane.zip"
+    xcrun notarytool submit "${EXPORT_PATH}/Diane.zip" \
         --apple-id "${NOTARIZE_APPLE_ID}" \
         --password "${NOTARIZE_PASSWORD}" \
         --team-id "${NOTARIZE_TEAM_ID}" \
@@ -69,18 +69,18 @@ echo "==> Creating .dmg..."
 DMG_PATH="build/${DMG_NAME}-${VERSION}.dmg"
 if command -v create-dmg &>/dev/null; then
     create-dmg \
-        --volname "Diane Companion" \
+        --volname "Diane" \
         --window-pos 200 120 \
         --window-size 600 400 \
         --icon-size 100 \
-        --icon "DianeCompanion.app" 175 190 \
-        --hide-extension "DianeCompanion.app" \
+        --icon "Diane.app" 175 190 \
+        --hide-extension "Diane.app" \
         --app-drop-link 425 190 \
         "${DMG_PATH}" \
         "${EXPORT_PATH}/"
 else
     # Fallback: plain hdiutil
-    hdiutil create -volname "Diane Companion" \
+    hdiutil create -volname "Diane" \
         -srcfolder "${EXPORT_PATH}" \
         -ov -format UDZO \
         "${DMG_PATH}"

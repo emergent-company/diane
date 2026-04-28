@@ -13,10 +13,10 @@ import (
 
 // relaySession represents a connected MCP relay instance from the MP API.
 type relaySession struct {
-	InstanceID string `json:"instance_id"`
-	Hostname   string `json:"hostname,omitempty"`
-	Version    string `json:"version,omitempty"`
-	Tools      any    `json:"tools,omitempty"`
+	InstanceID  string `json:"instance_id"`
+	Hostname    string `json:"hostname,omitempty"`
+	Version     string `json:"version,omitempty"`
+	Tools       any    `json:"tools,omitempty"`
 	ConnectedAt string `json:"connected_at,omitempty"`
 }
 

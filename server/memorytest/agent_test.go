@@ -42,10 +42,10 @@ func setupBridgeFromConfig(t *testing.T) *memory.Bridge {
 	}
 
 	b, err := memory.New(memory.Config{
-		ServerURL:          pc.ServerURL,
-		APIKey:             pc.Token,
-		ProjectID:          pc.ProjectID,
-		HTTPClientTimeout:  30 * time.Second,
+		ServerURL:         pc.ServerURL,
+		APIKey:            pc.Token,
+		ProjectID:         pc.ProjectID,
+		HTTPClientTimeout: 30 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("Failed to create bridge: %v", err)

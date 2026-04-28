@@ -46,9 +46,9 @@ func main() {
 		fmt.Println("  mcp             Manage MCP servers (list, relay, serve)")
 		fmt.Println("  tool            Test MCP tools through the proxy (test)")
 		fmt.Println("  schema apply    Apply embedded schema definitions to Memory Platform")
-			fmt.Println()
-			os.Exit(0)
-		}
+		fmt.Println()
+		os.Exit(0)
+	}
 
 	switch os.Args[1] {
 	case "init":
@@ -254,10 +254,10 @@ func cmdInit() {
 
 	// ── Create project config ──
 	pc := &config.ProjectConfig{
-		ServerURL:  serverURL,
-		Token:      token,
-		ProjectID:  projectID,
-		Mode:       mode,
+		ServerURL: serverURL,
+		Token:     token,
+		ProjectID: projectID,
+		Mode:      mode,
 	}
 	if discordToken != "" {
 		pc.DiscordBotToken = discordToken

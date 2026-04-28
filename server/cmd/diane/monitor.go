@@ -130,11 +130,11 @@ func cmdMonitor() {
 			fmt.Println("⚠️  No active project")
 		} else {
 			bridge, err := memory.New(memory.Config{
-				ServerURL:          pc.ServerURL,
-				APIKey:             pc.Token,
-				ProjectID:          pc.ProjectID,
-				OrgID:              pc.OrgID,
-				HTTPClientTimeout:  15 * time.Second,
+				ServerURL:         pc.ServerURL,
+				APIKey:            pc.Token,
+				ProjectID:         pc.ProjectID,
+				OrgID:             pc.OrgID,
+				HTTPClientTimeout: 15 * time.Second,
 			})
 			if err != nil {
 				fmt.Printf("⚠️  Bridge: %v\n", err)
@@ -201,11 +201,11 @@ func cmdMonitor() {
 					stats := runsResp.Data
 					o := stats.Overview
 
-				fmt.Printf("%d total, %d✅ %d❌ %d⚠️  (%.0f%% success), avg %v, $%.4f\n",
-					o.TotalRuns, o.SuccessCount, o.FailedCount, o.ErrorCount,
-					o.SuccessRate*100,
-					time.Duration(o.AvgDurationMs)*time.Millisecond,
-					o.TotalCostUSD)
+					fmt.Printf("%d total, %d✅ %d❌ %d⚠️  (%.0f%% success), avg %v, $%.4f\n",
+						o.TotalRuns, o.SuccessCount, o.FailedCount, o.ErrorCount,
+						o.SuccessRate*100,
+						time.Duration(o.AvgDurationMs)*time.Millisecond,
+						o.TotalCostUSD)
 
 					// Per-agent breakdown
 					if len(stats.ByAgent) > 0 {

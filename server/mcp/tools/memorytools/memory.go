@@ -147,8 +147,8 @@ func (p *Provider) Tools() []Tool {
 				"type": "object",
 				"properties": map[string]interface{}{
 					"similarity_threshold": numProp("Cosine similarity threshold for clustering", 0.85),
-					"merge":               boolProp("Merge weaker facts into strongest", false),
-					"dry_run":             boolProp("Report without modifying", false),
+					"merge":                boolProp("Merge weaker facts into strongest", false),
+					"dry_run":              boolProp("Report without modifying", false),
 				},
 			},
 		},
@@ -326,11 +326,11 @@ func (p *Provider) memoryRecall(args map[string]interface{}) (interface{}, error
 			}
 
 			updateProps := map[string]interface{}{
-				"avg_retrieval_score":  newAvg,
-				"retrieval_count":      newRetCount,
-				"last_retrieval_score": score,
-				"last_accessed":        time.Now().UTC().Format(time.RFC3339),
-				"last_query_hash":      queryHash,
+				"avg_retrieval_score":   newAvg,
+				"retrieval_count":       newRetCount,
+				"last_retrieval_score":  score,
+				"last_accessed":         time.Now().UTC().Format(time.RFC3339),
+				"last_query_hash":       queryHash,
 				"query_diversity_count": newDivCount,
 			}
 
@@ -393,11 +393,11 @@ func (p *Provider) memoryApplyDecay(args map[string]interface{}) (interface{}, e
 			}
 
 			entry := map[string]interface{}{
-				"id":         factID,
-				"content":    getString(props, "content", "")[:min(60, len(getString(props, "content", "")))],
+				"id":             factID,
+				"content":        getString(props, "content", "")[:min(60, len(getString(props, "content", "")))],
 				"old_confidence": conf,
 				"new_confidence": newConf,
-				"days_unused": days,
+				"days_unused":    days,
 			}
 
 			if newConf < threshold {
@@ -425,12 +425,12 @@ func (p *Provider) memoryApplyDecay(args map[string]interface{}) (interface{}, e
 	}
 
 	return map[string]interface{}{
-		"status":       "ok",
-		"dry_run":      dryRun,
-		"total_facts":  len(items),
-		"decayed":      decayed,
-		"archived":     archived,
-		"details":      details,
+		"status":      "ok",
+		"dry_run":     dryRun,
+		"total_facts": len(items),
+		"decayed":     decayed,
+		"archived":    archived,
+		"details":     details,
 	}, nil
 }
 
@@ -499,8 +499,8 @@ func (p *Provider) memoryDetectPatterns(args map[string]interface{}) (interface{
 					"key":     key,
 					"content": content[:min(80, len(content))],
 				},
-				"similar":   similar,
-				"size":      1 + len(similar),
+				"similar": similar,
+				"size":    1 + len(similar),
 			}
 			clusters = append(clusters, cluster)
 
@@ -520,13 +520,13 @@ func (p *Provider) memoryDetectPatterns(args map[string]interface{}) (interface{
 	}
 
 	return map[string]interface{}{
-		"status":              "ok",
-		"dry_run":             dryRun,
-		"clusters_found":      len(clusters),
-		"merged":              merged,
+		"status":               "ok",
+		"dry_run":              dryRun,
+		"clusters_found":       len(clusters),
+		"merged":               merged,
 		"total_facts":          len(facts),
 		"similarity_threshold": threshold,
-		"clusters":            clusters,
+		"clusters":             clusters,
 	}, nil
 }
 

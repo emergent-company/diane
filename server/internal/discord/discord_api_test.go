@@ -73,22 +73,22 @@ type FakeDiscordAPI struct {
 	ChannelEditCalls  []ChannelEditCall
 
 	// Interaction responses are just recorded, not acted upon.
-	InteractionResponses      []*discordgo.InteractionResponse
-	InteractionResponseEdits  []*discordgo.WebhookEdit
+	InteractionResponses     []*discordgo.InteractionResponse
+	InteractionResponseEdits []*discordgo.WebhookEdit
 
 	// nextThreadID is incremented for each MessageThreadStart call
 	nextThreadID int
 
 	// ErrorInjectors let tests force errors on specific methods.
-	ErrChannel           error // returned by Channel()
-	ErrChannelTyping     error
-	ErrMessageSend       error
-	ErrReactionAdd       error
-	ErrReactionRemove    error
-	ErrThreadStart       error
-	ErrChannelEdit       error
-	ErrInteractionResp   error
-	ErrInteractionEdit   error
+	ErrChannel         error // returned by Channel()
+	ErrChannelTyping   error
+	ErrMessageSend     error
+	ErrReactionAdd     error
+	ErrReactionRemove  error
+	ErrThreadStart     error
+	ErrChannelEdit     error
+	ErrInteractionResp error
+	ErrInteractionEdit error
 }
 
 // NewFakeDiscordAPI creates a fake API with a default bot ID.

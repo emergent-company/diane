@@ -244,7 +244,7 @@ func TestIsMaster(t *testing.T) {
 		mode string
 		want bool
 	}{
-		{"", true},     // empty = master (backward compat)
+		{"", true}, // empty = master (backward compat)
 		{"master", true},
 		{"slave", false},
 	}
@@ -446,15 +446,15 @@ func TestComplexConfigRoundTrip(t *testing.T) {
 	// Build a complex config
 	cfg := config.DefaultConfig()
 	cfg.AddProject("prod", &config.ProjectConfig{
-		ServerURL:          "https://memory.prod.com",
-		Token:              "emt_prod_token",
-		ProjectID:          "prodid-123",
-		Mode:               "master",
-		DiscordBotToken:    "discord_token_here",
-		DiscordChannelIDs:  []string{"123", "456"},
-		SystemPrompt:       "You are a test agent.",
-		BraveAPIKey:        "brave_key_here",
-		InstanceID:         "inst-001",
+		ServerURL:         "https://memory.prod.com",
+		Token:             "emt_prod_token",
+		ProjectID:         "prodid-123",
+		Mode:              "master",
+		DiscordBotToken:   "discord_token_here",
+		DiscordChannelIDs: []string{"123", "456"},
+		SystemPrompt:      "You are a test agent.",
+		BraveAPIKey:       "brave_key_here",
+		InstanceID:        "inst-001",
 		GenerativeProvider: &config.ProviderConfig{
 			Provider: "deepseek",
 			APIKey:   "sk-deepseek",

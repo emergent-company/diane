@@ -36,8 +36,8 @@ type ProjectConfig struct {
 	Mode string `yaml:"mode,omitempty"`
 
 	// Discord Bot (optional, per project)
-	DiscordBotToken      string   `yaml:"discord_bot_token,omitempty"`
-	DiscordChannelIDs    []string `yaml:"discord_channel_ids,omitempty"`
+	DiscordBotToken         string   `yaml:"discord_bot_token,omitempty"`
+	DiscordChannelIDs       []string `yaml:"discord_channel_ids,omitempty"`
 	DiscordThreadChannelIDs []string `yaml:"discord_thread_channel_ids,omitempty"`
 
 	// LLM Providers (optional, synced to Memory Platform)
@@ -92,8 +92,8 @@ type ProviderConfig struct {
 	Location           string `yaml:"location,omitempty"`
 
 	// OpenAI-compatible / DeepSeek
-	BaseURL  string `yaml:"base_url,omitempty"`
-	Model    string `yaml:"model,omitempty"` // generative model name (GeminiModel in MP API)
+	BaseURL string `yaml:"base_url,omitempty"`
+	Model   string `yaml:"model,omitempty"` // generative model name (GeminiModel in MP API)
 }
 
 // AgentConfig defines an agent profile that maps to a Memory Platform AgentDefinition.
@@ -139,8 +139,8 @@ type AgentConfig struct {
 
 // AgentModelConfig specifies the model for an agent.
 type AgentModelConfig struct {
-	Provider    string  `yaml:"provider,omitempty"`   // deepseek, google, etc.
-	Name        string  `yaml:"name,omitempty"`       // model name
+	Provider    string  `yaml:"provider,omitempty"` // deepseek, google, etc.
+	Name        string  `yaml:"name,omitempty"`     // model name
 	Temperature float32 `yaml:"temperature,omitempty"`
 	MaxTokens   int     `yaml:"max_tokens,omitempty"`
 }

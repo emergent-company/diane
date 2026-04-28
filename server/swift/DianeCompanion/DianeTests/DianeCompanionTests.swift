@@ -1,5 +1,5 @@
 import XCTest
-@testable import DianeCompanion
+@testable import Diane
 import EmergentKit
 
 /// Unit tests for the EmergentAPIClient — verifies HTTP routing, decoding,

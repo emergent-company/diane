@@ -43,9 +43,9 @@ func newMockRegistrationServer() *httptest.Server {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"client_id":          "test-client-id-12345",
+			"client_id":           "test-client-id-12345",
 			"client_id_issued_at": 1700000000,
-			"client_name":        body["client_name"],
+			"client_name":         body["client_name"],
 		})
 	}))
 }
@@ -203,13 +203,13 @@ func TestDiscoverOAuthFromHeader_WithRegistrationEndpoint(t *testing.T) {
 	metaSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"issuer":                "https://mcp.example.com/",
-			"authorization_endpoint": "https://mcp.example.com/authorize",
-			"token_endpoint":        "https://mcp.example.com/token",
-			"registration_endpoint": "https://mcp.example.com/register",
-			"scopes_supported":      []string{"read", "write", "admin"},
-			"response_types_supported":       []string{"code"},
-			"grant_types_supported":          []string{"authorization_code", "refresh_token"},
+			"issuer":                                "https://mcp.example.com/",
+			"authorization_endpoint":                "https://mcp.example.com/authorize",
+			"token_endpoint":                        "https://mcp.example.com/token",
+			"registration_endpoint":                 "https://mcp.example.com/register",
+			"scopes_supported":                      []string{"read", "write", "admin"},
+			"response_types_supported":              []string{"code"},
+			"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
 			"token_endpoint_auth_methods_supported": []string{"none"},
 			"code_challenge_methods_supported":      []string{"S256"},
 		})
@@ -220,7 +220,7 @@ func TestDiscoverOAuthFromHeader_WithRegistrationEndpoint(t *testing.T) {
 	resSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"resource":             "https://mcp.example.com/",
+			"resource":              "https://mcp.example.com/",
 			"authorization_servers": []string{metaSrv.URL},
 		})
 	}))
@@ -271,7 +271,7 @@ func TestDiscoverOAuthFromHeader_NoRegistrationEndpoint(t *testing.T) {
 	resSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"resource":             "https://mcp.example.com/",
+			"resource":              "https://mcp.example.com/",
 			"authorization_servers": []string{metaSrv.URL},
 		})
 	}))
@@ -330,7 +330,7 @@ func newMock401WithDiscoveryServer() *httptest.Server {
 		}
 		baseURL := scheme + "://" + r.Host
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"resource":             baseURL,
+			"resource":              baseURL,
 			"authorization_servers": []string{baseURL},
 		})
 	})

@@ -123,7 +123,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: diane-companion-dmg
-          path: server/swift/DianeCompanion/build/DianeCompanion-*.dmg
+          path: server/swift/DianeCompanion/build/Diane-*.dmg
 
   release:
     name: Release
@@ -150,7 +150,7 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/checksums.txt
-            dist/DianeCompanion-*.dmg
+            dist/Diane-*.dmg
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}

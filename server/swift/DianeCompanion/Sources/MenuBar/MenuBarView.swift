@@ -58,7 +58,7 @@ struct MenuBarView: View {
             Image(systemName: headerIcon)
                 .foregroundStyle(headerColor)
                 .font(.system(size: 14, weight: .medium))
-            Text("Diane Companion")
+            Text("Diane")
                 .font(.headline)
             Spacer()
             if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {

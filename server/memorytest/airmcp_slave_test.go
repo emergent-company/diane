@@ -42,13 +42,13 @@ func TestAirMCPDoctor(t *testing.T) {
 		label   string
 		pass    bool
 	}{
-		{"AirMCP Doctor",  "Doctor banner",       false},
-		{"Node.js",         "Node.js installed",   false},
-		{"v25.2.1",         "Node.js v25.2.1",     false},
-		{"macOS",           "macOS platform",      false},
-		{"26.3.1",          "macOS 26.3.1",        false},
-		{"v2.11.0",         "AirMCP v2.11.0",      false},
-		{"(latest)",        "Latest version",      false},
+		{"AirMCP Doctor", "Doctor banner", false},
+		{"Node.js", "Node.js installed", false},
+		{"v25.2.1", "Node.js v25.2.1", false},
+		{"macOS", "macOS platform", false},
+		{"26.3.1", "macOS 26.3.1", false},
+		{"v2.11.0", "AirMCP v2.11.0", false},
+		{"(latest)", "Latest version", false},
 	}
 	for i := range envChecks {
 		envChecks[i].pass = strings.Contains(out, envChecks[i].keyword)
@@ -100,9 +100,9 @@ func TestAirMCPDoctor(t *testing.T) {
 		label   string
 		pass    bool
 	}{
-		{"Host env",               "macOS 26 host env",            false},
-		{"arm64",                  "Apple Silicon (arm64)",        false},
-		{"All modules compatible", "All 29 modules compatible",    false},
+		{"Host env", "macOS 26 host env", false},
+		{"arm64", "Apple Silicon (arm64)", false},
+		{"All modules compatible", "All 29 modules compatible", false},
 	}
 	for i := range compatChecks {
 		compatChecks[i].pass = strings.Contains(out, compatChecks[i].keyword)
@@ -117,9 +117,9 @@ func TestAirMCPDoctor(t *testing.T) {
 		label   string
 		pass    bool
 	}{
-		{"loopback-only",  "Policy: loopback-only (safe)", false},
-		{"not set",        "Token: not set",              false},
-		{"empty",          "Origin allow-list: empty",    false},
+		{"loopback-only", "Policy: loopback-only (safe)", false},
+		{"not set", "Token: not set", false},
+		{"empty", "Origin allow-list: empty", false},
 	}
 	for i := range networkChecks {
 		networkChecks[i].pass = strings.Contains(out, networkChecks[i].keyword)
@@ -173,8 +173,8 @@ func TestAirMCPDoctor(t *testing.T) {
 		label   string
 		pass    bool
 	}{
-		{"16 passed",  "16 checks passed", false},
-		{"3 warnings", "3 warnings",        false},
+		{"16 passed", "16 checks passed", false},
+		{"3 warnings", "3 warnings", false},
 	}
 	for i := range summaryChecks {
 		summaryChecks[i].pass = strings.Contains(out, summaryChecks[i].keyword)

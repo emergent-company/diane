@@ -58,11 +58,11 @@ func cmdDoctor() {
 	// ── 5. SDK connection ──
 	fmt.Print("\n🔌 Memory SDK connection... ")
 	bridge, err := memory.New(memory.Config{
-		ServerURL:          pc.ServerURL,
-		APIKey:             pc.Token,
-		ProjectID:          pc.ProjectID,
-		OrgID:              pc.OrgID,
-		HTTPClientTimeout:  10 * time.Second,
+		ServerURL:         pc.ServerURL,
+		APIKey:            pc.Token,
+		ProjectID:         pc.ProjectID,
+		OrgID:             pc.OrgID,
+		HTTPClientTimeout: 10 * time.Second,
 	})
 	if err != nil {
 		fmt.Printf("❌ %v\n", err)
