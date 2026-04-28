@@ -38,18 +38,35 @@ final class ServerConfiguration: ObservableObject {
     init() {
         let defaults = UserDefaults.standard
 
-        // Load persisted values first
+        // Load persisted values first (from previous session or Settings)
         self.serverURL     = defaults.string(forKey: Keys.serverURL) ?? ""
         self.apiKey        = defaults.string(forKey: Keys.apiKey) ?? ""
         self.projectID     = defaults.string(forKey: Keys.projectID) ?? ""
         self.launchAtLogin = defaults.bool(forKey: Keys.launchAtLogin)
 
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let alreadyConfigured = !serverURL.isEmpty && !apiKey.isEmpty && !projectID.isEmpty
 
-        // Read ~/.diane/secrets/memory-config.json — server URL + API key
+        // Read ~/.config/diane.yml — primary config (token, project_id, server_url)
+        // Always prefer file discovery over stale UserDefaults so config changes
+        // are picked up automatically.
+        let configYamlPath = home + "/.config/diane.yml"
+        if let yamlData = try? Data(contentsOf: URL(fileURLWithPath: configYamlPath)),
+           let yamlStr = String(data: yamlData, encoding: .utf8) {
+            if let url = Self.extractFirstYAMLValue(in: yamlStr, key: "server_url") {
+                serverURL = url
+            }
+            // The active project's token is used as the API key
+            if let token = Self.extractFirstYAMLValue(in: yamlStr, key: "token") {
+                apiKey = token
+            }
+            if projectID.isEmpty {
+                projectID = Self.parseProjectIDFromYAML(yamlStr)
+            }
+        }
+
+        // Read ~/.diane/secrets/memory-config.json — fallback for server URL + API key
         let secretsPath = home + "/.diane/secrets/memory-config.json"
-        if !alreadyConfigured,
+        if serverURL.isEmpty || apiKey.isEmpty,
            let jsonData = try? Data(contentsOf: URL(fileURLWithPath: secretsPath)),
            let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: String] {
             if serverURL.isEmpty, let url = json["server_url"] {
@@ -60,14 +77,6 @@ final class ServerConfiguration: ObservableObject {
             }
         }
 
-        // Read ~/.config/diane.yml — project ID (nested under projects.<default>)
-        let configYamlPath = home + "/.config/diane.yml"
-        if projectID.isEmpty,
-           let yamlData = try? Data(contentsOf: URL(fileURLWithPath: configYamlPath)),
-           let yamlStr = String(data: yamlData, encoding: .utf8) {
-            projectID = Self.parseProjectIDFromYAML(yamlStr)
-        }
-
         // Read ~/.diane/config.yaml as fallback
         let altYamlPath = home + "/.diane/config.yaml"
         if projectID.isEmpty,
@@ -75,6 +84,18 @@ final class ServerConfiguration: ObservableObject {
            let yamlStr = String(data: yamlData, encoding: .utf8) {
             projectID = Self.parseProjectIDFromYAML(yamlStr)
         }
+    }
+
+    /// Extract the first value matching a YAML key across all lines.
+    /// Returns the first non-empty value found.
+    private static func extractFirstYAMLValue(in yaml: String, key: String) -> String? {
+        for line in yaml.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if let value = Self.extractYAMLValue(line: trimmed, key: key), !value.isEmpty {
+                return value
+            }
+        }
+        return nil
     }
 
     /// Parse the project ID from Diane's YAML config structure.

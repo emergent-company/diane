@@ -23,10 +23,15 @@ NO_SIGN=false
 # Allow VERSION override from env (CI provides github.ref_name)
 if [ -n "${VERSION:-}" ]; then
     echo "==> Setting version from environment: ${VERSION}"
-    defaults write "$(pwd)/DianeCompanion/Info.plist" CFBundleShortVersionString "${VERSION}"
-    defaults write "$(pwd)/DianeCompanion/Info.plist" CFBundleVersion "${VERSION#v}"
+    PLIST="$(pwd)/DianeCompanion/Info.plist"
+    plutil -replace CFBundleShortVersionString -string "${VERSION}" "${PLIST}" 2>/dev/null || \
+        /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "${PLIST}" 2>/dev/null || \
+        defaults write "${PLIST%.plist}" CFBundleShortVersionString "${VERSION}"
+    plutil -replace CFBundleVersion -string "${VERSION#v}" "${PLIST}" 2>/dev/null || \
+        /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${VERSION#v}" "${PLIST}" 2>/dev/null || \
+        defaults write "${PLIST%.plist}" CFBundleVersion "${VERSION#v}"
 else
-    VERSION=$(defaults read "$(pwd)/DianeCompanion/Info.plist" CFBundleShortVersionString 2>/dev/null || echo "0.0.0-DEVELOPMENT")
+    VERSION=$(defaults read "$(pwd)/DianeCompanion/Info" CFBundleShortVersionString 2>/dev/null || echo "0.0.0-DEVELOPMENT")
 fi
 
 echo "==> Building Diane v${VERSION}"
