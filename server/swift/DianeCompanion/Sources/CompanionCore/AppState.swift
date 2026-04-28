@@ -11,7 +11,7 @@ final class AppState: ObservableObject {
 
     // MARK: - Navigation
 
-    @Published var selectedSidebarItem: SidebarItem? = .sessions
+    @Published var selectedSidebarItem: SidebarItem? = .dashboard
 
     // MARK: - Computed
 
@@ -22,6 +22,7 @@ final class AppState: ObservableObject {
 
 /// Represents the navigable sections in the main window sidebar.
 enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
+    case dashboard  = "Dashboard"
     case sessions   = "Sessions"
     case mcpServers = "MCP Servers"
     case permissions = "Permissions"
@@ -30,6 +31,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
 
     var systemIcon: String {
         switch self {
+        case .dashboard:  return "chart.bar.fill"
         case .sessions:    return "message"
         case .mcpServers:  return "cable.connector.horizontal"
         case .permissions: return "lock.shield"

@@ -96,6 +96,13 @@ final class DianeAPIClient: ObservableObject {
         return (try? JSONDecoder().decode([RelayNode].self, from: data)) ?? []
     }
 
+    // MARK: - Stats
+
+    func fetchAgentStats(hours: Int = 24) async throws -> AgentStatsResponse {
+        let data = try await get("/api/stats?hours=\(hours)")
+        return try JSONDecoder().decode(AgentStatsResponse.self, from: data)
+    }
+
     // MARK: - HTTP
 
     private func get(_ path: String) async throws -> Data {

@@ -11,6 +11,7 @@ final class UpdateChecker: ObservableObject {
     @Published private(set) var isChecking = false
     @Published private(set) var isUpdating = false
     @Published private(set) var updateOutput: String = ""
+    @Published private(set) var downloadProgress: Double = 0
 
     weak var statusMonitor: StatusMonitor?
     weak var cliManager: CLIManager?
@@ -20,7 +21,6 @@ final class UpdateChecker: ObservableObject {
     private let checkInterval: TimeInterval = 3600
     private var timer: Timer?
     private var hasStarted = false
-    private var downloadUrl: URL?
     private var releaseData: GitHubRelease?
 
     deinit { timer?.invalidate() }
@@ -28,32 +28,27 @@ final class UpdateChecker: ObservableObject {
     // MARK: - Public
 
     func start() async {
-        guard !self.hasStarted else { return }
-        self.hasStarted = true
+        guard !hasStarted else { return }
+        hasStarted = true
 
         if let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
-            self.currentVersion = appVersion
+            currentVersion = appVersion
         } else {
-            self.currentVersion = "unknown"
+            currentVersion = "unknown"
         }
 
-        logger.info("UpdateChecker: current version = \(self.currentVersion ?? "nil")")
-
         await checkForUpdates()
-        timer = Timer.scheduledTimer(withTimeInterval: self.checkInterval, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-            Task { @MainActor in
-                await self.checkForUpdates()
-            }
+        timer = Timer.scheduledTimer(withTimeInterval: checkInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in await self?.checkForUpdates() }
         }
     }
 
     func checkForUpdates() async {
         logger.debug("UpdateChecker: Starting checkForUpdates")
-        self.isChecking = true
-        defer { self.isChecking = false }
+        isChecking = true
+        defer { isChecking = false }
 
-        guard let url = URL(string: "https://api.github.com/repos/\(self.repoOwner)/\(self.repoName)/releases/latest") else { return }
+        guard let url = URL(string: "https://api.github.com/repos/\(repoOwner)/\(repoName)/releases/latest") else { return }
 
         do {
             var request = URLRequest(url: url)
@@ -71,21 +66,17 @@ final class UpdateChecker: ObservableObject {
             }
 
             let release = try JSONDecoder().decode(GitHubRelease.self, from: data)
-            self.releaseData = release
-            self.latestVersion = release.tagName
+            releaseData = release
+            latestVersion = release.tagName
 
-            if let htmlUrl = URL(string: release.htmlUrl) {
-                self.downloadUrl = htmlUrl
-            }
+            let installed = currentVersion ?? "0.0.0"
 
-            let installed = self.currentVersion ?? "0.0.0"
-
-            if installed == "unknown" || installed == "dev" || installed == "0.0.0-DEVELOPMENT" {
-                self.updateAvailable = true
+            if installed == "unknown" || installed == "dev" {
+                updateAvailable = true
                 logger.info("UpdateChecker: Update available (installed version \(installed) is dev/unknown).")
             } else {
-                self.updateAvailable = isOlderVersion(installed, than: release.tagName)
-                if self.updateAvailable {
+                updateAvailable = isOlderVersion(installed, than: release.tagName)
+                if updateAvailable {
                     logger.info("UpdateChecker: Update available: \(installed) -> \(release.tagName).")
                 } else {
                     logger.info("UpdateChecker: No update available. Current version: \(installed).")
@@ -94,119 +85,162 @@ final class UpdateChecker: ObservableObject {
         } catch {
             logger.debug("UpdateChecker: checkForUpdates failed: \(error.localizedDescription)")
         }
-        logger.debug("UpdateChecker: Finished checkForUpdates")
     }
 
-    /// Download the latest DMG and install it in-place, then relaunch.
-    func performUpdate() async {
-        guard let release = self.releaseData, let version = self.latestVersion else {
+    /// Actually download the DMG, install it, and relaunch the app
+    func performUpdate() {
+        guard !isUpdating else { return }
+        guard let release = releaseData else {
             logger.error("UpdateChecker: No release data available")
-            self.appendOutput("No release data available. Check again later.\n")
             return
         }
 
-        self.isUpdating = true
-        self.appendOutput("Starting update to \(version)...\n")
-
-        // Find the DMG asset URL
-        let dmgName = "Diane-\(version).dmg"
-        guard let dmgAsset = release.assets.first(where: { $0.name == dmgName }),
-              let dmgURL = URL(string: dmgAsset.browserDownloadURL) else {
-            logger.error("UpdateChecker: DMG asset not found for \(version)")
-            self.appendOutput("DMG asset not found for \(version).\n")
-            self.isUpdating = false
+        // Find DMG asset
+        guard let dmgAsset = release.assets?.first(where: { $0.name.hasSuffix(".dmg") && $0.name.hasPrefix("Diane-") }),
+              let dmgURL = URL(string: dmgAsset.browserDownloadUrl) else {
+            logger.error("UpdateChecker: No DMG asset found in release")
+            // Fallback: open release page
+            if let url = URL(string: release.htmlUrl) {
+                NSWorkspace.shared.open(url)
+            }
             return
         }
 
-        let currentAppURL = Bundle.main.bundleURL
-        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("diane-update-\(UUID().uuidString)")
-        let dmgPath = tempDir.appendingPathComponent(dmgName)
-        let mountPoint = tempDir.appendingPathComponent("mount")
+        Task {
+            await performDMGUpdate(dmgURL: dmgURL, version: release.tagName)
+        }
+    }
+
+    // MARK: - DMG Download & Install
+
+    private func performDMGUpdate(dmgURL: URL, version: String) async {
+        isUpdating = true
+        updateOutput = "Downloading \(version)…"
+        logger.info("UpdateChecker: Starting DMG download from \(dmgURL)")
 
         do {
-            try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+            // Step 1: Download DMG to temp directory
+            let tempDir = FileManager.default.temporaryDirectory
+            let dmgPath = tempDir.appendingPathComponent("Diane-\(version).dmg")
+            let mountPoint = tempDir.appendingPathComponent("diane-update-mount")
 
-            // Download DMG
-            self.appendOutput("Downloading \(dmgName)...\n")
-            logger.info("UpdateChecker: Downloading DMG from \(dmgURL)")
-            let (downloadURL, _) = try await URLSession.shared.download(from: dmgURL)
-            try FileManager.default.moveItem(at: downloadURL, to: dmgPath)
-            self.appendOutput("Downloaded (\(self.humanSize(dmgPath)))\n")
+            // Clean up any previous temp files
+            try? FileManager.default.removeItem(at: dmgPath)
+            try? FileManager.default.removeItem(at: mountPoint)
 
-            // Mount DMG
-            self.appendOutput("Mounting DMG...\n")
-            try FileManager.default.createDirectory(at: mountPoint, withIntermediateDirectories: true)
-            let mountOutput = try await self.shell("/usr/bin/hdiutil", args: ["attach", dmgPath.path, "-mountpoint", mountPoint.path, "-nobrowse", "-quiet"])
-            logger.info("UpdateChecker: Mounted DMG: \(mountOutput)")
+            // Download with progress
+            let (downloadURL, _) = try await downloadWithProgress(from: dmgURL, to: dmgPath)
+            updateOutput = "Download complete. Installing…"
+            logger.info("UpdateChecker: DMG downloaded to \(downloadURL.path)")
 
-            // Find the .app inside the mounted volume
-            let contents = try FileManager.default.contentsOfDirectory(at: mountPoint, includingPropertiesForKeys: nil)
-            guard let newAppURL = contents.first(where: { $0.pathExtension == "app" }) else {
-                self.appendOutput("No .app found in DMG.\n")
-                throw UpdateError.appNotFound
+            // Step 2: Mount DMG
+            updateOutput = "Mounting DMG…"
+            let mountOutput = try await runCommand("/usr/bin/hdiutil", arguments: [
+                "attach", dmgPath.path,
+                "-mountpoint", mountPoint.path,
+                "-nobrowse", "-quiet"
+            ])
+            logger.info("UpdateChecker: Mount output: \(mountOutput)")
+
+            // Step 3: Find .app in mounted DMG
+            let mountedApps = try FileManager.default.contentsOfDirectory(at: mountPoint, includingPropertiesForKeys: nil)
+            guard let dmgApp = mountedApps.first(where: { $0.pathExtension == "app" }) else {
+                throw UpdateError("No .app found in mounted DMG")
             }
 
-            self.appendOutput("Installing new version over current app...\n")
+            // Step 4: Get current app path
+            let currentAppPath = Bundle.main.bundleURL
+            let applicationsPath = URL(fileURLWithPath: "/Applications").appendingPathComponent(currentAppPath.lastPathComponent)
 
-            // Copy new app over current app (works even for running apps on macOS)
-            let destination = currentAppURL.deletingLastPathComponent().appendingPathComponent(newAppURL.lastPathComponent)
-            _ = try await self.shell("/usr/bin/ditto", args: [newAppURL.path, destination.path])
+            // Step 5: Replace app in /Applications
+            updateOutput = "Installing to /Applications…"
+            logger.info("UpdateChecker: Copying \(dmgApp.path) -> \(applicationsPath.path)")
 
-            self.appendOutput("✅ Update installed to \(destination.path)\n")
-
-            // Unmount DMG
-            try await self.shell("/usr/bin/hdiutil", args: ["detach", mountPoint.path, "-quiet", "-force"])
-            try? FileManager.default.removeItem(at: tempDir)
-
-            // Relaunch and quit
-            self.appendOutput("Relaunching app...\n")
-            let config = NSWorkspace.OpenConfiguration()
-            config.activates = true
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            NSWorkspace.shared.openApplication(at: destination, configuration: config) { _, _ in
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    NSApplication.shared.terminate(nil)
-                }
+            // Remove old version
+            if FileManager.default.fileExists(atPath: applicationsPath.path) {
+                try FileManager.default.removeItem(at: applicationsPath)
             }
-            self.isUpdating = false
+
+            // Copy new version
+            try FileManager.default.copyItem(at: dmgApp, to: applicationsPath)
+
+            // Step 6: Detach DMG
+            _ = try? await runCommand("/usr/bin/hdiutil", arguments: ["detach", mountPoint.path, "-quiet"])
+
+            // Step 7: Clean up downloaded DMG
+            try? FileManager.default.removeItem(at: dmgPath)
+            try? FileManager.default.removeItem(at: mountPoint)
+
+            updateOutput = "Update installed. Relaunching…"
+            logger.info("UpdateChecker: Update installed. Relaunching…")
+
+            // Step 8: Launch new version and quit
+            updateOutput = "Launching new version…"
+            _ = try? await runCommand("/usr/bin/open", arguments: ["-a", applicationsPath.path])
+
+            // Step 9: Terminate old version
+            logger.info("UpdateChecker: Terminating old version")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                NSApplication.shared.terminate(nil)
+            }
+
         } catch {
             logger.error("UpdateChecker: Update failed: \(error.localizedDescription)")
-            self.appendOutput("❌ Update failed: \(error.localizedDescription)\n")
-            try? FileManager.default.removeItem(at: tempDir)
-            self.isUpdating = false
+            updateOutput = "Update failed: \(error.localizedDescription)"
+            isUpdating = false
+
+            // Fallback: open release page so user can manually install
+            if let url = URL(string: releaseData?.htmlUrl ?? "https://github.com/\(repoOwner)/\(repoName)/releases/latest") {
+                NSWorkspace.shared.open(url)
+            }
         }
     }
 
-    // MARK: - Helpers
+    /// Download a file and report progress
+    private func downloadWithProgress(from url: URL, to destination: URL) async throws -> (URL, URLResponse) {
+        let session = URLSession(configuration: .default)
+        // Simple download without progress delegate for now
+        let (tempURL, response) = try await session.download(from: url)
 
-    private func appendOutput(_ text: String) {
-        self.updateOutput += text
+        // Move to our destination
+        try FileManager.default.moveItem(at: tempURL, to: destination)
+        downloadProgress = 1.0
+
+        return (destination, response)
     }
 
-    private func humanSize(_ url: URL) -> String {
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
-              let size = attrs[.size] as? Int64 else { return "?" }
-        let mb = Double(size) / 1_000_000
-        return String(format: "%.1f MB", mb)
-    }
+    private func runCommand(_ path: String, arguments: [String]) async throws -> String {
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global().async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: path)
+                process.arguments = arguments
 
-    @discardableResult
-    private func shell(_ path: String, args: [String]) async throws -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = args
-        let outputPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = Pipe()
-        try process.run()
-        process.waitUntilExit()
-        let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        return String(data: data, encoding: .utf8) ?? ""
+                let pipe = Pipe()
+                process.standardOutput = pipe
+                process.standardError = pipe
+
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+
+                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                    let output = String(data: data, encoding: .utf8) ?? ""
+
+                    if process.terminationStatus == 0 {
+                        continuation.resume(returning: output)
+                    } else {
+                        continuation.resume(throwing: UpdateError("Command failed (\(process.terminationStatus)): \(output)"))
+                    }
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
     }
 
     // MARK: - Version comparison
 
-    /// Returns true if `v1` is strictly older than `v2` (both semver, optional "v" prefix)
     private func isOlderVersion(_ v1: String, than v2: String) -> Bool {
         let parts1 = versionParts(v1)
         let parts2 = versionParts(v2)
@@ -226,26 +260,12 @@ final class UpdateChecker: ObservableObject {
     }
 }
 
-// MARK: - Errors
-
-enum UpdateError: Error, LocalizedError {
-    case appNotFound
-    case downloadFailed(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .appNotFound: return "Application bundle not found in DMG"
-        case .downloadFailed(let msg): return "Download failed: \(msg)"
-        }
-    }
-}
-
 // MARK: - GitHub API models
 
 private struct GitHubRelease: Decodable {
     let tagName: String
     let htmlUrl: String
-    let assets: [GitHubAsset]
+    let assets: [GitHubAsset]?
 
     enum CodingKeys: String, CodingKey {
         case tagName = "tag_name"
@@ -256,10 +276,18 @@ private struct GitHubRelease: Decodable {
 
 private struct GitHubAsset: Decodable {
     let name: String
-    let browserDownloadURL: String
+    let browserDownloadUrl: String
 
     enum CodingKeys: String, CodingKey {
         case name
-        case browserDownloadURL = "browser_download_url"
+        case browserDownloadUrl = "browser_download_url"
     }
+}
+
+// MARK: - Error
+
+private struct UpdateError: Error, LocalizedError {
+    let message: String
+    init(_ message: String) { self.message = message }
+    var errorDescription: String? { message }
 }

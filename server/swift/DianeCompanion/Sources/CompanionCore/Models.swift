@@ -491,7 +491,69 @@ public struct ProjectPolicy: Identifiable, Codable, Hashable, Sendable {
     public static func == (lhs: ProjectPolicy, rhs: ProjectPolicy) -> Bool { lhs.id == rhs.id }
 }
 
-// MARK: - Query Result
+// MARK: - Agent Stats (from local /api/stats)
+
+public struct AgentStatsSummary: Identifiable, Codable, Sendable {
+    public let agentName: String
+    public let totalRuns: Int
+    public let successRuns: Int
+    public let errorRuns: Int
+    public let avgDurationMs: Double
+    public let avgStepCount: Double
+    public let avgToolCalls: Double
+    public let avgInputTokens: Double
+    public let avgOutputTokens: Double
+    public let totalDurationMs: Int
+    public let totalInputTokens: Int
+    public let totalOutputTokens: Int
+    public let successRate: Double
+
+    public var id: String { agentName }
+
+    enum CodingKeys: String, CodingKey {
+        case agentName        = "agent_name"
+        case totalRuns        = "total_runs"
+        case successRuns      = "success_runs"
+        case errorRuns        = "error_runs"
+        case avgDurationMs    = "avg_duration_ms"
+        case avgStepCount     = "avg_step_count"
+        case avgToolCalls     = "avg_tool_calls"
+        case avgInputTokens   = "avg_input_tokens"
+        case avgOutputTokens  = "avg_output_tokens"
+        case totalDurationMs  = "total_duration_ms"
+        case totalInputTokens = "total_input_tokens"
+        case totalOutputTokens = "total_output_tokens"
+        case successRate      = "success_rate"
+    }
+}
+
+public struct AgentStatsTotals: Codable, Sendable {
+    public let totalRuns: Int
+    public let totalSuccess: Int
+    public let totalErrors: Int
+    public let totalDurationMs: Int
+    public let totalInputTokens: Int
+    public let totalOutputTokens: Int
+    public let overallAvgDurationMs: Double
+    public let overallSuccessRate: Double
+
+    enum CodingKeys: String, CodingKey {
+        case totalRuns           = "total_runs"
+        case totalSuccess        = "total_success"
+        case totalErrors         = "total_errors"
+        case totalDurationMs     = "total_duration_ms"
+        case totalInputTokens    = "total_input_tokens"
+        case totalOutputTokens   = "total_output_tokens"
+        case overallAvgDurationMs = "overall_avg_duration_ms"
+        case overallSuccessRate  = "overall_success_rate"
+    }
+}
+
+public struct AgentStatsResponse: Codable, Sendable {
+    public let agents: [AgentStatsSummary]
+    public let totals: AgentStatsTotals
+    public let hours: Int
+}
 
 /// Response from POST /api/graph/search
 /// Returns ranked graph objects with semantic + lexical scores.

@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 
 /// Persistent app configuration backed by UserDefaults, with auto-discovery
-/// from Diane's primary config file (~/.config/diane.yml).
+/// from Diane's config file (~/.config/diane.yml).
 @MainActor
 final class ServerConfiguration: ObservableObject {
     @Published var serverURL: String {
@@ -38,74 +38,44 @@ final class ServerConfiguration: ObservableObject {
     init() {
         let defaults = UserDefaults.standard
 
-        // Load persisted values first (from previous session or Settings)
+        // Load persisted values first
         self.serverURL     = defaults.string(forKey: Keys.serverURL) ?? ""
         self.apiKey        = defaults.string(forKey: Keys.apiKey) ?? ""
         self.projectID     = defaults.string(forKey: Keys.projectID) ?? ""
         self.launchAtLogin = defaults.bool(forKey: Keys.launchAtLogin)
 
+        // Auto-discover from Diane config file if not already set
         let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let configPath = home + "/.config/diane.yml"
 
-        // Read ~/.config/diane.yml — primary config (token, project_id, server_url)
-        // Always prefer file discovery over stale UserDefaults so config changes
-        // are picked up automatically.
-        let configYamlPath = home + "/.config/diane.yml"
-        if let yamlData = try? Data(contentsOf: URL(fileURLWithPath: configYamlPath)),
-           let yamlStr = String(data: yamlData, encoding: .utf8) {
-            if let url = Self.extractFirstYAMLValue(in: yamlStr, key: "server_url") {
-                serverURL = url
-            }
-            // The active project's token is used as the API key
-            if let token = Self.extractFirstYAMLValue(in: yamlStr, key: "token") {
-                apiKey = token
-            }
-            if projectID.isEmpty {
-                projectID = Self.parseProjectIDFromYAML(yamlStr)
-            }
+        guard (serverURL.isEmpty || apiKey.isEmpty || projectID.isEmpty),
+              let yamlData = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
+              let yamlStr = String(data: yamlData, encoding: .utf8) else {
+            return
         }
-    }
 
-    /// Extract the first value matching a YAML key across all lines.
-    /// Returns the first non-empty value found.
-    private static func extractFirstYAMLValue(in yaml: String, key: String) -> String? {
-        for line in yaml.components(separatedBy: .newlines) {
+        for line in yamlStr.components(separatedBy: .newlines) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if let value = Self.extractYAMLValue(line: trimmed, key: key), !value.isEmpty {
-                return value
+            guard !trimmed.isEmpty, !trimmed.hasPrefix("#") else { continue }
+
+            // Parse key: value pairs
+            guard let colonIndex = trimmed.firstIndex(of: ":") else { continue }
+            let key = trimmed[..<colonIndex].trimmingCharacters(in: .whitespaces)
+            let value = trimmed[trimmed.index(after: colonIndex)...].trimmingCharacters(in: .whitespaces)
+            guard !value.isEmpty else { continue }
+
+            switch key {
+            case "server_url" where serverURL.isEmpty:
+                serverURL = value
+            case "project_id" where projectID.isEmpty:
+                projectID = value
+            case "api_key" where apiKey.isEmpty:
+                apiKey = value
+            case "token" where apiKey.isEmpty:
+                apiKey = value
+            default:
+                break
             }
         }
-        return nil
-    }
-
-    /// Parse the project ID from Diane's YAML config structure.
-    /// Supports both flat (project_id:) and nested (projects.<default>.project_id:) formats.
-    private static func parseProjectIDFromYAML(_ yaml: String) -> String {
-        // Scan each line for project_id in any context (flat or nested YAML)
-        for line in yaml.components(separatedBy: .newlines) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if let value = Self.extractYAMLValue(line: trimmed, key: "project_id") {
-                return value
-            }
-        }
-        return ""
-    }
-
-    /// Extract the value for a YAML key, handling colons in URLs.
-    /// e.g., "server_url: https://example.com/path" -> "https://example.com/path"
-    private static func extractYAMLValue(line: String, key: String) -> String? {
-        let pattern = "^\(key):\\s*(.*)"
-        guard let regex = try? NSRegularExpression(pattern: pattern),
-              let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
-              let range = Range(match.range(at: 1), in: line)
-        else { return nil }
-        var value = String(line[range])
-        // Strip surrounding quotes
-        value = value.trimmingCharacters(in: .whitespaces)
-        if value.hasPrefix("\"") && value.hasSuffix("\"") {
-            value = String(value.dropFirst().dropLast())
-        } else if value.hasPrefix("'") && value.hasSuffix("'") {
-            value = String(value.dropFirst().dropLast())
-        }
-        return value
     }
 }

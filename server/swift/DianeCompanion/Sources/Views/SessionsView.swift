@@ -1,11 +1,10 @@
 import SwiftUI
 
-/// Sessions view — lists Diane conversation sessions from the local API (or remote fallback).
+/// Sessions view — lists Diane conversation sessions from the local API.
 struct SessionsView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var serverConfig: ServerConfiguration
     @EnvironmentObject var dianeAPI: DianeAPIClient
-    @EnvironmentObject var apiClient: EmergentAPIClient
 
     @State private var sessions: [DianeSession] = []
     @State private var selectedSession: DianeSession? = nil
@@ -15,22 +14,20 @@ struct SessionsView: View {
     @State private var error: String? = nil
 
     var body: some View {
-        GeometryReader { geometry in
-            HSplitView {
-                sessionsList
-                    .frame(width: max(250, geometry.size.width * 0.5))
+        HSplitView {
+            sessionsList
+                .frame(minWidth: 200, idealWidth: 400, maxWidth: .infinity)
 
-                if let session = selectedSession {
-                    sessionDetailPanel(session)
-                        .frame(minWidth: 250)
-                } else {
-                    EmptyStateView(
-                        title: "Select a Session",
-                        icon: "message",
-                        description: "Select a conversation session to view its transcript."
-                    )
-                    .frame(minWidth: 250)
-                }
+            if let session = selectedSession {
+                sessionDetailPanel(session)
+                    .frame(minWidth: 200, idealWidth: 400, maxWidth: .infinity)
+            } else {
+                EmptyStateView(
+                    title: "Select a Session",
+                    icon: "message",
+                    description: "Select a conversation session to view its transcript."
+                )
+                .frame(minWidth: 200, idealWidth: 400, maxWidth: .infinity)
             }
         }
         .navigationTitle("Sessions")
@@ -216,11 +213,7 @@ struct SessionsView: View {
     private func load() async {
         isLoading = true
         do {
-            if dianeAPI.isReachable {
-                sessions = try await dianeAPI.fetchSessions()
-            } else {
-                sessions = try await apiClient.fetchSessions(projectID: serverConfig.projectID)
-            }
+            sessions = try await dianeAPI.fetchSessions()
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -232,11 +225,7 @@ struct SessionsView: View {
     private func loadMessages(session: DianeSession) async {
         isLoadingMessages = true
         do {
-            if dianeAPI.isReachable {
-                messages = try await dianeAPI.fetchSessionMessages(sessionID: session.id)
-            } else {
-                messages = try await apiClient.fetchSessionMessages(projectID: serverConfig.projectID, sessionID: session.id)
-            }
+            messages = try await dianeAPI.fetchSessionMessages(sessionID: session.id)
         } catch {
             messages = []
         }

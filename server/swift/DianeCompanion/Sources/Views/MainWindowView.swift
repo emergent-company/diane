@@ -49,6 +49,8 @@ struct MainWindowView: View {
     @ViewBuilder
     private var contentView: some View {
         switch appState.selectedSidebarItem {
+        case .dashboard:
+            StatsView()
         case .sessions:
             SessionsView()
         case .mcpServers:

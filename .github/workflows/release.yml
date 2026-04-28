@@ -5,14 +5,107 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., v1.11.0)'
+        required: true
+        type: string
+      pre-release:
+        description: 'Mark as pre-release'
+        required: false
+        default: false
+        type: boolean
+      dry-run:
+        description: 'Build artifacts but do NOT create GitHub release'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref_name || github.sha }}
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: '1.23'
+  XCODE_VERSION: '16.1'
+
 jobs:
-  build:
-    name: Build
+  validate:
+    name: Validate
     runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    outputs:
+      version: ${{ steps.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Validate version format
+        id: validate
+        run: |
+          VERSION="${{ inputs.version }}"
+          # Strip leading 'v' if present, add it back
+          VER="${VERSION#v}"
+          if ! echo "$VER" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "❌ Invalid version format: $VERSION"
+            echo "   Must be like v1.11.0 or 1.11.0"
+            exit 1
+          fi
+          VERSION="v$VER"
+
+          # Check against latest tag
+          LATEST=$(git tag -l 'v*' --sort=-version:refname | head -1)
+          if [ -z "$LATEST" ]; then
+            echo "No existing tags — allowing first release"
+          else
+            # Simple semver comparison
+            OLD="${LATEST#v}"
+            NEW="$VER"
+            if [ "$OLD" = "$NEW" ]; then
+              echo "❌ Version $VERSION already exists as tag $LATEST"
+              exit 1
+            fi
+            # Check major.minor.patch
+            IFS='.' read -ra OLD_PARTS <<< "$OLD"
+            IFS='.' read -ra NEW_PARTS <<< "$NEW"
+            for i in 0 1 2; do
+              if [ "${NEW_PARTS[$i]}" -gt "${OLD_PARTS[$i]}" ]; then
+                break
+              fi
+              if [ "${NEW_PARTS[$i]}" -lt "${OLD_PARTS[$i]}" ]; then
+                echo "❌ Version $VERSION is older than latest tag $LATEST"
+                exit 1
+              fi
+            done
+          fi
+          echo "✅ Version $VERSION is valid (latest: $LATEST)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREV=$(git tag -l 'v*' --sort=-version:refname | head -2 | tail -1)
+          if [ -z "$PREV" ]; then
+            echo "changelog=Initial release" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          LOG=$(git log --oneline --no-decorate "$PREV..HEAD" 2>/dev/null || echo "")
+          if [ -z "$LOG" ]; then
+            echo "⚠️  No new commits since $PREV — continuing anyway"
+          fi
+          echo "changelog<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$LOG" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build CLI (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    needs: validate
     strategy:
       matrix:
         include:
@@ -30,13 +123,14 @@ jobs:
             name: diane-linux-arm64
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name != '' && github.ref || github.sha }}
 
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: server/go.sum
 
       - name: Build
@@ -45,8 +139,9 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
         run: |
+          VERSION="${{ needs.validate.outputs.version || github.ref_name }}"
           cd server/cmd/diane
-          go build -ldflags="-s -w -X main.Version=${{ github.ref_name }}" -o ../../../dist/diane .
+          go build -ldflags="-s -w -X main.Version=${VERSION}" -o ../../../dist/diane .
 
       - name: Compress binary
         run: |
@@ -65,12 +160,17 @@ jobs:
   companion:
     name: Build Companion App
     runs-on: macos-15
-    needs: build
+    needs: [validate, build]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name != '' && github.ref || github.sha }}
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.1.app || sudo xcode-select -s /Applications/Xcode_16.app || true
+        run: |
+          sudo xcode-select -s /Applications/Xcode_${{ env.XCODE_VERSION }}.app \
+            || sudo xcode-select -s /Applications/Xcode_${{ env.XCODE_VERSION }}.app/Contents/Developer \
+            || true
 
       - name: Install tools
         run: |
@@ -113,7 +213,7 @@ jobs:
             -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
           security list-keychain -d user -s "$KEYCHAIN_PATH"
 
-      - name: Build and package (signed if cert available)
+      - name: Build and package
         run: |
           chmod +x Scripts/build-dmg.sh
           if [ -n "$DEVELOPMENT_TEAM" ]; then
@@ -123,7 +223,7 @@ jobs:
           fi
         working-directory: server/swift/DianeCompanion
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ needs.validate.outputs.version || github.ref_name }}
           DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM || '' }}
           NOTARIZE_APPLE_ID: ${{ secrets.NOTARIZE_APPLE_ID || '' }}
           NOTARIZE_PASSWORD: ${{ secrets.NOTARIZE_PASSWORD || '' }}
@@ -137,11 +237,12 @@ jobs:
 
   release:
     name: Release
-    needs: [build, companion]
+    needs: [validate, build, companion]
     runs-on: ubuntu-latest
+    # Skip actual GitHub release on dry-run
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry-run) }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -154,6 +255,27 @@ jobs:
           cd dist
           cat *.sha256 > checksums.txt
 
+      - name: Generate release notes
+        id: notes
+        run: |
+          VERSION="${{ needs.validate.outputs.version || github.ref_name }}"
+          PREV=$(git tag -l 'v*' --sort=-version:refname | head -2 | tail -1 || echo "")
+          NOTES="# Diane ${VERSION}\n\n"
+          if [ -n "$PREV" ]; then
+            NOTES+="## Changes since ${PREV}\n\n"
+            LOG=$(git log --oneline --no-decorate "${PREV}..HEAD" 2>/dev/null || echo "No new commits")
+            while IFS= read -r line; do
+              NOTES+="- ${line}\n"
+            done <<< "$LOG"
+            NOTES+="\n"
+          fi
+          NOTES+="## Assets\n"
+          NOTES+="- CLI binaries (tar.gz) for darwin-arm64, darwin-amd64, linux-amd64, linux-arm64\n"
+          NOTES+="- Diane macOS app (DMG) with auto-update support\n"
+          echo "notes<<EOF" >> "$GITHUB_OUTPUT"
+          printf "%b" "$NOTES" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -161,8 +283,29 @@ jobs:
             dist/*.tar.gz
             dist/checksums.txt
             dist/Diane-*.dmg
-          generate_release_notes: true
+          body: ${{ steps.notes.outputs.notes }}
+          generate_release_notes: false
           draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.pre-release || contains(github.ref_name, '-') }}
+          tag_name: ${{ needs.validate.outputs.version || github.ref_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  auto-tag:
+    name: Create Git Tag
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.event_name == 'workflow_dispatch' && !inputs.dry-run
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push tag
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          git config user.name "Diane Release Bot"
+          git config user.email "bot@emergent-company.ai"
+          git tag -a "$VERSION" -m "Release $VERSION"
+          git push origin "$VERSION"
+          echo "✅ Created and pushed tag $VERSION"

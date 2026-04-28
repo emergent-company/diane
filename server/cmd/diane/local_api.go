@@ -9,10 +9,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Emergent-Comapny/diane/internal/config"
+	"github.com/Emergent-Comapny/diane/internal/db"
 	"github.com/Emergent-Comapny/diane/internal/mcpproxy"
 	"github.com/Emergent-Comapny/diane/internal/memory"
 )
@@ -52,6 +54,7 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	mux.HandleFunc("/api/mcp-servers", api.handleMCPServers)
 	mux.HandleFunc("/api/nodes", api.handleNodes)
 	mux.HandleFunc("/api/status", api.handleStatus)
+	mux.HandleFunc("/api/stats", api.handleStats)
 
 	api.server = &http.Server{
 		Addr:    fmt.Sprintf("127.0.0.1:%d", port),
@@ -341,6 +344,99 @@ func (a *localAPIServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"ok":         true,
 		"server_url": a.config.ServerURL,
 		"project_id": a.config.ProjectID,
+	})
+}
+
+// GET /api/stats — agent run statistics (mirrors `diane stats`)
+func (a *localAPIServer) handleStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	hours, _ := strconv.Atoi(r.URL.Query().Get("hours"))
+	if hours <= 0 || hours > 720 {
+		hours = 24
+	}
+
+	database, err := db.New("")
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("open db: %v", err))
+		return
+	}
+	defer database.Close()
+
+	summaries, err := database.GetAgentStatsSummary(hours)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("query stats: %v", err))
+		return
+	}
+
+	type summaryJSON struct {
+		AgentName         string  `json:"agent_name"`
+		TotalRuns         int     `json:"total_runs"`
+		SuccessRuns       int     `json:"success_runs"`
+		ErrorRuns         int     `json:"error_runs"`
+		AvgDurationMs     float64 `json:"avg_duration_ms"`
+		AvgStepCount      float64 `json:"avg_step_count"`
+		AvgToolCalls      float64 `json:"avg_tool_calls"`
+		AvgInputTokens    float64 `json:"avg_input_tokens"`
+		AvgOutputTokens   float64 `json:"avg_output_tokens"`
+		TotalDurationMs   int     `json:"total_duration_ms"`
+		TotalInputTokens  int     `json:"total_input_tokens"`
+		TotalOutputTokens int     `json:"total_output_tokens"`
+		SuccessRate       float64 `json:"success_rate"`
+	}
+
+	type totalsJSON struct {
+		TotalRuns       int     `json:"total_runs"`
+		TotalSuccess    int     `json:"total_success"`
+		TotalErrors     int     `json:"total_errors"`
+		TotalDurationMs int     `json:"total_duration_ms"`
+		TotalInput      int     `json:"total_input_tokens"`
+		TotalOutput     int     `json:"total_output_tokens"`
+		OverallAvgDurMs float64 `json:"overall_avg_duration_ms"`
+		OverallSuccess  float64 `json:"overall_success_rate"`
+	}
+
+	items := make([]summaryJSON, 0, len(summaries))
+	var totals totalsJSON
+	for _, s := range summaries {
+		successRate := float64(0)
+		if s.TotalRuns > 0 {
+			successRate = float64(s.SuccessRuns) / float64(s.TotalRuns) * 100
+		}
+		items = append(items, summaryJSON{
+			AgentName:         s.AgentName,
+			TotalRuns:         s.TotalRuns,
+			SuccessRuns:       s.SuccessRuns,
+			ErrorRuns:         s.ErrorRuns,
+			AvgDurationMs:     s.AvgDurationMs,
+			AvgStepCount:      s.AvgStepCount,
+			AvgToolCalls:      s.AvgToolCalls,
+			AvgInputTokens:    s.AvgInputTokens,
+			AvgOutputTokens:   s.AvgOutputTokens,
+			TotalDurationMs:   s.TotalDurationMs,
+			TotalInputTokens:  s.TotalInputTokens,
+			TotalOutputTokens: s.TotalOutputTokens,
+			SuccessRate:       successRate,
+		})
+		totals.TotalRuns += s.TotalRuns
+		totals.TotalSuccess += s.SuccessRuns
+		totals.TotalErrors += s.ErrorRuns
+		totals.TotalDurationMs += s.TotalDurationMs
+		totals.TotalInput += s.TotalInputTokens
+		totals.TotalOutput += s.TotalOutputTokens
+	}
+	if totals.TotalRuns > 0 {
+		totals.OverallAvgDurMs = float64(totals.TotalDurationMs) / float64(totals.TotalRuns)
+		totals.OverallSuccess = float64(totals.TotalSuccess) / float64(totals.TotalRuns) * 100
+	}
+
+	jsonResponse(w, map[string]any{
+		"agents": items,
+		"totals": totals,
+		"hours":  hours,
 	})
 }
 
