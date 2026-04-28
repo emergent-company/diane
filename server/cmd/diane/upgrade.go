@@ -17,7 +17,7 @@ func cmdUpgrade() {
 	home, _ := os.UserHomeDir()
 	dianeDir := filepath.Join(home, ".diane")
 	binDir := filepath.Join(dianeDir, "bin")
-	binary := filepath.Join(binDir, "diane")
+	targetPath := filepath.Join(binDir, "diane")
 
 	currentVer := strings.TrimPrefix(Version, "v")
 	fmt.Printf("📦 Current version: v%s\n", currentVer)
@@ -153,18 +153,44 @@ func cmdUpgrade() {
 		os.Exit(1)
 	}
 
-	// Move binary to install dir
-	os.MkdirAll(binDir, 0755)
+	// Resolve symlinks: if the target is a symlink to the companion app bundle,
+	// write to the real file inside the bundle and re-symlink.
+	installTarget := targetPath
+	var symlinkTarget string // non-empty if we detected a symlink to re-create
+	if fi, err := os.Lstat(targetPath); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		if resolved, err := os.Readlink(targetPath); err == nil {
+			if filepath.IsAbs(resolved) {
+				symlinkTarget = resolved
+				installTarget = resolved
+				fmt.Printf("   Following symlink → %s\n", resolved)
+			}
+		}
+	}
+
 	srcBinary := filepath.Join(tmpDir, "diane")
-	if err := os.Rename(srcBinary, binary); err != nil {
-		// Fall back to copy+delete if cross-device
-		input, _ := os.ReadFile(srcBinary)
-		if err := os.WriteFile(binary, input, 0755); err != nil {
-			fmt.Fprintf(os.Stderr, "❌ Failed to install binary: %v\n", err)
-			os.Exit(1)
+	newBinaryData, err := os.ReadFile(srcBinary)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to read extracted binary: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Write to the (possibly resolved) install target
+	if err := os.WriteFile(installTarget, newBinaryData, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to install binary: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Re-create symlink if we followed one
+	if symlinkTarget != "" {
+		os.Remove(targetPath)
+		if err := os.Symlink(installTarget, targetPath); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Failed to re-create symlink: %v\n", err)
 		}
 	}
 
 	fmt.Printf("✅ Upgraded to v%s\n", latestVer)
-	fmt.Printf("   Binary: %s\n", binary)
+	fmt.Printf("   Binary: %s\n", installTarget)
+	if symlinkTarget != "" {
+		fmt.Printf("   Symlink: %s → %s\n", targetPath, installTarget)
+	}
 }

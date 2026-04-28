@@ -104,12 +104,7 @@ struct MenuBarView: View {
     }
 
     private var statusColor: Color {
-        switch statusMonitor.connectionState {
-        case .connected:    return .green
-        case .disconnected: return .secondary
-        case .error:        return .orange
-        case .unknown:      return .secondary
-        }
+        statusMonitor.statusColor
     }
 
     // MARK: - Update banner
