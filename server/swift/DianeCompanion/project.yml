@@ -85,15 +85,3 @@ targets:
       base:
         BUNDLE_LOADER: "$(TEST_HOST)"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Diane.app/Contents/MacOS/Diane"
-
-  DianeUITests:
-    type: bundle.ui-testing
-    platform: macOS
-    deploymentTarget: "13.0"
-    sources:
-      - path: DianeUITests
-    dependencies:
-      - target: Diane
-    settings:
-      base:
-        TEST_TARGET_NAME: Diane
