@@ -37,7 +37,7 @@ final class RemindersManager: ObservableObject {
     }
     
     func fetchReminders(in list: EKCalendar? = nil) throws -> [EKReminder] {
-        let predicate = store.predicateForReminders(in: list.map { [$0] } ?? lists.isEmpty ? nil : lists)
+        let predicate = store.predicateForReminders(in: list.map { [$0] } ?? (lists.isEmpty ? nil : lists))
         var reminders: [EKReminder] = []
         let semaphore = DispatchSemaphore(value: 0)
         store.fetchReminders(matching: predicate) { result in

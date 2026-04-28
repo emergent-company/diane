@@ -60,9 +60,9 @@ if [ "$NO_SIGN" = true ]; then
         CODE_SIGNING_REQUIRED=NO \
         CODE_SIGN_ENTITLEMENTS="" \
         CODE_SIGNING_ALLOWED=NO \
-        | xcpretty || true
+        | xcpretty
 
-    APP_PATH=$(find "${DERIVED_DATA}/Build/Products/${CONFIGURATION}" -name "*.app" -type d | head -1)
+    APP_PATH=$(find "${DERIVED_DATA}/Build/Products/${CONFIGURATION}" -name "${SCHEME}.app" -type d | head -1)
     if [ -z "$APP_PATH" ]; then
         echo "❌ Could not find built .app in DerivedData"
         exit 1
@@ -83,7 +83,7 @@ else
         -derivedDataPath "${DERIVED_DATA}" \
         DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-}" \
         CODE_SIGN_STYLE="${DEVELOPMENT_TEAM:+Manual}" \
-        | xcpretty || true
+        | xcpretty
 
     echo "==> Exporting .app..."
     mkdir -p "${EXPORT_PATH}"
