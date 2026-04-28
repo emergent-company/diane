@@ -84,9 +84,6 @@ struct DianeCompanionApp: App {
         // Check if the local Diane API is reachable
         let reachable = await dianeAPI.checkReachability()
         logger.info("Local Diane API reachable: \(reachable)")
-        if reachable {
-            statusMonitor.connectionState = .connected
-        }
 
         await updateChecker.start()
     }
