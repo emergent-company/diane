@@ -3,7 +3,7 @@ options:
   bundleIdPrefix: com.emergent-company
   deploymentTarget:
     macOS: "13.0"
-  xcodeVersion: "15.0"
+  xcodeVersion: "16.0"
   generateEmptyDirectories: true
   indentWidth: 4
   tabWidth: 4
