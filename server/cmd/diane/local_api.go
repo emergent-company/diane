@@ -53,6 +53,7 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	mux.HandleFunc("/api/sessions/", api.handleSessionByID)
 	mux.HandleFunc("/api/mcp-servers", api.handleMCPServers)
 	mux.HandleFunc("/api/nodes", api.handleNodes)
+	mux.HandleFunc("/api/nodes/", api.handleNodeByID)
 	mux.HandleFunc("/api/status", api.handleStatus)
 	mux.HandleFunc("/api/stats", api.handleStats)
 
@@ -242,7 +243,7 @@ type relaySessionData struct {
 	ConnectedAt string `json:"connected_at,omitempty"`
 }
 
-// GET /api/nodes — list connected MCP relay nodes
+// GET /api/nodes — list connected MCP relay nodes with role info
 func (a *localAPIServer) handleNodes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -300,9 +301,14 @@ func (a *localAPIServer) handleNodes(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Get local hostname and instance ID for role determination
+	localHostname, _ := os.Hostname()
+	localInstanceID := a.config.InstanceID
+
 	type nodeJSON struct {
 		InstanceID  string `json:"instance_id"`
 		Hostname    string `json:"hostname,omitempty"`
+		Role        string `json:"role,omitempty"`
 		Version     string `json:"version,omitempty"`
 		ToolCount   int    `json:"tool_count,omitempty"`
 		ConnectedAt string `json:"connected_at,omitempty"`
@@ -319,9 +325,18 @@ func (a *localAPIServer) handleNodes(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Determine role: master if it matches the local instance, slave otherwise
+		role := "slave"
+		if localInstanceID != "" && s.InstanceID == localInstanceID {
+			role = "master"
+		} else if localHostname != "" && s.Hostname == localHostname {
+			role = "master"
+		}
+
 		nodes = append(nodes, nodeJSON{
 			InstanceID:  s.InstanceID,
 			Hostname:    s.Hostname,
+			Role:        role,
 			Version:     s.Version,
 			ToolCount:   toolCount,
 			ConnectedAt: s.ConnectedAt,
@@ -331,6 +346,89 @@ func (a *localAPIServer) handleNodes(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]any{
 		"nodes": nodes,
 		"total": len(nodes),
+	})
+}
+
+// GET /api/nodes/{instanceId}/tools — get MCP tools for a specific relay node
+func (a *localAPIServer) handleNodeByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	// Extract instance ID from path: /api/nodes/{instanceId}/tools
+	path := strings.TrimPrefix(r.URL.Path, "/api/nodes/")
+	parts := strings.SplitN(path, "/", 2)
+	if len(parts) < 2 || parts[1] != "tools" {
+		jsonError(w, http.StatusNotFound, "use /api/nodes/{instanceId}/tools")
+		return
+	}
+	instanceID := parts[0]
+	if instanceID == "" {
+		jsonError(w, http.StatusBadRequest, "instance ID required")
+		return
+	}
+
+	toolsURL := strings.TrimSuffix(a.config.ServerURL, "/") + "/api/mcp-relay/sessions/" + instanceID + "/tools"
+	req, err := http.NewRequest("GET", toolsURL, nil)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("create request: %v", err))
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+a.config.Token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("query tools: %v", err))
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		jsonError(w, resp.StatusCode, fmt.Sprintf("tools API returned %d", resp.StatusCode))
+		return
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("read tools: %v", err))
+		return
+	}
+
+	// The tools response is the raw MCP tools/list result
+	var tools struct {
+		Tools []map[string]any `json:"tools"`
+	}
+	if err := json.Unmarshal(body, &tools); err != nil {
+		// Try as a bare array
+		var bareTools []map[string]any
+		if err2 := json.Unmarshal(body, &bareTools); err2 != nil {
+			jsonError(w, http.StatusInternalServerError, fmt.Sprintf("parse tools: %v", err))
+			return
+		}
+		tools.Tools = bareTools
+	}
+
+	type toolJSON struct {
+		Name        string `json:"name"`
+		Description string `json:"description,omitempty"`
+	}
+
+	items := make([]toolJSON, 0, len(tools.Tools))
+	for _, t := range tools.Tools {
+		name, _ := t["name"].(string)
+		desc, _ := t["description"].(string)
+		if name != "" {
+			items = append(items, toolJSON{
+				Name:        name,
+				Description: desc,
+			})
+		}
+	}
+
+	jsonResponse(w, map[string]any{
+		"tools": items,
+		"total": len(items),
 	})
 }
 

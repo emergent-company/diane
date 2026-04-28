@@ -55,6 +55,8 @@ struct MainWindowView: View {
             SessionsView()
         case .mcpServers:
             MCPServersView()
+        case .nodes:
+            RelayNodesView()
         case .permissions:
             PermissionsView()
         case .none:

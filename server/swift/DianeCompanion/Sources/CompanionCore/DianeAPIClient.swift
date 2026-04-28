@@ -103,6 +103,18 @@ final class DianeAPIClient: ObservableObject {
         return try JSONDecoder().decode(AgentStatsResponse.self, from: data)
     }
 
+    // MARK: - Relay Nodes
+
+    func fetchNodeTools(instanceID: String) async throws -> [MCPToolInfo] {
+        let encoded = instanceID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? instanceID
+        let data = try await get("/api/nodes/\(encoded)/tools")
+        struct Response: Decodable { let tools: [MCPToolInfo]? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.tools {
+            return list
+        }
+        return []
+    }
+
     // MARK: - HTTP
 
     private func get(_ path: String) async throws -> Data {
@@ -144,6 +156,7 @@ enum DianeAPIError: Error, LocalizedError {
 struct RelayNode: Identifiable, Codable, Hashable, Sendable {
     let instanceID: String
     let hostname: String?
+    let role: String?
     let version: String?
     let toolCount: Int?
     let connectedAt: String?
@@ -152,11 +165,18 @@ struct RelayNode: Identifiable, Codable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case instanceID = "instance_id"
-        case hostname, version
+        case hostname, role, version
         case toolCount = "tool_count"
         case connectedAt = "connected_at"
     }
 
     func hash(into hasher: inout Hasher) { hasher.combine(instanceID) }
     static func == (lhs: RelayNode, rhs: RelayNode) -> Bool { lhs.instanceID == rhs.instanceID }
+}
+
+struct MCPToolInfo: Identifiable, Codable, Sendable {
+    let name: String
+    let description: String?
+
+    var id: String { name }
 }
