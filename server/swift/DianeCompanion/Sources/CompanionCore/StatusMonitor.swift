@@ -1,7 +1,7 @@
 import Foundation
 
 /// Polls the Emergent server health endpoint and publishes connection state.
-/// Follows the same pattern as Diane's StatusMonitor.
+/// Uses a fixed 30-second polling interval.
 @MainActor
 final class StatusMonitor: ObservableObject {
     @Published private(set) var connectionState: ConnectionState = .unknown
@@ -12,6 +12,7 @@ final class StatusMonitor: ObservableObject {
     private var timer: Timer?
     private var healthURL: URL?
     private let session: URLSession
+    private let pollingInterval: TimeInterval = 30
 
     init() {
         let config = URLSessionConfiguration.ephemeral
@@ -34,7 +35,7 @@ final class StatusMonitor: ObservableObject {
             return
         }
         healthURL = base.appendingPathComponent("health")
-        startPolling(interval: 30)
+        startPolling(interval: pollingInterval)
     }
 
     func checkNow() {

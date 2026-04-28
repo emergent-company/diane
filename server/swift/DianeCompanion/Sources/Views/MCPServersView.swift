@@ -4,6 +4,7 @@ import SwiftUI
 ///
 /// Configuration task 8.2
 struct MCPServersView: View {
+    @EnvironmentObject var appState: AppState
     @EnvironmentObject var apiClient: EmergentAPIClient
     @EnvironmentObject var serverConfig: ServerConfiguration
 
@@ -34,9 +35,6 @@ struct MCPServersView: View {
         }
         .navigationTitle("MCP Servers")
         .task { await load() }
-        .onChange(of: serverConfig.projectID) { _ in
-            Task { await load() }
-        }
     }
 
     // MARK: - Servers List
@@ -258,13 +256,12 @@ struct MCPServersView: View {
     @MainActor
     private func load() async {
         guard !serverConfig.projectID.isEmpty else {
-            error = "No project configured"
+            error = "No project configured in Settings"
             return
         }
-        let projectID = serverConfig.projectID
         isLoading = true
         do {
-            servers = try await apiClient.fetchMCPServers(projectID: projectID)
+            servers = try await apiClient.fetchMCPServers(projectID: serverConfig.projectID)
             await loadRelays()
             error = nil
         } catch {
@@ -275,11 +272,12 @@ struct MCPServersView: View {
 
     @MainActor
     private func loadRelays() async {
-        guard !serverConfig.projectID.isEmpty else { return }
-        let projectID = serverConfig.projectID
+        guard !serverConfig.projectID.isEmpty else {
+            return
+        }
         isLoadingRelays = true
         do {
-            relaySessions = try await apiClient.fetchRelaySessions(projectID: projectID)
+            relaySessions = try await apiClient.fetchRelaySessions(projectID: serverConfig.projectID)
             relayError = nil
         } catch {
             relayError = error.localizedDescription

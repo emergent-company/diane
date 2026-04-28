@@ -1,7 +1,8 @@
 import Foundation
 import SwiftUI
 
-/// Persistent app configuration backed by UserDefaults.
+/// Persistent app configuration backed by UserDefaults, with auto-discovery
+/// from Diane's config files (~/.diane/config.yaml + ~/.diane/secrets/memory-config.json).
 @MainActor
 final class ServerConfiguration: ObservableObject {
     @Published var serverURL: String {
@@ -12,14 +13,15 @@ final class ServerConfiguration: ObservableObject {
         didSet { UserDefaults.standard.set(apiKey, forKey: Keys.apiKey) }
     }
 
+    @Published var projectID: String {
+        didSet { UserDefaults.standard.set(projectID, forKey: Keys.projectID) }
+    }
+
     @Published var launchAtLogin: Bool {
         didSet { UserDefaults.standard.set(launchAtLogin, forKey: Keys.launchAtLogin) }
     }
 
-    /// Project ID used for scoped API calls, auto-discovered from diane config.
-    @Published var projectID: String = ""
-
-    var isConfigured: Bool { !serverURL.isEmpty }
+    var isConfigured: Bool { !serverURL.isEmpty && !apiKey.isEmpty }
 
     var baseURL: URL? {
         guard !serverURL.isEmpty else { return nil }
@@ -29,54 +31,51 @@ final class ServerConfiguration: ObservableObject {
     enum Keys {
         static let serverURL     = "serverURL"
         static let apiKey        = "apiKey"
+        static let projectID     = "projectID"
         static let launchAtLogin = "launchAtLogin"
     }
 
     init() {
-        self.serverURL     = UserDefaults.standard.string(forKey: Keys.serverURL) ?? ""
-        self.apiKey        = UserDefaults.standard.string(forKey: Keys.apiKey) ?? ""
-        self.launchAtLogin = UserDefaults.standard.bool(forKey: Keys.launchAtLogin)
+        let defaults = UserDefaults.standard
 
-        // Auto-discover from ~/.diane/ config if not already persisted
-        if self.serverURL.isEmpty || self.apiKey.isEmpty || self.projectID.isEmpty {
-            let (discoveredURL, discoveredKey, discoveredProjectID) = Self.discoverFromDianeConfig()
-            if self.serverURL.isEmpty { self.serverURL = discoveredURL }
-            if self.apiKey.isEmpty    { self.apiKey = discoveredKey }
-            if self.projectID.isEmpty { self.projectID = discoveredProjectID }
-        }
-    }
+        // Load persisted values first
+        self.serverURL     = defaults.string(forKey: Keys.serverURL) ?? ""
+        self.apiKey        = defaults.string(forKey: Keys.apiKey) ?? ""
+        self.projectID     = defaults.string(forKey: Keys.projectID) ?? ""
+        self.launchAtLogin = defaults.bool(forKey: Keys.launchAtLogin)
 
-    /// Reads ~/.diane/config.yaml and ~/.diane/secrets/memory-config.json
-    /// to auto-populate server URL, API key, and project ID.
-    private static func discoverFromDianeConfig() -> (url: String, key: String, projectID: String) {
-        var url = ""
-        var key = ""
-        var pid = ""
+        // Auto-discover from Diane config files if not already set
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
 
-        // 1. Try ~/.diane/config.yaml for server_url and project_id
-        let configPath = NSString(string: "~/.diane/config.yaml").expandingTildeInPath
-        if let content = try? String(contentsOfFile: configPath, encoding: .utf8) {
-            for line in content.components(separatedBy: .newlines) {
+        // Read ~/.diane/config.yaml
+        let configYamlPath = home + "/.diane/config.yaml"
+        if serverURL.isEmpty || projectID.isEmpty,
+           let yamlData = try? Data(contentsOf: URL(fileURLWithPath: configYamlPath)),
+           let yamlStr = String(data: yamlData, encoding: .utf8) {
+            for line in yamlStr.components(separatedBy: .newlines) {
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
-                if trimmed.hasPrefix("server_url:") {
-                    let value = trimmed.dropFirst("server_url:".count).trimmingCharacters(in: .whitespaces)
-                    if !value.isEmpty { url = value }
-                } else if trimmed.hasPrefix("project_id:") {
-                    let value = trimmed.dropFirst("project_id:".count).trimmingCharacters(in: .whitespaces)
-                    if !value.isEmpty { pid = value }
+                if serverURL.isEmpty, trimmed.hasPrefix("server_url:"),
+                   let value = trimmed.components(separatedBy: ":").dropFirst().first?.trimmingCharacters(in: .whitespaces) {
+                    serverURL = value
+                }
+                if projectID.isEmpty, trimmed.hasPrefix("project_id:"),
+                   let value = trimmed.components(separatedBy: ":").dropFirst().first?.trimmingCharacters(in: .whitespaces) {
+                    projectID = value
                 }
             }
         }
 
-        // 2. Try ~/.diane/secrets/memory-config.json for project_token
-        let secretsPath = NSString(string: "~/.diane/secrets/memory-config.json").expandingTildeInPath
-        if let data = try? Data(contentsOf: URL(fileURLWithPath: secretsPath)),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            if let token = json["project_token"] as? String, !token.isEmpty {
-                key = token
+        // Read ~/.diane/secrets/memory-config.json
+        let secretsPath = home + "/.diane/secrets/memory-config.json"
+        if apiKey.isEmpty || serverURL.isEmpty,
+           let jsonData = try? Data(contentsOf: URL(fileURLWithPath: secretsPath)),
+           let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: String] {
+            if apiKey.isEmpty, let token = json["project_token"] {
+                apiKey = token
+            }
+            if serverURL.isEmpty, let url = json["server_url"] {
+                serverURL = url
             }
         }
-
-        return (url, key, pid)
     }
 }

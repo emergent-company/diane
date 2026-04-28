@@ -33,9 +33,6 @@ struct SessionsView: View {
         }
         .navigationTitle("Sessions")
         .task { await load() }
-        .onChange(of: serverConfig.projectID) { _ in
-            Task { await load() }
-        }
     }
     
     // MARK: - Sessions List
@@ -236,13 +233,12 @@ struct SessionsView: View {
     @MainActor
     private func load() async {
         guard !serverConfig.projectID.isEmpty else {
-            error = "No project configured"
+            error = "No project configured in Settings"
             return
         }
-        let projectID = serverConfig.projectID
         isLoading = true
         do {
-            sessions = try await apiClient.fetchSessions(projectID: projectID, status: statusFilter)
+            sessions = try await apiClient.fetchSessions(projectID: serverConfig.projectID)
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -253,10 +249,9 @@ struct SessionsView: View {
     @MainActor
     private func loadMessages(session: DianeSession) async {
         guard !serverConfig.projectID.isEmpty else { return }
-        let projectID = serverConfig.projectID
         isLoadingMessages = true
         do {
-            messages = try await apiClient.fetchSessionMessages(projectID: projectID, sessionID: session.id)
+            messages = try await apiClient.fetchSessionMessages(projectID: serverConfig.projectID, sessionID: session.id)
         } catch {
             messages = []
         }
