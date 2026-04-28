@@ -48,16 +48,25 @@ targets:
           CODE_SIGN_IDENTITY: "Apple Distribution"
     postbuildScripts:
       - script: |
-          # Download diane CLI for current architecture
+          # Download diane CLI for current architecture (skip if already present from CI)
           ARCH=$(uname -m)
           RESOURCES="${TARGET_BUILD_DIR}/${PRODUCT_NAME}.app/Contents/Resources"
           mkdir -p "$RESOURCES"
-          if [ "$ARCH" = "arm64" ]; then
-            curl -sL --connect-timeout 10 -o "${RESOURCES}/diane" "https://github.com/emergent-company/diane/releases/latest/download/diane-darwin-arm64"
+          if [ -f "${RESOURCES}/diane" ] && [ -s "${RESOURCES}/diane" ]; then
+            echo "diane binary already present (size: $(stat -f%z "${RESOURCES}/diane")) — skipping download"
+            chmod +x "${RESOURCES}/diane"
           else
-            curl -sL --connect-timeout 10 -o "${RESOURCES}/diane" "https://github.com/emergent-company/diane/releases/latest/download/diane-darwin-amd64"
+            if [ "$ARCH" = "arm64" ]; then
+              BINARY="diane-darwin-arm64.tar.gz"
+            else
+              BINARY="diane-darwin-amd64.tar.gz"
+            fi
+            echo "Downloading ${BINARY} from latest release..."
+            curl -sL --connect-timeout 10 -o "/tmp/${BINARY}" "https://github.com/emergent-company/diane/releases/latest/download/${BINARY}"
+            tar xzf "/tmp/${BINARY}" -C "${RESOURCES}" 2>/dev/null && echo "Extracted ${BINARY}" || echo "Warning: download failed, diane CLI not bundled"
+            rm -f "/tmp/${BINARY}"
+            chmod +x "${RESOURCES}/diane" 2>/dev/null || true
           fi
-          chmod +x "${RESOURCES}/diane"
         name: "Download diane CLI"
     info:
       path: DianeCompanion/Info.plist

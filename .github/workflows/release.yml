@@ -86,8 +86,8 @@ jobs:
         run: |
           mkdir -p server/swift/DianeCompanion/Resources
           cd server/swift/DianeCompanion/Resources
-          tar xzf diane-darwin-arm64.tar.gz 2>/dev/null || true
-          chmod +x diane 2>/dev/null || true
+          tar xzf diane-darwin-arm64.tar.gz
+          chmod +x diane
           rm -f diane-darwin-arm64.tar.gz
 
       - name: Generate Xcode project
