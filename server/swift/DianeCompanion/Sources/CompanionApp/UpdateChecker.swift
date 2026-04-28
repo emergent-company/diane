@@ -113,6 +113,8 @@ final class UpdateChecker: ObservableObject {
 
     // MARK: - DMG Download & Install
 
+    /// Install using a post-termination script so macOS lets us replace the running app bundle.
+    /// Steps: download → mount → create installer script → terminate → script copies + relaunches
     private func performDMGUpdate(dmgURL: URL, version: String) async {
         isUpdating = true
         updateOutput = "Downloading \(version)…"
@@ -122,65 +124,69 @@ final class UpdateChecker: ObservableObject {
             // Step 1: Download DMG to temp directory
             let tempDir = FileManager.default.temporaryDirectory
             let dmgPath = tempDir.appendingPathComponent("Diane-\(version).dmg")
-            let mountPoint = tempDir.appendingPathComponent("diane-update-mount")
 
-            // Clean up any previous temp files
+            // Clean up any previous temp file
             try? FileManager.default.removeItem(at: dmgPath)
+
+            let (_, _) = try await downloadWithProgress(from: dmgURL, to: dmgPath)
+            updateOutput = "Download complete. Installing…"
+            logger.info("UpdateChecker: DMG downloaded to \(dmgPath.path)")
+
+            // Step 2: Mount DMG to find the .app name
+            let mountPoint = tempDir.appendingPathComponent("diane-update-mount")
             try? FileManager.default.removeItem(at: mountPoint)
 
-            // Download with progress
-            let (downloadURL, _) = try await downloadWithProgress(from: dmgURL, to: dmgPath)
-            updateOutput = "Download complete. Installing…"
-            logger.info("UpdateChecker: DMG downloaded to \(downloadURL.path)")
-
-            // Step 2: Mount DMG
-            updateOutput = "Mounting DMG…"
-            let mountOutput = try await runCommand("/usr/bin/hdiutil", arguments: [
+            _ = try await runCommand("/usr/bin/hdiutil", arguments: [
                 "attach", dmgPath.path,
                 "-mountpoint", mountPoint.path,
                 "-nobrowse", "-quiet"
             ])
-            logger.info("UpdateChecker: Mount output: \(mountOutput)")
 
-            // Step 3: Find .app in mounted DMG
             let mountedApps = try FileManager.default.contentsOfDirectory(at: mountPoint, includingPropertiesForKeys: nil)
             guard let dmgApp = mountedApps.first(where: { $0.pathExtension == "app" }) else {
                 throw UpdateError("No .app found in mounted DMG")
             }
+            let appName = dmgApp.lastPathComponent
 
-            // Step 4: Get current app path
-            let currentAppPath = Bundle.main.bundleURL
-            let applicationsPath = URL(fileURLWithPath: "/Applications").appendingPathComponent(currentAppPath.lastPathComponent)
+            // Step 3: Write a post-termination installer script
+            let scriptPath = tempDir.appendingPathComponent("diane-installer.sh")
+            let appPath = "/Applications/\(appName)"
 
-            // Step 5: Replace app in /Applications
-            updateOutput = "Installing to /Applications…"
-            logger.info("UpdateChecker: Copying \(dmgApp.path) -> \(applicationsPath.path)")
+            let script = """
+#!/bin/bash
+sleep 2
+# Mount DMG
+/usr/bin/hdiutil attach "\(dmgPath.path)" -mountpoint "\(mountPoint.path)" -nobrowse -quiet
+sleep 1
+# Remove old app (app is now terminated so this will work)
+rm -rf "\(appPath)"
+# Copy new app
+cp -R "\(mountPoint.path)/\(appName)" "\(appPath)"
+# Detach DMG
+/usr/bin/hdiutil detach "\(mountPoint.path)" -quiet
+# Relaunch
+open -n -a "\(appPath)"
+# Clean up DMG
+rm -f "\(dmgPath.path)"
+rm -f "\(scriptPath.path)"
+"""
+            try script.write(to: scriptPath, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptPath.path)
 
-            // Remove old version
-            if FileManager.default.fileExists(atPath: applicationsPath.path) {
-                try FileManager.default.removeItem(at: applicationsPath)
-            }
+            updateOutput = "Installing… (will relaunch)"
+            logger.info("UpdateChecker: Launching post-termination installer script")
 
-            // Copy new version
-            try FileManager.default.copyItem(at: dmgApp, to: applicationsPath)
+            // Step 4: Launch installer script as a truly detached background process
+            let installer = Process()
+            installer.executableURL = URL(fileURLWithPath: "/bin/bash")
+            installer.arguments = [scriptPath.path]
+            installer.standardOutput = FileHandle.nullDevice
+            installer.standardError = FileHandle.nullDevice
+            try installer.run()
 
-            // Step 6: Detach DMG
-            _ = try? await runCommand("/usr/bin/hdiutil", arguments: ["detach", mountPoint.path, "-quiet"])
-
-            // Step 7: Clean up downloaded DMG
-            try? FileManager.default.removeItem(at: dmgPath)
-            try? FileManager.default.removeItem(at: mountPoint)
-
-            updateOutput = "Update installed. Relaunching…"
-            logger.info("UpdateChecker: Update installed. Relaunching…")
-
-            // Step 8: Launch new version and quit
-            updateOutput = "Launching new version…"
-            _ = try? await runCommand("/usr/bin/open", arguments: ["-a", applicationsPath.path])
-
-            // Step 9: Terminate old version
-            logger.info("UpdateChecker: Terminating old version")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            // Step 5: This process must terminate NOW so macOS lets us replace the bundle
+            logger.info("UpdateChecker: Terminating for update")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 NSApplication.shared.terminate(nil)
             }
 
