@@ -53,6 +53,8 @@ struct MainWindowView: View {
             StatsView()
         case .sessions:
             SessionsView()
+        case .agents:
+            AgentsView()
         case .mcpServers:
             MCPServersView()
         case .nodes:

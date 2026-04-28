@@ -113,6 +113,18 @@ final class DianeAPIClient: ObservableObject {
         return try JSONDecoder().decode(AgentStatsResponse.self, from: data)
     }
 
+    // MARK: - Agent Definitions
+
+    func fetchAgentDefs() async throws -> [AgentDef] {
+        let data = try await get("/api/agents")
+        struct Response: Decodable { let agents: [AgentDef]? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.agents {
+            return list
+        }
+        logDecodeFailure([AgentDef].self, data: data, context: "fetchAgentDefs")
+        return []
+    }
+
     // MARK: - Relay Nodes
 
     func fetchNodeTools(instanceID: String) async throws -> [MCPToolInfo] {

@@ -24,6 +24,7 @@ final class AppState: ObservableObject {
 enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
     case dashboard  = "Dashboard"
     case sessions   = "Sessions"
+    case agents     = "Agents"
     case mcpServers = "MCP Servers"
     case nodes      = "Nodes"
     case permissions = "Permissions"
@@ -34,6 +35,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .dashboard:  return "chart.bar.fill"
         case .sessions:    return "message"
+        case .agents:      return "brain.head.profile"
         case .mcpServers:  return "cable.connector.horizontal"
         case .nodes:       return "server.rack"
         case .permissions: return "lock.shield"

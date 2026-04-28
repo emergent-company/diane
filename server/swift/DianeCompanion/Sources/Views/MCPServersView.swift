@@ -20,18 +20,18 @@ struct MCPServersView: View {
     var body: some View {
         HSplitView {
             serversList
-                .frame(minWidth: 200, idealWidth: 400, maxWidth: .infinity)
+                .frame(minWidth: 220, idealWidth: 350)
 
             if let server = selectedServer {
                 serverDetailPanel(server)
-                    .frame(minWidth: 200, idealWidth: 400, maxWidth: .infinity)
+                    .frame(minWidth: 220, idealWidth: 350)
             } else {
                 EmptyStateView(
                     title: "Select a Server",
                     icon: "plug",
-                    description: "Select an MCP server to inspect its configuration."
+                    description: "Select an MCP server to inspect its configuration and tools."
                 )
-                .frame(minWidth: 200, idealWidth: 400, maxWidth: .infinity)
+                .frame(minWidth: 220, idealWidth: 350)
             }
         }
         .navigationTitle("MCP Servers")

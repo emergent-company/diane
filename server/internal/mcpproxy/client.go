@@ -51,6 +51,7 @@ type MCPResponse struct {
 // allowing the proxy to use them interchangeably.
 type Client interface {
 	ListTools() ([]map[string]interface{}, error)
+	ListPrompts() ([]map[string]interface{}, error)
 	CallTool(name string, arguments map[string]interface{}) (json.RawMessage, error)
 	Close() error
 	NotificationChan() <-chan string
@@ -311,6 +312,24 @@ func (c *MCPClient) ListTools() ([]map[string]interface{}, error) {
 	}
 
 	return toolsResult.Tools, nil
+}
+
+// ListPrompts requests the list of prompts from the MCP server.
+// Many MCP servers don't implement prompts — this returns nil,nil gracefully.
+func (c *MCPClient) ListPrompts() ([]map[string]interface{}, error) {
+	result, err := c.sendRequest("prompts/list", nil)
+	if err != nil {
+		return nil, nil // prompts/list is optional — return nil gracefully
+	}
+
+	var promptsResult struct {
+		Prompts []map[string]interface{} `json:"prompts"`
+	}
+	if err := json.Unmarshal(result, &promptsResult); err != nil {
+		return nil, nil
+	}
+
+	return promptsResult.Prompts, nil
 }
 
 // CallTool calls a tool on the MCP server

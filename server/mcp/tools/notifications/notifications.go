@@ -14,7 +14,7 @@ import (
 	"regexp"
 	"strings"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 // --- Configuration ---
@@ -39,7 +39,7 @@ func getDiscordBotToken() (string, error) {
 	}
 
 	dbPath := filepath.Join(home, ".kimaki", "discord-sessions.db")
-	db, err := sql.Open("sqlite3", dbPath+"?mode=ro")
+	db, err := sql.Open("sqlite", dbPath+"?mode=ro")
 	if err != nil {
 		return "", fmt.Errorf("failed to open Kimaki database: %w", err)
 	}
@@ -89,7 +89,7 @@ func getDefaultChannelID() (string, error) {
 	}
 
 	dbPath := filepath.Join(home, ".kimaki", "discord-sessions.db")
-	db, err := sql.Open("sqlite3", dbPath+"?mode=ro")
+	db, err := sql.Open("sqlite", dbPath+"?mode=ro")
 	if err != nil {
 		return "", fmt.Errorf("failed to open Kimaki database: %w", err)
 	}

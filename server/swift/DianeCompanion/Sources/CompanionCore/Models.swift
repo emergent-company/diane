@@ -884,6 +884,30 @@ private extension Array {
     var nilIfEmpty: Self? { isEmpty ? nil : self }
 }
 
+// MARK: - Agent Definition
+
+struct AgentDef: Identifiable, Codable, Sendable {
+    let id: String
+    let name: String
+    let description: String?
+    let flowType: String
+    let visibility: String
+    let isDefault: Bool
+    let toolCount: Int
+    let createdAt: String?
+    let updatedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, description
+        case flowType = "flow_type"
+        case visibility
+        case isDefault = "is_default"
+        case toolCount = "tool_count"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+}
+
 // MARK: - MCP Relay Session
 struct RelaySession: Identifiable, Codable, Hashable, Sendable {
     let id: String

@@ -18,18 +18,18 @@ struct SessionsView: View {
     var body: some View {
         HSplitView {
             sessionsList
-                .frame(minWidth: 220, idealWidth: 320, maxWidth: 400)
+                .frame(minWidth: 220, idealWidth: 350)
 
             if let session = selectedSession {
                 sessionDetailPanel(session)
-                    .frame(minWidth: 300, idealWidth: 500, maxWidth: .infinity)
+                    .frame(minWidth: 220, idealWidth: 350)
             } else {
                 EmptyStateView(
                     title: "Select a Session",
                     icon: "message",
                     description: "Select a conversation session to view its transcript."
                 )
-                .frame(minWidth: 300, idealWidth: 500, maxWidth: .infinity)
+                .frame(minWidth: 220, idealWidth: 350)
             }
         }
         .navigationTitle("Sessions")
