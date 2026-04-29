@@ -176,7 +176,8 @@ final class PermissionManager: ObservableObject {
     
     private func requestAccessibility() async -> Bool {
         // Accessibility cannot be programmatically requested — user must enable manually
-        let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as NSString: true]
+        let key = nonisolated(unsafe) kAXTrustedCheckOptionPrompt
+        let options: NSDictionary = [key.takeRetainedValue() as NSString: true]
         let trusted = AXIsProcessTrustedWithOptions(options)
         refresh()
         return trusted
