@@ -299,10 +299,12 @@ public struct MCPPrompt: Identifiable, Codable, Sendable {
     }
 }
 
-public struct MCPPromptArgument: Codable, Sendable {
+public struct MCPPromptArgument: Identifiable, Codable, Sendable {
     public let name: String
     public let description: String?
     public let required: Bool?
+
+    public var id: String { name }
 }
 
 // MARK: - User Profile

@@ -494,6 +494,56 @@ func (b *Bridge) GetProjectRunSessionStats(ctx context.Context, opts *sdkagentru
 	return b.client.Agents.GetProjectRunSessionStats(ctx, b.projectID, opts)
 }
 
+// SessionRunAggregates holds aggregated cost/token/run data for a single session.
+type SessionRunAggregates struct {
+	TotalRuns         int     `json:"total_runs"`
+	TotalInputTokens  int64   `json:"total_input_tokens"`
+	TotalOutputTokens int64   `json:"total_output_tokens"`
+	EstimatedCostUSD  float64 `json:"estimated_cost_usd"`
+}
+
+// GetSessionRunAggregates returns aggregated run stats for a session by
+// listing recent project runs and filtering by trigger metadata session ID.
+func (b *Bridge) GetSessionRunAggregates(ctx context.Context, sessionID string) (*SessionRunAggregates, error) {
+	runs, err := b.client.Agents.ListProjectRuns(ctx, b.projectID, &sdkagentrun.ListRunsOptions{
+		Limit: 100,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list project runs: %w", err)
+	}
+
+	var agg SessionRunAggregates
+	for _, r := range runs.Data.Items {
+		// Match by session ID in trigger metadata
+		if !hasSessionID(r.TriggerMetadata, sessionID) {
+			continue
+		}
+		agg.TotalRuns++
+		if r.TokenUsage != nil {
+			agg.TotalInputTokens += r.TokenUsage.TotalInputTokens
+			agg.TotalOutputTokens += r.TokenUsage.TotalOutputTokens
+			agg.EstimatedCostUSD += r.TokenUsage.EstimatedCostUSD
+		}
+	}
+	return &agg, nil
+}
+
+// hasSessionID checks if a trigger metadata map contains the given session ID
+// under any of the common key variations (sessionId, session_id, sessionID).
+func hasSessionID(meta map[string]any, sessionID string) bool {
+	if meta == nil {
+		return false
+	}
+	for _, key := range []string{"sessionId", "session_id", "sessionID"} {
+		if v, ok := meta[key]; ok {
+			if s, ok := v.(string); ok && s == sessionID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ============================================================================
 // Internal helpers
 // ============================================================================

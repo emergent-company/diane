@@ -439,26 +439,67 @@ func cmdBot() {
 }
 
 // cmdProjects lists configured projects.
+// Supports --json output via the global jsonOutput flag.
 func cmdProjects() {
 	cfg, err := config.Load()
 	if err != nil {
+		if jsonOutput {
+			emitJSON("error", map[string]string{"message": fmt.Sprintf("Failed to load config: %v", err)})
+			return
+		}
 		log.Fatalf("Failed to load config: %v", err)
 	}
 	if len(cfg.Projects) == 0 {
+		if jsonOutput {
+			emitJSON("ok", map[string]interface{}{"default": "", "projects": []interface{}{}})
+			return
+		}
 		fmt.Println("No projects configured. Run 'diane init'.")
 		return
 	}
-	fmt.Println("Configured projects:")
+
+	// Build project list for both JSON and human output
+	type projectEntry struct {
+		Name       string `json:"name"`
+		ServerURL  string `json:"server_url"`
+		ProjectID  string `json:"project_id"`
+		Mode       string `json:"mode"`
+		HasDiscord bool   `json:"has_discord"`
+		Channels   int    `json:"channels"`
+	}
+	var entries []projectEntry
 	for name, pc := range cfg.Projects {
+		channels := 0
+		hasDiscord := false
+		if pc.DiscordBotToken != "" {
+			hasDiscord = true
+			channels = len(pc.DiscordChannelIDs)
+		}
+		entries = append(entries, projectEntry{
+			Name: name, ServerURL: pc.ServerURL, ProjectID: pc.ProjectID,
+			Mode: pc.Mode, HasDiscord: hasDiscord, Channels: channels,
+		})
+	}
+
+	if jsonOutput {
+		emitJSON("ok", map[string]interface{}{
+			"default":  cfg.Default,
+			"projects": entries,
+		})
+		return
+	}
+
+	fmt.Println("Configured projects:")
+	for _, e := range entries {
 		mark := " "
-		if name == cfg.Default {
+		if e.Name == cfg.Default {
 			mark = "*"
 		}
-		fmt.Printf("  %s %s\n", mark, name)
-		fmt.Printf("      Server:  %s\n", pc.ServerURL)
-		fmt.Printf("      Project: %s\n", pc.ProjectID)
-		if pc.DiscordBotToken != "" {
-			fmt.Printf("      Discord: ✓ (%d channel(s))\n", len(pc.DiscordChannelIDs))
+		fmt.Printf("  %s %s\n", mark, e.Name)
+		fmt.Printf("      Server:  %s\n", e.ServerURL)
+		fmt.Printf("      Project: %s\n", e.ProjectID)
+		if e.HasDiscord {
+			fmt.Printf("      Discord: ✓ (%d channel(s))\n", e.Channels)
 		}
 	}
 }
