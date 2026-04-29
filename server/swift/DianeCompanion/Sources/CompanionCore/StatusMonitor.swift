@@ -12,7 +12,7 @@ final class StatusMonitor: ObservableObject {
     @Published private(set) var isLocalAPIReachable = false
     @Published private(set) var isRemoteReachable = false
 
-    private var timer: Timer?
+    private nonisolated(unsafe) var timer: Timer?
     private var localHealthURL: URL?
     private var remoteHealthURL: URL?
     private let session: URLSession

@@ -13,7 +13,7 @@ final class APIServerManager: ObservableObject {
 
     private var process: Process?
     private var apiClient: DianeAPIClient?
-    private var healthCheckTimer: Timer?
+    private nonisolated(unsafe) var healthCheckTimer: Timer?
     private weak var healthCheckClient: DianeAPIClient?
 
     // Circuit breaker state
