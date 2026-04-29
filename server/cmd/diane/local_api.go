@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -758,28 +759,23 @@ func (a *localAPIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch agent definitions to enrich stats with real agent names/descriptions
 	defs, defsErr := a.bridge.ListAgentDefs(ctx)
-	var defLookup map[string]sdkagents.AgentDefinitionSummary
+	defLookup := make(map[string]sdkagents.AgentDefinitionSummary)
 	if defsErr == nil && defs != nil && defs.Data != nil {
-		defLookup = make(map[string]sdkagents.AgentDefinitionSummary, len(defs.Data))
 		for _, d := range defs.Data {
 			defLookup[d.Name] = d
 		}
 	}
 
 	// Match a run stats agent name to an agent definition.
-	// Runtime agent names follow the pattern: "discord-<defname>-<timestamp>"
-	// or just the raw defname. Try exact match, then strip common prefixes/suffixes.
 	matchAgent := func(runName string) *sdkagents.AgentDefinitionSummary {
 		if d, ok := defLookup[runName]; ok {
 			return &d
 		}
-		// Try stripping "discord-" prefix and trailing "-<timestamp>"
 		candidates := []string{runName}
 		if after, ok := strings.CutPrefix(runName, "discord-"); ok {
 			candidates = append(candidates, after)
 		}
 		for _, c := range candidates {
-			// Try prefix matching against definition names
 			var best *sdkagents.AgentDefinitionSummary
 			bestLen := 0
 			for name, d := range defLookup {
@@ -796,6 +792,74 @@ func (a *localAPIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}
 
+	// Aggregate stats keyed by agent definition ID (or raw name if unmatched).
+	type mergedStat struct {
+		agentName       string
+		agentID         string
+		agentDesc       string
+		agentFlowType   string
+		totalRuns       int
+		successRuns     int
+		errorRuns       int
+		totalDurationMs float64
+		totalInput      float64
+		totalOutput     float64
+		totalCostUSD    float64
+	}
+
+	merged := make(map[string]*mergedStat) // key = defID or raw run name
+
+	for runName, as := range stats.ByAgent {
+		totalRuns := int(as.Total)
+		successRuns := int(as.Success)
+		errorRuns := int(as.Failed) + int(as.Errored)
+
+		def := matchAgent(runName)
+		key := runName
+		if def != nil {
+			key = def.ID
+		}
+
+		existing, exists := merged[key]
+		if !exists {
+			existing = &mergedStat{agentName: runName}
+			if def != nil {
+				existing.agentName = def.Name
+				existing.agentID = def.ID
+				if def.Description != nil {
+					existing.agentDesc = *def.Description
+				}
+				existing.agentFlowType = def.FlowType
+			}
+			merged[key] = existing
+		}
+
+		existing.totalRuns += totalRuns
+		existing.successRuns += successRuns
+		existing.errorRuns += errorRuns
+		existing.totalDurationMs += float64(totalRuns) * as.AvgDurationMs
+		existing.totalInput += as.AvgInputTokens * float64(totalRuns)
+		existing.totalOutput += as.AvgOutputTokens * float64(totalRuns)
+		existing.totalCostUSD += as.TotalCostUSD
+	}
+
+	// Add zeroed entries for agent definitions with no runs
+	if defsErr == nil && defs != nil && defs.Data != nil {
+		for _, d := range defs.Data {
+			if _, ok := merged[d.ID]; !ok {
+				merged[d.ID] = &mergedStat{
+					agentName:     d.Name,
+					agentID:       d.ID,
+					agentFlowType: d.FlowType,
+				}
+				if d.Description != nil {
+					merged[d.ID].agentDesc = *d.Description
+				}
+			}
+		}
+	}
+
+	// Build response
 	type summaryJSON struct {
 		AgentName         string  `json:"agent_name"`
 		AgentID           string  `json:"agent_id,omitempty"`
@@ -829,55 +893,44 @@ func (a *localAPIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 		OverallSuccess  float64 `json:"overall_success_rate"`
 	}
 
-	items := make([]summaryJSON, 0, len(stats.ByAgent))
+	items := make([]summaryJSON, 0, len(merged))
 	var totals totalsJSON
 
-	for name, as := range stats.ByAgent {
-		totalRuns := int(as.Total)
-		successRuns := int(as.Success)
-		errorRuns := int(as.Failed) + int(as.Errored)
+	for _, m := range merged {
 		successRate := float64(0)
-		if totalRuns > 0 {
-			successRate = float64(successRuns) / float64(totalRuns) * 100
+		if m.totalRuns > 0 {
+			successRate = float64(m.successRuns) / float64(m.totalRuns) * 100
+		}
+		avgCost := float64(0)
+		if m.totalRuns > 0 {
+			avgCost = m.totalCostUSD / float64(m.totalRuns)
 		}
 
-		item := summaryJSON{
-			AgentName:         name,
-			TotalRuns:         totalRuns,
-			SuccessRuns:       successRuns,
-			ErrorRuns:         errorRuns,
-			AvgDurationMs:     as.AvgDurationMs,
-			AvgStepCount:      0,
-			AvgToolCalls:      0,
-			AvgInputTokens:    as.AvgInputTokens,
-			AvgOutputTokens:   as.AvgOutputTokens,
-			TotalDurationMs:   int(float64(totalRuns) * as.AvgDurationMs),
-			TotalInputTokens:  int(as.AvgInputTokens * float64(totalRuns)),
-			TotalOutputTokens: int(as.AvgOutputTokens * float64(totalRuns)),
-			TotalCostUSD:      as.TotalCostUSD,
-			AvgCostUSD:        as.AvgCostUSD,
+		items = append(items, summaryJSON{
+			AgentName:         m.agentName,
+			AgentID:           m.agentID,
+			AgentDescription:  m.agentDesc,
+			AgentFlowType:     m.agentFlowType,
+			TotalRuns:         m.totalRuns,
+			SuccessRuns:       m.successRuns,
+			ErrorRuns:         m.errorRuns,
+			AvgDurationMs:     safeAvg(m.totalDurationMs, m.totalRuns),
+			AvgInputTokens:    safeAvg(m.totalInput, m.totalRuns),
+			AvgOutputTokens:   safeAvg(m.totalOutput, m.totalRuns),
+			TotalDurationMs:   int(m.totalDurationMs),
+			TotalInputTokens:  int(m.totalInput),
+			TotalOutputTokens: int(m.totalOutput),
+			TotalCostUSD:      m.totalCostUSD,
+			AvgCostUSD:        avgCost,
 			SuccessRate:       successRate,
-		}
-
-		// Enrich with agent definition if matched
-		if def := matchAgent(name); def != nil {
-			item.AgentID = def.ID
-			if def.Description != nil {
-				item.AgentDescription = *def.Description
-			}
-			item.AgentFlowType = def.FlowType
-			// Use the clean definition name for display
-			item.AgentName = def.Name
-		}
-
-		items = append(items, item)
-		totals.TotalRuns += totalRuns
-		totals.TotalSuccess += successRuns
-		totals.TotalErrors += errorRuns
-		totals.TotalDurationMs += int(float64(totalRuns) * as.AvgDurationMs)
-		totals.TotalInput += int(as.AvgInputTokens * float64(totalRuns))
-		totals.TotalOutput += int(as.AvgOutputTokens * float64(totalRuns))
-		totals.TotalCostUSD += as.TotalCostUSD
+		})
+		totals.TotalRuns += m.totalRuns
+		totals.TotalSuccess += m.successRuns
+		totals.TotalErrors += m.errorRuns
+		totals.TotalDurationMs += int(m.totalDurationMs)
+		totals.TotalInput += int(m.totalInput)
+		totals.TotalOutput += int(m.totalOutput)
+		totals.TotalCostUSD += m.totalCostUSD
 	}
 
 	if totals.TotalRuns > 0 {
@@ -885,11 +938,27 @@ func (a *localAPIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 		totals.OverallSuccess = float64(totals.TotalSuccess) / float64(totals.TotalRuns) * 100
 	}
 
+	// Sort: agents with runs first, then alphabetically
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].TotalRuns != items[j].TotalRuns {
+			return items[i].TotalRuns > items[j].TotalRuns // runs descending
+		}
+		return items[i].AgentName < items[j].AgentName
+	})
+
 	jsonResponse(w, map[string]any{
 		"agents": items,
 		"totals": totals,
 		"hours":  hours,
 	})
+}
+
+// safeAvg returns avg = total / count, or 0 if count is 0.
+func safeAvg(total float64, count int) float64 {
+	if count == 0 {
+		return 0
+	}
+	return total / float64(count)
 }
 
 // GET /api/stats/providers — provider/model usage from recent project runs

@@ -290,18 +290,20 @@ enum DianeAPIError: Error, LocalizedError {
 struct RelayNode: Identifiable, Codable, Hashable, Sendable {
     let instanceID: String
     let hostname: String?
-    let role: String?
+    let mode: String?          // "master" or "slave" (from graph config)
     let version: String?
     let toolCount: Int?
     let connectedAt: String?
+    let online: Bool           // whether node has an active relay connection
 
     var id: String { instanceID }
 
     enum CodingKeys: String, CodingKey {
         case instanceID = "instance_id"
-        case hostname, role, version
+        case hostname, mode, version
         case toolCount = "tool_count"
         case connectedAt = "connected_at"
+        case online
     }
 
     func hash(into hasher: inout Hasher) { hasher.combine(instanceID) }
