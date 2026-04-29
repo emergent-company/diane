@@ -68,6 +68,8 @@ targets:
             chmod +x "${RESOURCES}/diane" 2>/dev/null || true
           fi
         name: "Download diane CLI"
+        outputFiles:
+          - "$(TARGET_BUILD_DIR)/$(PRODUCT_NAME).app/Contents/Resources/diane"
     info:
       path: DianeCompanion/Info.plist
     entitlements:
