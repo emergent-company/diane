@@ -30,9 +30,16 @@ struct CalendarView: View {
         }
         .navigationTitle("Calendar")
         .task {
-            if manager.authorizationStatus == .authorized || manager.authorizationStatus == .fullAccess {
-                manager.refreshCalendars()
-                await loadEvents()
+            if #available(macOS 14.0, *) {
+                if manager.authorizationStatus == .authorized || manager.authorizationStatus == .fullAccess {
+                    manager.refreshCalendars()
+                    await loadEvents()
+                }
+            } else {
+                if manager.authorizationStatus == .authorized {
+                    manager.refreshCalendars()
+                    await loadEvents()
+                }
             }
         }
     }
@@ -79,7 +86,7 @@ struct CalendarView: View {
                     List(manager.calendars, id: \.self) { calendar in
                         HStack(spacing: 8) {
                             Circle()
-                                .fill(Color(cgColor: calendar.color))
+                                .fill(Color(cgColor: calendar.color.cgColor))
                                 .frame(width: 8, height: 8)
                             Text(calendar.title)
                                 .font(.subheadline)
@@ -123,7 +130,7 @@ struct CalendarView: View {
                         HStack(spacing: 6) {
                             if let calendar = event.calendar {
                                 Circle()
-                                    .fill(Color(cgColor: calendar.color))
+                                    .fill(Color(cgColor: calendar.color.cgColor))
                                     .frame(width: 6, height: 6)
                             }
                             Text(formatEventDate(event))

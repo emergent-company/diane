@@ -227,13 +227,13 @@ private struct AnyCodingKey: CodingKey {
 
 // MARK: - Agent
 
-public struct Agent: Identifiable, Codable, Hashable, Sendable {
-    public let id: String
-    public let name: String
-    public let triggerType: String?
-    public let schedule: String?
-    public let prompt: String?
-    public let isActive: Bool
+struct AgentDef: Identifiable, Codable, Hashable, Sendable {
+    let id: String
+    let name: String
+    let triggerType: String?
+    let schedule: String?
+    let strategyType: String?
+    let isActive: Bool
     public let capabilities: [String]?
 
     enum CodingKeys: String, CodingKey {
@@ -269,6 +269,31 @@ public struct MCPTool: Identifiable, Codable, Sendable {
     public let id: String
     public let name: String
     public let description: String?
+}
+
+public struct MCPPrompt: Identifiable, Codable, Sendable {
+    public let id: String
+    public let name: String
+    public let description: String?
+    public let arguments: [MCPPromptArgument]?
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = (try? container.decodeIfPresent(String.self, forKey: .id)) ?? ""
+        self.name = try container.decode(String.self, forKey: .name)
+        self.description = try container.decodeIfPresent(String.self, forKey: .description)
+        self.arguments = try container.decodeIfPresent([MCPPromptArgument].self, forKey: .arguments)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, description, arguments
+    }
+}
+
+public struct MCPPromptArgument: Codable, Sendable {
+    public let name: String
+    public let description: String?
+    public let required: Bool?
 }
 
 // MARK: - User Profile
