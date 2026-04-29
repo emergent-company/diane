@@ -7,8 +7,8 @@ require (
 	github.com/emergent-company/emergent.memory/apps/server/pkg/sdk v0.40.9
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/gorilla/websocket v1.4.2
-	github.com/mattn/go-sqlite3 v1.14.33
 	gopkg.in/yaml.v3 v3.0.1
+	modernc.org/sqlite v1.50.0
 )
 
 require (
@@ -23,5 +23,4 @@ require (
 	modernc.org/libc v1.72.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.50.0 // indirect
 )
