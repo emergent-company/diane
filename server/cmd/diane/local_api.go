@@ -729,8 +729,41 @@ func (a *localAPIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 
 	stats := resp.Data
 
+	// Fetch agent definitions to enrich stats with real agent names/descriptions
+	defs, defsErr := a.bridge.ListAgentDefs(ctx)
+	var defLookup map[string]sdkagents.AgentDefinitionSummary
+	if defsErr == nil && defs != nil && defs.Data != nil {
+		defLookup = make(map[string]sdkagents.AgentDefinitionSummary, len(defs.Data))
+		for _, d := range defs.Data {
+			defLookup[d.Name] = d
+		}
+	}
+
+	// Match a run stats agent name to an agent definition.
+	// Runtime agent names may have suffixes (e.g. "discord-diane-default-1777453872264")
+	// while agent definitions have clean names (e.g. "discord-diane-default").
+	// Try exact match first, then longest prefix match.
+	matchAgent := func(runName string) *sdkagents.AgentDefinitionSummary {
+		if d, ok := defLookup[runName]; ok {
+			return &d
+		}
+		var best *sdkagents.AgentDefinitionSummary
+		bestLen := 0
+		for name, d := range defLookup {
+			if len(name) > bestLen && len(runName) >= len(name) && runName[:len(name)] == name {
+				cp := d
+				best = &cp
+				bestLen = len(name)
+			}
+		}
+		return best
+	}
+
 	type summaryJSON struct {
 		AgentName         string  `json:"agent_name"`
+		AgentID           string  `json:"agent_id,omitempty"`
+		AgentDescription  string  `json:"agent_description,omitempty"`
+		AgentFlowType     string  `json:"agent_flow_type,omitempty"`
 		TotalRuns         int     `json:"total_runs"`
 		SuccessRuns       int     `json:"success_runs"`
 		ErrorRuns         int     `json:"error_runs"`
@@ -771,7 +804,7 @@ func (a *localAPIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 			successRate = float64(successRuns) / float64(totalRuns) * 100
 		}
 
-		items = append(items, summaryJSON{
+		item := summaryJSON{
 			AgentName:         name,
 			TotalRuns:         totalRuns,
 			SuccessRuns:       successRuns,
@@ -787,7 +820,18 @@ func (a *localAPIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 			TotalCostUSD:      as.TotalCostUSD,
 			AvgCostUSD:        as.AvgCostUSD,
 			SuccessRate:       successRate,
-		})
+		}
+
+		// Enrich with agent definition if matched
+		if def := matchAgent(name); def != nil {
+			item.AgentID = def.ID
+			if def.Description != nil {
+				item.AgentDescription = *def.Description
+			}
+			item.AgentFlowType = def.FlowType
+		}
+
+		items = append(items, item)
 		totals.TotalRuns += totalRuns
 		totals.TotalSuccess += successRuns
 		totals.TotalErrors += errorRuns

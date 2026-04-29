@@ -552,6 +552,9 @@ public struct ProjectPolicy: Identifiable, Codable, Hashable, Sendable {
 
 public struct AgentStatsSummary: Identifiable, Codable, Sendable {
     public let agentName: String
+    public let agentId: String?
+    public let agentDescription: String?
+    public let agentFlowType: String?
     public let totalRuns: Int
     public let successRuns: Int
     public let errorRuns: Int
@@ -567,10 +570,29 @@ public struct AgentStatsSummary: Identifiable, Codable, Sendable {
     public let avgCostUsd: Double
     public let successRate: Double
 
+    /// The display name: use the agent definition name (extracted from the
+    /// run name prefix), fall back to the raw agent name.
+    public var displayName: String {
+        // Try to extract the clean name from a run agent name like
+        // "discord-diane-default-1777453872264" — take everything up to
+        // the last numeric suffix if no agent_id is set.
+        if agentId != nil {
+            return agentName
+        }
+        // Remove trailing timestamp-like suffix: -<digits>
+        if let range = agentName.range(of: "-\\d+$", options: .regularExpression) {
+            return String(agentName[..<range.lowerBound])
+        }
+        return agentName
+    }
+
     public var id: String { agentName }
 
     enum CodingKeys: String, CodingKey {
         case agentName        = "agent_name"
+        case agentId          = "agent_id"
+        case agentDescription = "agent_description"
+        case agentFlowType    = "agent_flow_type"
         case totalRuns        = "total_runs"
         case successRuns      = "success_runs"
         case errorRuns        = "error_runs"

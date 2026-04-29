@@ -34,7 +34,10 @@ func cmdDoctor() {
 	fmt.Printf("✅ %s\n", config.Path())
 	fmt.Printf("   Project: %s\n", pc.ProjectID)
 	fmt.Printf("   Server:  %s\n", pc.ServerURL)
-	fmt.Printf("   Mode:    %s\n", pc.ModeLabel())
+	modeLabel := pc.ModeLabel()
+	fmt.Printf("   Mode:    %s\n", modeLabel)
+
+	isSlave := pc.IsSlave()
 
 	// ── 3. Project ID format ──
 	fmt.Print("\n🔢 Project ID... ")
@@ -72,71 +75,75 @@ func cmdDoctor() {
 	defer bridge.Close()
 	fmt.Println("✅ SDK initialized")
 
-	// ── 6. Project name from Memory Platform ──
+	// ── 6. Project info from auth/me ──
 	fmt.Print("\n🏷️  Project name... ")
-	sdkClient := bridge.Client()
-	proj, err := sdkClient.Projects.Get(ctx, pc.ProjectID, nil)
+	authInfo, err := bridge.GetProjectInfo(ctx)
 	if err != nil {
 		fmt.Printf("⚠️  %v\n", err)
 	} else {
-		fmt.Printf("✅ \"%s\"\n", proj.Name)
-		// Store org ID for provider lookup
-		if pc.OrgID == "" && proj.OrgID != "" {
-			sdkClient.SetContext(proj.OrgID, pc.ProjectID)
-		}
+		fmt.Printf("✅ \"%s\"\n", authInfo.ProjectName)
 	}
 
-	// ── 7. LLM provider — try org-level first, fall back gracefully ──
-	fmt.Print("\n🤖 LLM provider... ")
-	orgID := pc.OrgID
-	if orgID == "" && proj != nil {
-		orgID = proj.OrgID
-	}
-	if orgID == "" {
-		fmt.Println("✅ Using project-level provider (run 'diane provider sync' to configure)")
+	// ── 7. LLM provider / provider config (skipped in slave mode) ──
+	if isSlave {
+		fmt.Println("\n🤖 LLM provider... ⏭️  Slave mode — agents run on master/cloud")
+		fmt.Println("📋 Provider config (local)... ⏭️  Not applicable in slave mode")
 	} else {
-		providers, err := sdkClient.Provider.ListOrgConfigs(ctx, orgID)
-		if err != nil {
-			fmt.Printf("⚠️  %v\n", err)
-		} else if len(providers) == 0 {
-			fmt.Println("⚠️  No org providers configured")
+		// ── 7. LLM provider — try org-level first, fall back gracefully ──
+		fmt.Print("\n🤖 LLM provider... ")
+		var orgID string
+		if authInfo != nil && authInfo.OrgID != "" {
+			orgID = authInfo.OrgID
 		} else {
-			for _, p := range providers {
-				model := p.GenerativeModel
+			orgID = pc.OrgID
+		}
+		if orgID == "" {
+			fmt.Println("✅ Using project-level provider (run 'diane provider sync' to configure)")
+		} else {
+			sdkClient := bridge.Client()
+			providers, err := sdkClient.Provider.ListOrgConfigs(ctx, orgID)
+			if err != nil {
+				fmt.Printf("⚠️  %v\n", err)
+			} else if len(providers) == 0 {
+				fmt.Println("⚠️  No org providers configured")
+			} else {
+				for _, p := range providers {
+					model := p.GenerativeModel
+					if model == "" {
+						model = "(auto)"
+					}
+					fmt.Printf("✅ %s → %s\n", p.Provider, model)
+				}
+			}
+		}
+
+		// ── 7b. Local provider config ──
+		fmt.Print("\n📋 Provider config (local)... ")
+		if pc.GenerativeProvider == nil && pc.EmbeddingProvider == nil {
+			fmt.Println("⚠️  None configured")
+			fmt.Println("   Run 'diane provider set generative' or 'diane provider set embedding'")
+		} else {
+			fmt.Println()
+			if pc.GenerativeProvider != nil {
+				p := pc.GenerativeProvider
+				model := p.Model
 				if model == "" {
 					model = "(auto)"
 				}
-				fmt.Printf("✅ %s → %s\n", p.Provider, model)
+				fmt.Printf("   Generative: %s → %s\n", p.Provider, model)
+			} else {
+				fmt.Println("   Generative: not configured")
+			}
+			if pc.EmbeddingProvider != nil {
+				p := pc.EmbeddingProvider
+				fmt.Printf("   Embedding:  %s\n", p.Provider)
+			} else {
+				fmt.Println("   Embedding:  not configured")
 			}
 		}
 	}
 
-	// ── 7b. Local provider config ──
-	fmt.Print("\n📋 Provider config (local)... ")
-	if pc.GenerativeProvider == nil && pc.EmbeddingProvider == nil {
-		fmt.Println("⚠️  None configured")
-		fmt.Println("   Run 'diane provider set generative' or 'diane provider set embedding'")
-	} else {
-		fmt.Println()
-		if pc.GenerativeProvider != nil {
-			p := pc.GenerativeProvider
-			model := p.Model
-			if model == "" {
-				model = "(auto)"
-			}
-			fmt.Printf("   Generative: %s → %s\n", p.Provider, model)
-		} else {
-			fmt.Println("   Generative: not configured")
-		}
-		if pc.EmbeddingProvider != nil {
-			p := pc.EmbeddingProvider
-			fmt.Printf("   Embedding:  %s\n", p.Provider)
-		} else {
-			fmt.Println("   Embedding:  not configured")
-		}
-	}
-
-	// ── 7c. Agent Definitions (merged: config + MP) ──
+	// ── 7c. Agent Definitions ──
 	remoteDefs, err := bridge.ListAgentDefs(ctx)
 	remoteNameSet := map[string]*sdkagents.AgentDefinitionSummary{}
 	if err == nil && remoteDefs != nil {
@@ -164,7 +171,62 @@ func cmdDoctor() {
 	fmt.Print("\n🧠 Agent Definitions")
 	if totalLocal == 0 && totalRemote == 0 {
 		fmt.Println(" — none configured")
-		fmt.Println("   Run 'diane agent define <name>' or 'diane agent seed' to get started.")
+		if !isSlave {
+			fmt.Println("   Run 'diane agent define <name>' or 'diane agent seed' to get started.")
+		}
+	} else if isSlave {
+		// Slave: only show MP agents, skip local config comparison
+		if err != nil {
+			fmt.Printf(" — ⚠️  %v\n", err)
+		} else {
+			fmt.Printf(" — %d on MP", totalRemote)
+			builtInOnMP := 0
+			for name := range remoteNameSet {
+				if builtInSet[name] {
+					builtInOnMP++
+				}
+			}
+			if builtInOnMP > 0 {
+				orphaned := totalRemote - builtInOnMP
+				if orphaned > 0 {
+					fmt.Printf(" (%d built-in, %d custom)\n", builtInOnMP, orphaned)
+				} else {
+					fmt.Printf(" (%d built-in)\n", builtInOnMP)
+				}
+			} else {
+				fmt.Println("")
+			}
+		}
+		// Show all MP agents
+		mpOnlyNames := make([]string, 0, totalRemote)
+		for name := range remoteNameSet {
+			mpOnlyNames = append(mpOnlyNames, name)
+		}
+		sort.Strings(mpOnlyNames)
+
+		for _, name := range mpOnlyNames {
+			d := remoteNameSet[name]
+			desc := ""
+			if d.Description != nil {
+				desc = *d.Description
+				if len(desc) > 50 {
+					desc = desc[:50] + "..."
+				}
+			}
+			toolInfo := ""
+			if d.ToolCount > 0 {
+				toolInfo = fmt.Sprintf(" [%d tools]", d.ToolCount)
+			}
+			label := "🔧 built-in"
+			if !builtInSet[name] {
+				label = "📦 custom"
+			}
+			fmt.Printf("   %-25s %s%s", name, label, toolInfo)
+			if desc != "" {
+				fmt.Printf(" — %s", desc)
+			}
+			fmt.Println()
+		}
 	} else {
 		fmt.Printf(" — %d in config", totalLocal)
 		if err != nil {
@@ -204,7 +266,6 @@ func cmdDoctor() {
 
 		// Local agents first (config-defined), with deploy status
 		if totalLocal > 0 {
-			// Sort local names for stable output
 			localNames := make([]string, 0, totalLocal)
 			for name := range pc.Agents {
 				localNames = append(localNames, name)
@@ -256,7 +317,6 @@ func cmdDoctor() {
 			sort.Strings(mpOnlyNames)
 
 			if mpOnlyCount <= 5 || totalLocal == 0 {
-				// Show all when few enough, or when there are no local agents to anchor
 				for _, name := range mpOnlyNames {
 					d := remoteNameSet[name]
 					desc := ""
@@ -281,7 +341,6 @@ func cmdDoctor() {
 					fmt.Println()
 				}
 			} else {
-				// Compact summary when many
 				limit := 3
 				for _, name := range mpOnlyNames[:limit] {
 					d := remoteNameSet[name]
@@ -323,7 +382,6 @@ func cmdDoctor() {
 		s := stats.Data
 		fmt.Printf("✅ %d runs total | %.1f%% success | $%.4f total\n", s.Overview.TotalRuns, s.Overview.SuccessRate*100, s.Overview.TotalCostUSD)
 		if len(s.ByAgent) > 0 {
-			// Show top 5 agents by run count
 			type agentStat struct {
 				name  string
 				total int64
@@ -335,7 +393,6 @@ func cmdDoctor() {
 			for name, a := range s.ByAgent {
 				sorted = append(sorted, agentStat{name, a.Total, a.Success, a.Failed + a.Errored, a.AvgDurationMs})
 			}
-			// Sort by total desc (simple bubble sort, small set)
 			for i := 0; i < len(sorted); i++ {
 				for j := i + 1; j < len(sorted); j++ {
 					if sorted[j].total > sorted[i].total {
@@ -403,7 +460,9 @@ func cmdDoctor() {
 
 	// ── 10. Discord config ──
 	fmt.Print("\n🤖 Discord bot... ")
-	if pc.DiscordBotToken != "" {
+	if isSlave {
+		fmt.Println("⏭️  N/A (slave mode — master runs the bot)")
+	} else if pc.DiscordBotToken != "" {
 		fmt.Printf("✅ configured (%d channel(s))\n", len(pc.DiscordChannelIDs))
 	} else {
 		fmt.Println("⚠️  Not configured (optional)")
@@ -411,7 +470,6 @@ func cmdDoctor() {
 
 	fmt.Println("\n═══ Done ═══")
 
-	// JSON output: emit structured summary at end
 	if jsonOutput {
 		emitJSON("ok", map[string]interface{}{
 			"config": map[string]string{
@@ -434,7 +492,7 @@ func truncateStr(s string, max int) string {
 	return s[:max] + "..."
 }
 
-// emitJSON prints a structured JSON response to stdout and sets JSON output mode.
+// emitJSON prints a structured JSON response to stdout.
 // status is "ok" or "error". data is the payload (map, slice, string, etc.).
 func emitJSON(status string, data interface{}) {
 	resp := map[string]interface{}{

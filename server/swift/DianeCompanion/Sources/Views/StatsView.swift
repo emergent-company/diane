@@ -296,23 +296,39 @@ struct StatsView: View {
         }
     }
 
-    private func agentWidgetCard(_ agent: AgentStatsSummary) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // Header row
+    private func agentStatsRow(_ agent: AgentStatsSummary) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // Header
             HStack {
                 Circle()
                     .fill(agent.successRate >= 80 ? Color.green :
                           agent.successRate >= 50 ? Color.orange : Color.red)
-                    .frame(width: 10, height: 10)
-                Text(agent.agentName)
+                    .frame(width: 8, height: 8)
+                Text(agent.displayName)
                     .font(.subheadline)
                     .fontWeight(.semibold)
                     .lineLimit(1)
+                if let desc = agent.agentDescription, !desc.isEmpty {
+                    Text(desc)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+                if let flow = agent.agentFlowType {
+                    Text(flow)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Color.secondary.opacity(0.1))
+                        .cornerRadius(3)
+                }
                 Spacer()
-                statusBadge(agent)
+                Text("\(agent.totalRuns) runs")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
             }
-
-            // Success rate bar
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 3)
