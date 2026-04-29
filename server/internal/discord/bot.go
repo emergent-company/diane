@@ -1445,6 +1445,12 @@ func (b *Bot) handleStopSelection(s *discordgo.Session, i *discordgo.Interaction
 		return
 	}
 
+	// Cancel button — no target needed
+	if customID == "stop-cancel" {
+		b.editStopResponse(i, "Cancelled. No sessions were stopped.")
+		return
+	}
+
 	parts := strings.SplitN(customID, ":", 2)
 	if len(parts) < 2 {
 		log.Printf("[STOP] Invalid customID format: %s", customID)

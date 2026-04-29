@@ -92,6 +92,7 @@ type MessageEvent struct {
 	MessageID string
 	ChannelID string
 	Content   string
+	Embeds    []string // embed titles, if any
 }
 
 // ReactionEvent data for a MESSAGE_REACTION_ADD event.
@@ -241,11 +242,20 @@ func (h *TestHarness) onMessageCreate(s *discordgo.Session, m *discordgo.Message
 		return
 	}
 
+	// Extract embed titles
+	var embeds []string
+	for _, e := range m.Embeds {
+		if e.Title != "" {
+			embeds = append(embeds, e.Title)
+		}
+	}
+
 	select {
 	case h.messagesCh <- MessageEvent{
 		MessageID: m.ID,
 		ChannelID: m.ChannelID,
 		Content:   m.Content,
+		Embeds:    embeds,
 	}:
 	default:
 		h.logf("[HARNESS] Message event channel full, dropping msg %s", m.ID)
@@ -494,8 +504,6 @@ func (h *TestHarness) ExpectResponse(channelID string, timeout time.Duration) (c
 }
 
 // ExpectAnyResponse waits for Diane to send a message in ANY channel.
-// Returns (channelID, content) if found. Useful when you don't know
-// whether the response will be inline or in a thread.
 func (h *TestHarness) ExpectAnyResponse(timeout time.Duration) (channelID, content string, ok bool) {
 	deadline := time.After(timeout)
 	for {
@@ -506,6 +514,55 @@ func (h *TestHarness) ExpectAnyResponse(timeout time.Duration) (channelID, conte
 			return "", "", false
 		case <-h.done:
 			return "", "", false
+		}
+	}
+}
+
+// ExpectEmbedTitle waits for Diane to send a message with an embed
+// whose title matches (contains) the given string. Returns the channel
+// ID where it was received.
+func (h *TestHarness) ExpectEmbedTitle(title string, timeout time.Duration) (channelID string, ok bool) {
+	deadline := time.After(timeout)
+	for {
+		select {
+		case ev := <-h.messagesCh:
+			for _, et := range ev.Embeds {
+				if contains(et, title) {
+					return ev.ChannelID, true
+				}
+			}
+		case <-deadline:
+			return "", false
+		case <-h.done:
+			return "", false
+		}
+	}
+}
+
+// SendToThread sends a message to a specific thread and returns the message ID.
+func (h *TestHarness) SendToThread(threadID, content string) string {
+	msg, err := h.session.ChannelMessageSend(threadID, content)
+	if err != nil {
+		h.logf("[HARNESS] Failed to send to thread %s: %v", threadID, err)
+		return ""
+	}
+	return msg.ID
+}
+
+// ExpectNoMessage asserts that Diane sends NO message to the given channel
+// within the timeout. Returns true if the timeout expires without a message.
+func (h *TestHarness) ExpectNoMessage(channelID string, timeout time.Duration) bool {
+	deadline := time.After(timeout)
+	for {
+		select {
+		case ev := <-h.messagesCh:
+			if ev.ChannelID == channelID {
+				return false // got unexpected message
+			}
+		case <-deadline:
+			return true // timeout = no message
+		case <-h.done:
+			return false
 		}
 	}
 }
@@ -580,6 +637,34 @@ func (h *TestHarness) RunTest(name string, fn func(hh *H) Result) Result {
 func (hh *H) Send(content string) string {
 	hh.harness.logf("  ── Send: %s", truncate(content, 60))
 	return hh.harness.Send(content)
+}
+
+// SendToThread sends a message to a specific thread.
+func (hh *H) SendToThread(threadID, content string) string {
+	hh.harness.logf("  ── SendToThread: %s → %s", truncate(content, 60), truncate(threadID, 12))
+	return hh.harness.SendToThread(threadID, content)
+}
+
+// ExpectEmbedTitle waits for an embed with a matching title.
+func (hh *H) ExpectEmbedTitle(title string, timeout time.Duration) (string, bool) {
+	chID, ok := hh.harness.ExpectEmbedTitle(title, timeout)
+	if ok {
+		hh.harness.logf("  ✓ Embed title %q in channel %s", title, truncate(chID, 12))
+	} else {
+		hh.harness.logf("  ✗ Embed title %q not found (timeout %v)", title, timeout)
+	}
+	return chID, ok
+}
+
+// ExpectNoMessage asserts no message from Diane in the given channel.
+func (hh *H) ExpectNoMessage(channelID string, timeout time.Duration) bool {
+	ok := hh.harness.ExpectNoMessage(channelID, timeout)
+	if ok {
+		hh.harness.logf("  ✓ No message in channel %s (timeout %v)", truncate(channelID, 12), timeout)
+	} else {
+		hh.harness.logf("  ✗ Unexpected message in channel %s", truncate(channelID, 12))
+	}
+	return ok
 }
 
 // ExpectReaction waits for a reaction.

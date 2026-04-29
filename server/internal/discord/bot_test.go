@@ -1002,3 +1002,244 @@ func TestTestBotBypassesBotFilter(t *testing.T) {
 		t.Errorf("Expected 0 messages (unknown bot filtered), got %d", len(fake2.MessageSendCalls))
 	}
 }
+
+// ── listActiveThreads Tests ──────────────────────────────────────────
+
+func TestListActiveThreads_Empty(t *testing.T) {
+	bot := &Bot{
+		activeChans: make(map[string]*ActiveChannel),
+	}
+
+	running := bot.listActiveThreads("parent-1")
+	if len(running) != 0 {
+		t.Errorf("Expected 0 active threads, got %d", len(running))
+	}
+}
+
+func TestListActiveThreads_FiltersByParent(t *testing.T) {
+	bot := &Bot{
+		activeChans: make(map[string]*ActiveChannel),
+	}
+
+	// Two threads under parent-1
+	bot.activeChans["thread-1"] = &ActiveChannel{ParentID: "parent-1"}
+	bot.activeChans["thread-2"] = &ActiveChannel{ParentID: "parent-1"}
+
+	// One thread under parent-2, one inline (no ParentID)
+	bot.activeChans["thread-3"] = &ActiveChannel{ParentID: "parent-2"}
+	bot.activeChans["inline-1"] = &ActiveChannel{ParentID: ""}
+
+	// Should return 2 threads for parent-1
+	running := bot.listActiveThreads("parent-1")
+	if len(running) != 2 {
+		t.Fatalf("Expected 2 active threads for parent-1, got %d: %v", len(running), running)
+	}
+
+	// Should contain both thread-1 and thread-2
+	found1, found2 := false, false
+	for _, id := range running {
+		if id == "thread-1" {
+			found1 = true
+		}
+		if id == "thread-2" {
+			found2 = true
+		}
+	}
+	if !found1 || !found2 {
+		t.Errorf("Expected both thread-1 and thread-2, got %v", running)
+	}
+
+	// parent-2 should have 1
+	running = bot.listActiveThreads("parent-2")
+	if len(running) != 1 {
+		t.Errorf("Expected 1 active thread for parent-2, got %d", len(running))
+	}
+
+	// Unknown parent should have 0
+	running = bot.listActiveThreads("parent-unknown")
+	if len(running) != 0 {
+		t.Errorf("Expected 0 for unknown parent, got %d", len(running))
+	}
+}
+
+// ── handleStopSelection Tests ──────────────────────────────────────
+
+func TestHandleStopSelection_StopThread(t *testing.T) {
+	fake := NewFakeDiscordAPI()
+	bot := &Bot{
+		api:         fake,
+		activeChans: make(map[string]*ActiveChannel),
+	}
+
+	// Set up an active channel with a cancellable context
+	ctx, cancel := context.WithCancel(context.Background())
+	bot.activeChans["thread-1"] = &ActiveChannel{
+		Cancel: cancel,
+	}
+
+	i := &discordgo.Interaction{
+		ID:    "interact-1",
+		Token: "token-1",
+	}
+
+	bot.handleStopSelection(nil, i, "stop-thread:thread-1")
+
+	// Should have responded
+	if len(fake.InteractionResponses) != 1 {
+		t.Fatalf("Expected 1 InteractionRespond call, got %d", len(fake.InteractionResponses))
+	}
+
+	// Should have edited the response
+	if len(fake.InteractionResponseEdits) != 1 {
+		t.Fatalf("Expected 1 InteractionResponseEdit call, got %d", len(fake.InteractionResponseEdits))
+	}
+
+	// Verify content mentions the thread
+	edit := fake.InteractionResponseEdits[0]
+	if edit.Content == nil {
+		t.Fatal("Expected non-nil Content in edit")
+	}
+	if *edit.Content != "🛑 Session `<#thread-1>` stopped." {
+		t.Errorf("Unexpected edit content: %s", *edit.Content)
+	}
+
+	// Verify context was cancelled (session stopped)
+	select {
+	case <-ctx.Done():
+		// Expected
+	default:
+		t.Error("Expected context to be cancelled after stop-thread")
+	}
+
+	// Verify buttons were removed
+	if edit.Components == nil {
+		t.Fatal("Expected non-nil Components in edit")
+	}
+	comps := *edit.Components
+	if len(comps) != 0 {
+		t.Errorf("Expected empty components (buttons removed), got %d", len(comps))
+	}
+}
+
+func TestHandleStopSelection_StopAll(t *testing.T) {
+	fake := NewFakeDiscordAPI()
+	bot := &Bot{
+		api:         fake,
+		activeChans: make(map[string]*ActiveChannel),
+	}
+
+	// Two threads under parent-1, one under parent-2
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	ctx3, cancel3 := context.WithCancel(context.Background())
+
+	bot.activeChans["thread-a"] = &ActiveChannel{Cancel: cancel1, ParentID: "parent-1"}
+	bot.activeChans["thread-b"] = &ActiveChannel{Cancel: cancel2, ParentID: "parent-1"}
+	bot.activeChans["thread-c"] = &ActiveChannel{Cancel: cancel3, ParentID: "parent-2"}
+
+	i := &discordgo.Interaction{
+		ID:    "interact-2",
+		Token: "token-2",
+	}
+
+	bot.handleStopSelection(nil, i, "stop-all:parent-1")
+
+	// Should have responded
+	if len(fake.InteractionResponses) != 1 {
+		t.Fatalf("Expected 1 InteractionRespond call, got %d", len(fake.InteractionResponses))
+	}
+
+	// Should have edited the response
+	if len(fake.InteractionResponseEdits) != 1 {
+		t.Fatalf("Expected 1 InteractionResponseEdit call, got %d", len(fake.InteractionResponseEdits))
+	}
+
+	// Verify content
+	edit := fake.InteractionResponseEdits[0]
+	if edit.Content == nil {
+		t.Fatal("Expected non-nil Content in edit")
+	}
+	if *edit.Content != "⏹️ Stopped **2** session(s)." {
+		t.Errorf("Unexpected edit content: %s", *edit.Content)
+	}
+
+	// Verify contexts were cancelled (thread-a and thread-b, NOT thread-c)
+	select {
+	case <-ctx1.Done():
+		// Expected
+	default:
+		t.Error("Expected thread-a context to be cancelled")
+	}
+	select {
+	case <-ctx2.Done():
+		// Expected
+	default:
+		t.Error("Expected thread-b context to be cancelled")
+	}
+	select {
+	case <-ctx3.Done():
+		t.Error("Expected thread-c context to NOT be cancelled (different parent)")
+	default:
+		// Expected
+	}
+}
+
+func TestHandleStopSelection_Cancel(t *testing.T) {
+	fake := NewFakeDiscordAPI()
+	bot := &Bot{
+		api:         fake,
+		activeChans: make(map[string]*ActiveChannel),
+	}
+
+	i := &discordgo.Interaction{
+		ID:    "interact-3",
+		Token: "token-3",
+	}
+
+	bot.handleStopSelection(nil, i, "stop-cancel")
+
+	// Should have responded
+	if len(fake.InteractionResponses) != 1 {
+		t.Fatalf("Expected 1 InteractionRespond call, got %d", len(fake.InteractionResponses))
+	}
+
+	// Should have edited the response
+	if len(fake.InteractionResponseEdits) != 1 {
+		t.Fatalf("Expected 1 InteractionResponseEdit call, got %d", len(fake.InteractionResponseEdits))
+	}
+
+	// Verify content says cancelled
+	edit := fake.InteractionResponseEdits[0]
+	if edit.Content == nil {
+		t.Fatal("Expected non-nil Content in edit")
+	}
+	if *edit.Content != "Cancelled. No sessions were stopped." {
+		t.Errorf("Unexpected edit content: %s", *edit.Content)
+	}
+}
+
+func TestHandleStopSelection_InvalidCustomID(t *testing.T) {
+	fake := NewFakeDiscordAPI()
+	bot := &Bot{
+		api:         fake,
+		activeChans: make(map[string]*ActiveChannel),
+	}
+
+	i := &discordgo.Interaction{
+		ID:    "interact-4",
+		Token: "token-4",
+	}
+
+	// No colon separator — customID is just "stop-thread" (wrong format)
+	bot.handleStopSelection(nil, i, "stop-thread")
+
+	// Should still have responded
+	if len(fake.InteractionResponses) != 1 {
+		t.Fatalf("Expected 1 InteractionRespond call, got %d", len(fake.InteractionResponses))
+	}
+
+	// Should NOT have edited (no valid target)
+	if len(fake.InteractionResponseEdits) != 0 {
+		t.Errorf("Expected 0 edits for invalid customID, got %d", len(fake.InteractionResponseEdits))
+	}
+}
