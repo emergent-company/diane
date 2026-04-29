@@ -37,7 +37,7 @@ func cmdUpgrade() {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to fetch latest release: %v\n", err)
 		os.Exit(1)
@@ -113,7 +113,7 @@ func cmdUpgrade() {
 		dlReq.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	dlResp, err := http.DefaultClient.Do(dlReq)
+	dlResp, err := httpClient.Do(dlReq)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Download failed: %v\n", err)
 		os.Exit(1)

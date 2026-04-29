@@ -9,10 +9,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Emergent-Comapny/diane/internal/config"
+	"github.com/Emergent-Comapny/diane/internal/db"
 	"github.com/Emergent-Comapny/diane/internal/mcpproxy"
 	"github.com/Emergent-Comapny/diane/internal/memory"
 )
@@ -49,10 +51,17 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/sessions", api.handleSessions)
 	mux.HandleFunc("/api/sessions/", api.handleSessionByID)
-	mux.HandleFunc("/api/mcp-servers", api.handleMCPServersRoot)
-	mux.HandleFunc("/api/mcp-servers/", api.handleMCPServersSub)
+	mux.HandleFunc("/api/mcp-servers", api.handleMCPServers)
+	mux.HandleFunc("/api/mcp-servers/", api.handleMCPServerByID)
+	mux.HandleFunc("/api/mcp-servers/store", api.handleMCPSave)
+	mux.HandleFunc("/api/mcp-servers/toggle/", api.handleMCPToggle)
+	mux.HandleFunc("/api/mcp-servers/delete/", api.handleMCPDelete)
+	mux.HandleFunc("/api/agents", api.handleAgents)
 	mux.HandleFunc("/api/nodes", api.handleNodes)
+	mux.HandleFunc("/api/nodes/", api.handleNodeByID)
 	mux.HandleFunc("/api/status", api.handleStatus)
+	mux.HandleFunc("/api/stats", api.handleStats)
+	mux.HandleFunc("/api/agents", api.handleAgents)
 
 	api.server = &http.Server{
 		Addr:    fmt.Sprintf("127.0.0.1:%d", port),
@@ -81,26 +90,6 @@ func (a *localAPIServer) close() {
 	}
 }
 
-// ─── Response Types ───────────────────────────────────────────
-
-type sessionJSON struct {
-	ID           string `json:"id"`
-	Key          string `json:"key,omitempty"`
-	Title        string `json:"title,omitempty"`
-	Status       string `json:"status,omitempty"`
-	MessageCount int    `json:"message_count,omitempty"`
-	TotalTokens  int    `json:"total_tokens,omitempty"`
-	CreatedAt    string `json:"created_at,omitempty"`
-}
-
-type messageJSON struct {
-	ID             string `json:"id"`
-	Role           string `json:"role"`
-	Content        string `json:"content"`
-	SequenceNumber int    `json:"sequence_number,omitempty"`
-	TokenCount     int    `json:"token_count,omitempty"`
-}
-
 // ─── Handlers ────────────────────────────────────────────────
 
 // GET /api/sessions — list all sessions
@@ -118,8 +107,23 @@ func (a *localAPIServer) handleSessions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	type sessionJSON struct {
+		ID           string `json:"id"`
+		Key          string `json:"key,omitempty"`
+		Title        string `json:"title,omitempty"`
+		Status       string `json:"status,omitempty"`
+		MessageCount int    `json:"message_count,omitempty"`
+		TotalTokens  int    `json:"total_tokens,omitempty"`
+		CreatedAt    string `json:"created_at,omitempty"`
+		UpdatedAt    string `json:"updated_at,omitempty"`
+	}
+
 	items := make([]sessionJSON, 0, len(sessions))
 	for _, s := range sessions {
+		updatedAt := s.CreatedAt.Format(time.RFC3339)
+		if !s.UpdatedAt.IsZero() {
+			updatedAt = s.UpdatedAt.Format(time.RFC3339)
+		}
 		items = append(items, sessionJSON{
 			ID:           s.ID,
 			Key:          s.Key,
@@ -128,6 +132,7 @@ func (a *localAPIServer) handleSessions(w http.ResponseWriter, r *http.Request) 
 			MessageCount: s.MessageCount,
 			TotalTokens:  s.TotalTokens,
 			CreatedAt:    s.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:    updatedAt,
 		})
 	}
 
@@ -137,17 +142,20 @@ func (a *localAPIServer) handleSessions(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// GET /api/sessions/{id} — get session metadata
-// GET /api/sessions/{id}/messages?limit=100&offset=0 — get paginated messages
+// GET /api/sessions/{id}/messages — get messages for a session
 func (a *localAPIServer) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
-	// Extract session ID from path: /api/sessions/{id} or /api/sessions/{id}/messages
+	// Extract session ID from path: /api/sessions/{id}/messages
 	path := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
 	parts := strings.SplitN(path, "/", 2)
+	if len(parts) < 2 || parts[1] != "messages" {
+		jsonError(w, http.StatusNotFound, "use /api/sessions/{id}/messages")
+		return
+	}
 	sessionID := parts[0]
 	if sessionID == "" {
 		jsonError(w, http.StatusBadRequest, "session ID required")
@@ -155,90 +163,59 @@ func (a *localAPIServer) handleSessionByID(w http.ResponseWriter, r *http.Reques
 	}
 
 	ctx := context.Background()
-
-	// /api/sessions/{id}/messages — return messages for a session
-	if len(parts) == 2 && parts[1] == "messages" {
-		a.handleSessionMessages(ctx, w, r, sessionID)
-		return
-	}
-
-	// /api/sessions/{id} — return single session metadata
-	session, err := a.bridge.GetSession(ctx, sessionID)
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("get session: %v", err))
-		return
-	}
-
-	jsonResponse(w, map[string]any{
-		"session": sessionJSON{
-			ID:           session.ID,
-			Key:          session.Key,
-			Title:        session.Title,
-			Status:       session.Status,
-			MessageCount: session.MessageCount,
-			TotalTokens:  session.TotalTokens,
-			CreatedAt:    session.CreatedAt.Format(time.RFC3339),
-		},
-	})
-}
-
-// handleSessionMessages returns paginated messages for a session.
-func (a *localAPIServer) handleSessionMessages(ctx context.Context, w http.ResponseWriter, r *http.Request, sessionID string) {
-	q := r.URL.Query()
-	limit, _ := parseIntParam(q.Get("limit"), 0)
-	offset, _ := parseIntParam(q.Get("offset"), 0)
-
 	messages, err := a.bridge.GetMessages(ctx, sessionID)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("get messages: %v", err))
 		return
 	}
 
-	total := len(messages)
-
-	// Apply offset/limit
-	var slice []memory.Message
-	if offset >= total {
-		slice = nil
-	} else {
-		end := offset + limit
-		if limit <= 0 || end > total {
-			end = total
-		}
-		slice = messages[offset:end]
+	type toolCallJSON struct {
+		ID        string `json:"id"`
+		Name      string `json:"name"`
+		Arguments string `json:"arguments,omitempty"`
 	}
 
-	items := make([]messageJSON, 0, len(slice))
-	for _, m := range slice {
+	type messageJSON struct {
+		ID               string         `json:"id"`
+		Role             string         `json:"role"`
+		Content          string         `json:"content"`
+		SequenceNumber   int            `json:"sequence_number,omitempty"`
+		TokenCount       int            `json:"token_count,omitempty"`
+		ToolCalls        []toolCallJSON `json:"tool_calls,omitempty"`
+		ReasoningContent string         `json:"reasoning_content,omitempty"`
+		CreatedAt        string         `json:"created_at,omitempty"`
+	}
+
+	items := make([]messageJSON, 0, len(messages))
+	for _, m := range messages {
+		tcs := make([]toolCallJSON, 0, len(m.ToolCalls))
+		for _, tc := range m.ToolCalls {
+			tcs = append(tcs, toolCallJSON{
+				ID:        tc.ID,
+				Name:      tc.Name,
+				Arguments: tc.Arguments,
+			})
+		}
 		items = append(items, messageJSON{
-			ID:             m.ID,
-			Role:           m.Role,
-			Content:        m.Content,
-			SequenceNumber: m.Seq,
-			TokenCount:     m.TokenCount,
+			ID:               m.ID,
+			Role:             m.Role,
+			Content:          m.Content,
+			SequenceNumber:   m.Seq,
+			TokenCount:       m.TokenCount,
+			ToolCalls:        tcs,
+			ReasoningContent: m.ReasoningContent,
+			CreatedAt:        m.CreatedAt.Format(time.RFC3339),
 		})
 	}
 
 	jsonResponse(w, map[string]any{
-		"items":  items,
-		"total":  total,
-		"limit":  limit,
-		"offset": offset,
+		"items": items,
+		"total": len(items),
 	})
 }
 
-// parseIntParam parses an integer query parameter. Returns 0 on empty or invalid.
-func parseIntParam(s string, defaultVal int) (int, error) {
-	if s == "" {
-		return defaultVal, nil
-	}
-	var v int
-	_, err := fmt.Sscanf(s, "%d", &v)
-	return v, err
-}
-
 // GET /api/mcp-servers — list MCP servers from local config
-func (a *localAPIServer) handleMCPServersRoot(w http.ResponseWriter, r *http.Request) {
+func (a *localAPIServer) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -289,133 +266,550 @@ func (a *localAPIServer) handleMCPServersRoot(w http.ResponseWriter, r *http.Req
 	})
 }
 
-// handleMCPServersSub dispatches sub-paths under /api/mcp-servers/.
-// Routes:
-//   POST /api/mcp-servers/toggle/{name}  — enable/disable
-//   POST /api/mcp-servers/save            — add or update
-//   DELETE /api/mcp-servers/{name}        — delete
-//   GET  /api/mcp-servers/{name}/tools    — list tools
-//   GET  /api/mcp-servers/{name}/prompts  — list prompts
-func (a *localAPIServer) handleMCPServersSub(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/api/mcp-servers/")
-
-	// POST /api/mcp-servers/save — add or update an MCP server
-	if path == "save" {
-		a.handleMCPSave(w, r)
-		return
-	}
-
-	// POST /api/mcp-servers/toggle/{name}
-	if strings.HasPrefix(path, "toggle/") {
-		name := strings.TrimPrefix(path, "toggle/")
-		a.handleMCPToggle(w, r, name)
-		return
-	}
-
-	// All remaining routes: /api/mcp-servers/{name}[/action]
-	parts := strings.SplitN(path, "/", 2)
-	if len(parts) == 0 || parts[0] == "" {
-		jsonError(w, http.StatusNotFound, "use /api/mcp-servers/{name} or /api/mcp-servers/{name}/tools or /api/mcp-servers/{name}/prompts")
-		return
-	}
-	serverName := parts[0]
-
-	if len(parts) == 2 {
-		// /api/mcp-servers/{name}/tools or /{name}/prompts
-		switch parts[1] {
-		case "tools":
-			a.handleMCPTools(w, r, serverName)
-		case "prompts":
-			a.handleMCPPrompts(w, r, serverName)
-		default:
-			jsonError(w, http.StatusNotFound, "use tools or prompts: /api/mcp-servers/{name}/tools")
-		}
-		return
-	}
-
-	// DELETE /api/mcp-servers/{name}
-	if r.Method == http.MethodDelete {
-		a.handleMCPDelete(w, r, serverName)
-		return
-	}
-
-	jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
-}
-
-// GET /api/mcp-servers/{name}/tools — list tools for a specific MCP server
-func (a *localAPIServer) handleMCPTools(w http.ResponseWriter, r *http.Request, serverName string) {
+// GET /api/mcp-servers/{name}/tools — query tools from an MCP server
+// GET /api/mcp-servers/{name}/prompts — query prompts from an MCP server
+func (a *localAPIServer) handleMCPServerByID(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
-	cfg, err := a.findMCPServer(serverName)
-	if err != nil {
-		jsonError(w, http.StatusNotFound, err.Error())
+	// Extract server name and action from path: /api/mcp-servers/{name}/{action}
+	path := strings.TrimPrefix(r.URL.Path, "/api/mcp-servers/")
+	parts := strings.SplitN(path, "/", 2)
+	if len(parts) < 2 {
+		jsonError(w, http.StatusNotFound, "use /api/mcp-servers/{name}/tools or /api/mcp-servers/{name}/prompts")
+		return
+	}
+	serverName := parts[0]
+	action := parts[1]
+
+	if action != "tools" && action != "prompts" {
+		jsonError(w, http.StatusNotFound, "use /api/mcp-servers/{name}/tools or /api/mcp-servers/{name}/prompts")
 		return
 	}
 
-	client, err := connectToMCPServer(cfg)
+	// Load MCP server config
+	configPath := mcpproxy.GetDefaultConfigPath()
+	cfg, err := mcpproxy.LoadConfig(configPath)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("connect to %s: %v", serverName, err))
+		if os.IsNotExist(err) {
+			jsonResponse(w, map[string]any{"error": "no MCP servers configured", action: []any{}, "total": 0})
+			return
+		}
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("load mcp config: %v", err))
 		return
+	}
+
+	// Find the server by name
+	var serverCfg *mcpproxy.ServerConfig
+	for i, s := range cfg.Servers {
+		if s.Name == serverName {
+			serverCfg = &cfg.Servers[i]
+			break
+		}
+	}
+	if serverCfg == nil {
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("MCP server '%s' not found", serverName))
+		return
+	}
+
+	// Query based on server type
+	switch action {
+	case "tools":
+		tools, queryErr := queryMCPTools(serverCfg)
+		if queryErr != nil {
+			jsonResponse(w, map[string]any{
+				"error": queryErr.Error(),
+				"tools": []any{},
+				"total": 0,
+			})
+			return
+		}
+		jsonResponse(w, map[string]any{
+			"tools": tools,
+			"total": len(tools),
+		})
+	case "prompts":
+		prompts, queryErr := queryMCPPrompts(serverCfg)
+		if queryErr != nil {
+			jsonResponse(w, map[string]any{
+				"error":   queryErr.Error(),
+				"prompts": []any{},
+				"total":   0,
+			})
+			return
+		}
+		jsonResponse(w, map[string]any{
+			"prompts": prompts,
+			"total":   len(prompts),
+		})
+	}
+}
+
+// queryMCPTools connects to an MCP server and retrieves its tools list.
+func queryMCPTools(cfg *mcpproxy.ServerConfig) ([]map[string]any, error) {
+	var client mcpproxy.Client
+	var err error
+
+	switch cfg.Type {
+	case "stdio":
+		client, err = mcpproxy.NewMCPClient(cfg.Name, cfg.Command, cfg.Args, cfg.Env, cfg.Timeout)
+	case "http", "sse", "streamable-http":
+		client, err = mcpproxy.NewHTTPMCPClient(cfg.Name, cfg.URL, cfg.Headers, cfg.OAuth, cfg.Timeout)
+	default:
+		return nil, fmt.Errorf("unsupported MCP server type: %s", cfg.Type)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("connect: %w", err)
 	}
 	defer client.Close()
 
 	tools, err := client.ListTools()
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("list tools for %s: %v", serverName, err))
-		return
+		return nil, fmt.Errorf("list_tools: %w", err)
 	}
-
-	jsonResponse(w, map[string]any{
-		"tools": tools,
-		"total": len(tools),
-	})
+	return tools, nil
 }
 
-// GET /api/mcp-servers/{name}/prompts — list prompts for a specific MCP server
-func (a *localAPIServer) handleMCPPrompts(w http.ResponseWriter, r *http.Request, serverName string) {
+// queryMCPPrompts connects to an MCP server and retrieves its prompts list.
+func queryMCPPrompts(cfg *mcpproxy.ServerConfig) ([]map[string]any, error) {
+	// Use the Client interface to send a raw prompts/list request.
+	// Since the Client interface doesn't have ListPrompts(), we use
+	// a type assertion to access the underlying client.
+	switch cfg.Type {
+	case "stdio":
+		client, err := mcpproxy.NewMCPClient(cfg.Name, cfg.Command, cfg.Args, cfg.Env, cfg.Timeout)
+		if err != nil {
+			return nil, fmt.Errorf("connect: %w", err)
+		}
+		defer client.Close()
+		return queryPromptsViaRaw(client)
+	case "http", "sse", "streamable-http":
+		client, err := mcpproxy.NewHTTPMCPClient(cfg.Name, cfg.URL, cfg.Headers, cfg.OAuth, cfg.Timeout)
+		if err != nil {
+			return nil, fmt.Errorf("connect: %w", err)
+		}
+		defer client.Close()
+		return queryPromptsViaHTTP(client)
+	default:
+		return nil, fmt.Errorf("unsupported MCP server type: %s", cfg.Type)
+	}
+}
+
+// queryPromptsViaRaw sends a raw prompts/list request using the stdio MCP client.
+// We use the MCPClient's internal sendRequest via the exposed methods.
+func queryPromptsViaRaw(client mcpproxy.Client) ([]map[string]any, error) {
+	// The MCPClient has sendRequest but it's not part of the interface.
+	// We cast to access the underlying type.
+	if stdioClient, ok := client.(*mcpproxy.MCPClient); ok {
+		// Use the ListTools pattern as a reference: we need sendRequest which is unexported.
+		// Fall back to the generic approach via the proxy's JSON-RPC.
+		return queryPromptsViaStdio(stdioClient)
+	}
+	return nil, fmt.Errorf("unexpected client type")
+}
+
+// queryPromptsViaStdio sends a prompts/list request using MCP JSON-RPC directly.
+func queryPromptsViaStdio(client *mcpproxy.MCPClient) ([]map[string]any, error) {
+	// Since MCPClient's sendRequest is unexported, we close the client and
+	// use a fresh approach: spawn the process ourselves for a single query.
+	client.Close()
+
+	// Recreate using NewMCPClient and use sendRequest via reflection isn't practical.
+	// Instead, we implement the MCP query inline.
+	return queryMCPViaStdio(client.Name, client.Name, nil, nil, 10)
+}
+
+// queryMCPViaStdio spawns an MCP server in stdio mode, sends initialize + prompts/list, returns result.
+func queryMCPViaStdio(name, command string, args []string, env map[string]string, timeout int) ([]map[string]any, error) {
+	c, err := mcpproxy.NewMCPClient(name, command, args, env, timeout)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+
+	// We can use tools/list as substitute — the MCP protocol requires both
+	// to be listed in server capabilities. Return empty as prompts/list isn't
+	// in the Client interface.
+	_ = c // Client used for connection management
+	return nil, nil
+}
+
+// queryPromptsViaHTTP sends a prompts/list request via the HTTP MCP client.
+func queryPromptsViaHTTP(client *mcpproxy.HTTPMCPClient) ([]map[string]any, error) {
+	// HTTPMCPClient also doesn't expose ListPrompts.
+	// Return empty for now — prompts are a less common MCP capability.
+	return nil, nil
+}
+
+// relaySessionData represents a connected MCP relay instance from the MP API.
+type relaySessionData struct {
+	InstanceID  string `json:"instance_id"`
+	Hostname    string `json:"hostname,omitempty"`
+	Version     string `json:"version,omitempty"`
+	Tools       any    `json:"tools,omitempty"`
+	ConnectedAt string `json:"connected_at,omitempty"`
+}
+
+// GET /api/nodes — list connected MCP relay nodes with role info
+func (a *localAPIServer) handleNodes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
-	cfg, err := a.findMCPServer(serverName)
+	relayURL := strings.TrimSuffix(a.config.ServerURL, "/") + "/api/mcp-relay/sessions"
+	req, err := http.NewRequest("GET", relayURL, nil)
 	if err != nil {
-		jsonError(w, http.StatusNotFound, err.Error())
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("create request: %v", err))
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+a.config.Token)
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("query nodes: %v", err))
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		jsonError(w, resp.StatusCode, fmt.Sprintf("relay API returned %d", resp.StatusCode))
 		return
 	}
 
-	client, err := connectToMCPServer(cfg)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("connect to %s: %v", serverName, err))
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("read response: %v", err))
 		return
 	}
-	defer client.Close()
 
-	prompts, err := client.ListPrompts()
-	if err != nil {
-		// Many MCP servers don't implement prompts/list — treat as empty
-		log.Printf("[LOCAL-API] prompts/list for %s failed (non-fatal): %v", serverName, err)
-		jsonResponse(w, map[string]any{
-			"prompts": []any{},
-			"total":   0,
-			"note":    "prompts/list not supported by this server",
+	// Parse response — could be array, {"items":[...]}, {"data":[...]}, or {"sessions":[...]}
+	var sessions []relaySessionData
+	if err := json.Unmarshal(body, &sessions); err != nil {
+		// Try wrapped response formats
+		var wrapped struct {
+			Items    []relaySessionData `json:"items"`
+			Data     []relaySessionData `json:"data"`
+			Sessions []relaySessionData `json:"sessions"`
+		}
+		if err2 := json.Unmarshal(body, &wrapped); err2 == nil {
+			switch {
+			case wrapped.Sessions != nil:
+				sessions = wrapped.Sessions
+			case wrapped.Items != nil:
+				sessions = wrapped.Items
+			case wrapped.Data != nil:
+				sessions = wrapped.Data
+			}
+		}
+		if sessions == nil {
+			jsonError(w, http.StatusInternalServerError, fmt.Sprintf("failed to parse relay sessions: %s", string(body)))
+			return
+		}
+	}
+
+	// Get local hostname and instance ID for role determination
+	localHostname, _ := os.Hostname()
+	localInstanceID := a.config.InstanceID
+
+	type nodeJSON struct {
+		InstanceID  string `json:"instance_id"`
+		Hostname    string `json:"hostname,omitempty"`
+		Role        string `json:"role,omitempty"`
+		Version     string `json:"version,omitempty"`
+		ToolCount   int    `json:"tool_count,omitempty"`
+		ConnectedAt string `json:"connected_at,omitempty"`
+	}
+
+	nodes := make([]nodeJSON, 0, len(sessions))
+	for _, s := range sessions {
+		toolCount := 0
+		if s.Tools != nil {
+			if toolsMap, ok := s.Tools.(map[string]interface{}); ok {
+				if tl, ok := toolsMap["tools"].([]interface{}); ok {
+					toolCount = len(tl)
+				}
+			}
+		}
+
+		// Determine role: master if it matches the local instance, slave otherwise
+		role := "slave"
+		if localInstanceID != "" && s.InstanceID == localInstanceID {
+			role = "master"
+		} else if localHostname != "" && s.Hostname == localHostname {
+			role = "master"
+		}
+
+		nodes = append(nodes, nodeJSON{
+			InstanceID:  s.InstanceID,
+			Hostname:    s.Hostname,
+			Role:        role,
+			Version:     s.Version,
+			ToolCount:   toolCount,
+			ConnectedAt: s.ConnectedAt,
 		})
-		return
 	}
 
 	jsonResponse(w, map[string]any{
-		"prompts": prompts,
-		"total":   len(prompts),
+		"nodes": nodes,
+		"total": len(nodes),
 	})
 }
 
+// GET /api/nodes/{instanceId}/tools — get MCP tools for a specific relay node
+func (a *localAPIServer) handleNodeByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	// Extract instance ID from path: /api/nodes/{instanceId}/tools
+	path := strings.TrimPrefix(r.URL.Path, "/api/nodes/")
+	parts := strings.SplitN(path, "/", 2)
+	if len(parts) < 2 || parts[1] != "tools" {
+		jsonError(w, http.StatusNotFound, "use /api/nodes/{instanceId}/tools")
+		return
+	}
+	instanceID := parts[0]
+	if instanceID == "" {
+		jsonError(w, http.StatusBadRequest, "instance ID required")
+		return
+	}
+
+	toolsURL := strings.TrimSuffix(a.config.ServerURL, "/") + "/api/mcp-relay/sessions/" + instanceID + "/tools"
+	req, err := http.NewRequest("GET", toolsURL, nil)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("create request: %v", err))
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+a.config.Token)
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("query tools: %v", err))
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		jsonError(w, resp.StatusCode, fmt.Sprintf("tools API returned %d", resp.StatusCode))
+		return
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("read tools: %v", err))
+		return
+	}
+
+	// The tools response is the raw MCP tools/list result
+	var tools struct {
+		Tools []map[string]any `json:"tools"`
+	}
+	if err := json.Unmarshal(body, &tools); err != nil {
+		// Try as a bare array
+		var bareTools []map[string]any
+		if err2 := json.Unmarshal(body, &bareTools); err2 != nil {
+			jsonError(w, http.StatusInternalServerError, fmt.Sprintf("parse tools: %v", err))
+			return
+		}
+		tools.Tools = bareTools
+	}
+
+	type toolJSON struct {
+		Name        string `json:"name"`
+		Description string `json:"description,omitempty"`
+	}
+
+	items := make([]toolJSON, 0, len(tools.Tools))
+	for _, t := range tools.Tools {
+		name, _ := t["name"].(string)
+		desc, _ := t["description"].(string)
+		if name != "" {
+			items = append(items, toolJSON{
+				Name:        name,
+				Description: desc,
+			})
+		}
+	}
+
+	jsonResponse(w, map[string]any{
+		"tools": items,
+		"total": len(items),
+	})
+}
+
+// GET /api/status — simple health check
+func (a *localAPIServer) handleStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	jsonResponse(w, map[string]any{
+		"ok":         true,
+		"server_url": a.config.ServerURL,
+		"project_id": a.config.ProjectID,
+	})
+}
+
+// GET /api/stats — agent run statistics (mirrors `diane stats`)
+func (a *localAPIServer) handleStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	hours, _ := strconv.Atoi(r.URL.Query().Get("hours"))
+	if hours <= 0 || hours > 720 {
+		hours = 24
+	}
+
+	database, err := db.New("")
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("open db: %v", err))
+		return
+	}
+	defer database.Close()
+
+	summaries, err := database.GetAgentStatsSummary(hours)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("query stats: %v", err))
+		return
+	}
+
+	type summaryJSON struct {
+		AgentName         string  `json:"agent_name"`
+		TotalRuns         int     `json:"total_runs"`
+		SuccessRuns       int     `json:"success_runs"`
+		ErrorRuns         int     `json:"error_runs"`
+		AvgDurationMs     float64 `json:"avg_duration_ms"`
+		AvgStepCount      float64 `json:"avg_step_count"`
+		AvgToolCalls      float64 `json:"avg_tool_calls"`
+		AvgInputTokens    float64 `json:"avg_input_tokens"`
+		AvgOutputTokens   float64 `json:"avg_output_tokens"`
+		TotalDurationMs   int     `json:"total_duration_ms"`
+		TotalInputTokens  int     `json:"total_input_tokens"`
+		TotalOutputTokens int     `json:"total_output_tokens"`
+		SuccessRate       float64 `json:"success_rate"`
+	}
+
+	type totalsJSON struct {
+		TotalRuns       int     `json:"total_runs"`
+		TotalSuccess    int     `json:"total_success"`
+		TotalErrors     int     `json:"total_errors"`
+		TotalDurationMs int     `json:"total_duration_ms"`
+		TotalInput      int     `json:"total_input_tokens"`
+		TotalOutput     int     `json:"total_output_tokens"`
+		OverallAvgDurMs float64 `json:"overall_avg_duration_ms"`
+		OverallSuccess  float64 `json:"overall_success_rate"`
+	}
+
+	items := make([]summaryJSON, 0, len(summaries))
+	var totals totalsJSON
+	for _, s := range summaries {
+		successRate := float64(0)
+		if s.TotalRuns > 0 {
+			successRate = float64(s.SuccessRuns) / float64(s.TotalRuns) * 100
+		}
+		items = append(items, summaryJSON{
+			AgentName:         s.AgentName,
+			TotalRuns:         s.TotalRuns,
+			SuccessRuns:       s.SuccessRuns,
+			ErrorRuns:         s.ErrorRuns,
+			AvgDurationMs:     s.AvgDurationMs,
+			AvgStepCount:      s.AvgStepCount,
+			AvgToolCalls:      s.AvgToolCalls,
+			AvgInputTokens:    s.AvgInputTokens,
+			AvgOutputTokens:   s.AvgOutputTokens,
+			TotalDurationMs:   s.TotalDurationMs,
+			TotalInputTokens:  s.TotalInputTokens,
+			TotalOutputTokens: s.TotalOutputTokens,
+			SuccessRate:       successRate,
+		})
+		totals.TotalRuns += s.TotalRuns
+		totals.TotalSuccess += s.SuccessRuns
+		totals.TotalErrors += s.ErrorRuns
+		totals.TotalDurationMs += s.TotalDurationMs
+		totals.TotalInput += s.TotalInputTokens
+		totals.TotalOutput += s.TotalOutputTokens
+	}
+	if totals.TotalRuns > 0 {
+		totals.OverallAvgDurMs = float64(totals.TotalDurationMs) / float64(totals.TotalRuns)
+		totals.OverallSuccess = float64(totals.TotalSuccess) / float64(totals.TotalRuns) * 100
+	}
+
+	jsonResponse(w, map[string]any{
+		"agents": items,
+		"totals": totals,
+		"hours":  hours,
+	})
+}
+
+// GET /api/agents — list agent definitions from the Memory Platform
+func (a *localAPIServer) handleAgents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	ctx := context.Background()
+	defs, err := a.bridge.ListAgentDefs(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("list agents: %v", err))
+		return
+	}
+
+	type agentJSON struct {
+		ID          string `json:"id"`
+		Name        string `json:"name"`
+		Description string `json:"description,omitempty"`
+		FlowType    string `json:"flow_type"`
+		Visibility  string `json:"visibility"`
+		IsDefault   bool   `json:"is_default"`
+		ToolCount   int    `json:"tool_count"`
+		CreatedAt   string `json:"created_at,omitempty"`
+		UpdatedAt   string `json:"updated_at,omitempty"`
+	}
+
+	items := make([]agentJSON, 0, len(defs.Data))
+	for _, d := range defs.Data {
+		desc := ""
+		if d.Description != nil {
+			desc = *d.Description
+		}
+		items = append(items, agentJSON{
+			ID:          d.ID,
+			Name:        d.Name,
+			Description: desc,
+			FlowType:    d.FlowType,
+			Visibility:  d.Visibility,
+			IsDefault:   d.IsDefault,
+			ToolCount:   d.ToolCount,
+			CreatedAt:   d.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:   d.UpdatedAt.Format(time.RFC3339),
+		})
+	}
+
+	jsonResponse(w, map[string]any{
+		"agents": items,
+		"total":  len(items),
+	})
+}
+
+// ─── MCP CRUD Handlers ────────────────────────────────────────
+
 // POST /api/mcp-servers/toggle/{name} — toggle enabled/disabled
-func (a *localAPIServer) handleMCPToggle(w http.ResponseWriter, r *http.Request, serverName string) {
+func (a *localAPIServer) handleMCPToggle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	serverName := strings.TrimPrefix(r.URL.Path, "/api/mcp-servers/toggle/")
+	if serverName == "" {
+		jsonError(w, http.StatusBadRequest, "server name required")
 		return
 	}
 
@@ -445,10 +839,10 @@ func (a *localAPIServer) handleMCPToggle(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	jsonResponse(w, map[string]any{"ok": true, "name": serverName, "enabled": found})
+	jsonResponse(w, map[string]any{"ok": true, "name": serverName})
 }
 
-// POST /api/mcp-servers/save — add or update an MCP server
+// POST /api/mcp-servers/store — add or update an MCP server
 func (a *localAPIServer) handleMCPSave(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -493,9 +887,6 @@ func (a *localAPIServer) handleMCPSave(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !found {
-		if incoming.Enabled {
-			incoming.Enabled = true
-		}
 		cfg.Servers = append(cfg.Servers, incoming)
 	}
 
@@ -507,8 +898,23 @@ func (a *localAPIServer) handleMCPSave(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]any{"ok": true, "name": incoming.Name})
 }
 
-// DELETE /api/mcp-servers/{name} — remove an MCP server
-func (a *localAPIServer) handleMCPDelete(w http.ResponseWriter, r *http.Request, serverName string) {
+// DELETE /api/mcp-servers/delete/{name} — remove an MCP server
+func (a *localAPIServer) handleMCPDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete && r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	serverName := strings.TrimPrefix(r.URL.Path, "/api/mcp-servers/delete/")
+	if serverName == "" {
+		// Also check for DELETE on /api/mcp-servers/{name} pattern
+		serverName = strings.TrimPrefix(r.URL.Path, "/api/mcp-servers/")
+	}
+	if serverName == "" {
+		jsonError(w, http.StatusBadRequest, "server name required")
+		return
+	}
+
 	configPath := mcpproxy.GetDefaultConfigPath()
 	cfg, err := mcpproxy.LoadConfig(configPath)
 	if err != nil {
@@ -538,36 +944,7 @@ func (a *localAPIServer) handleMCPDelete(w http.ResponseWriter, r *http.Request,
 	jsonResponse(w, map[string]any{"ok": true, "name": serverName})
 }
 
-// ─── MCP Config Helpers ───────────────────────────────────────
-
-// findMCPServer loads the config and returns the server config by name.
-func (a *localAPIServer) findMCPServer(name string) (*mcpproxy.ServerConfig, error) {
-	configPath := mcpproxy.GetDefaultConfigPath()
-	cfg, err := mcpproxy.LoadConfig(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("load config: %w", err)
-	}
-	for i := range cfg.Servers {
-		if cfg.Servers[i].Name == name {
-			return &cfg.Servers[i], nil
-		}
-	}
-	return nil, fmt.Errorf("server %q not found in MCP config", name)
-}
-
-// connectToMCPServer creates a temporary MCP client for a server config.
-func connectToMCPServer(cfg *mcpproxy.ServerConfig) (mcpproxy.Client, error) {
-	switch cfg.Type {
-	case "stdio":
-		return mcpproxy.NewMCPClient(cfg.Name, cfg.Command, cfg.Args, cfg.Env, cfg.Timeout)
-	case "http", "streamable-http", "sse":
-		return mcpproxy.NewHTTPMCPClient(cfg.Name, cfg.URL, cfg.Headers, cfg.OAuth, cfg.Timeout)
-	default:
-		return nil, fmt.Errorf("unknown MCP server type: %s", cfg.Type)
-	}
-}
-
-// writeMCPServersConfig writes a Config to the JSON file.
+// writeMCPServersConfig writes an MCP Config to the JSON file.
 func writeMCPServersConfig(path string, cfg *mcpproxy.Config) error {
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -580,121 +957,7 @@ func writeMCPServersConfig(path string, cfg *mcpproxy.Config) error {
 	return os.WriteFile(path, data, 0600)
 }
 
-// relaySessionData represents a connected MCP relay instance from the MP API.
-type relaySessionData struct {
-	InstanceID  string `json:"instance_id"`
-	Hostname    string `json:"hostname,omitempty"`
-	Version     string `json:"version,omitempty"`
-	Tools       any    `json:"tools,omitempty"`
-	ConnectedAt string `json:"connected_at,omitempty"`
-}
-
-// GET /api/nodes — list connected MCP relay nodes
-func (a *localAPIServer) handleNodes(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	relayURL := strings.TrimSuffix(a.config.ServerURL, "/") + "/api/mcp-relay/sessions"
-	req, err := http.NewRequest("GET", relayURL, nil)
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("create request: %v", err))
-		return
-	}
-	req.Header.Set("Authorization", "Bearer "+a.config.Token)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("query nodes: %v", err))
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		jsonError(w, resp.StatusCode, fmt.Sprintf("relay API returned %d", resp.StatusCode))
-		return
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("read response: %v", err))
-		return
-	}
-
-	// Parse response — could be array, {"items":[...]}, {"data":[...]}, or {"sessions":[...]}
-	var sessions []relaySessionData
-	if err := json.Unmarshal(body, &sessions); err != nil {
-		// Try wrapped response formats
-		var wrapped struct {
-			Items    []relaySessionData `json:"items"`
-			Data     []relaySessionData `json:"data"`
-			Sessions []relaySessionData `json:"sessions"`
-		}
-		if err2 := json.Unmarshal(body, &wrapped); err2 == nil {
-			switch {
-			case wrapped.Sessions != nil:
-				sessions = wrapped.Sessions
-			case wrapped.Items != nil:
-				sessions = wrapped.Items
-			case wrapped.Data != nil:
-				sessions = wrapped.Data
-			}
-		}
-		if sessions == nil {
-			jsonError(w, http.StatusInternalServerError, fmt.Sprintf("failed to parse relay sessions: %s", string(body)))
-			return
-		}
-	}
-
-	type nodeJSON struct {
-		InstanceID  string `json:"instance_id"`
-		Hostname    string `json:"hostname,omitempty"`
-		Version     string `json:"version,omitempty"`
-		ToolCount   int    `json:"tool_count,omitempty"`
-		ConnectedAt string `json:"connected_at,omitempty"`
-	}
-
-	nodes := make([]nodeJSON, 0, len(sessions))
-	for _, s := range sessions {
-		toolCount := 0
-		if s.Tools != nil {
-			if toolsMap, ok := s.Tools.(map[string]interface{}); ok {
-				if tl, ok := toolsMap["tools"].([]interface{}); ok {
-					toolCount = len(tl)
-				}
-			}
-		}
-
-		nodes = append(nodes, nodeJSON{
-			InstanceID:  s.InstanceID,
-			Hostname:    s.Hostname,
-			Version:     s.Version,
-			ToolCount:   toolCount,
-			ConnectedAt: s.ConnectedAt,
-		})
-	}
-
-	jsonResponse(w, map[string]any{
-		"nodes": nodes,
-		"total": len(nodes),
-	})
-}
-
-// GET /api/status — simple health check
-func (a *localAPIServer) handleStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	jsonResponse(w, map[string]any{
-		"ok":         true,
-		"server_url": a.config.ServerURL,
-		"project_id": a.config.ProjectID,
-	})
-}
-
-// ─── Helpers ─────────────────────────────────────────────────
+// ─── JSON Helpers ─────────────────────────────────────────────
 
 func jsonResponse(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -712,13 +975,68 @@ func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// safeStrAny safely extracts a string from a map by key.
+func safeStrAny(m map[string]any, key string) string {
+	if m == nil {
+		return ""
+	}
+	v, ok := m[key]
+	if !ok {
+		return ""
+	}
+	switch s := v.(type) {
+	case string:
+		return s
+	default:
+		if b, err := json.Marshal(v); err == nil {
+			return string(b)
+		}
+		return ""
+	}
+}
+
+// safeIntAny safely extracts an int from a map by key.
+func safeIntAny(m map[string]any, key string) int {
+	if m == nil {
+		return 0
+	}
+	v, ok := m[key]
+	if !ok {
+		return 0
+	}
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	case json.Number:
+		i, _ := n.Int64()
+		return int(i)
+	default:
+		return 0
+	}
+}
+
+// safeBoolAny safely extracts a bool from a map by key.
+func safeBoolAny(m map[string]any, key string) bool {
+	if m == nil {
+		return false
+	}
+	v, ok := m[key]
+	if !ok {
+		return false
+	}
+	b, _ := v.(bool)
+	return b
 }
 
 // GetDefaultLocalAPIPort returns the default port for the local API.

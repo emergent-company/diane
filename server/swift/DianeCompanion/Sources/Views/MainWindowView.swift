@@ -29,34 +29,15 @@ struct MainWindowView: View {
         }
     }
 
-    // MARK: - Sidebar with sections
+    // MARK: - Sidebar
 
     private var sidebarView: some View {
         List(selection: $appState.selectedSidebarItem) {
             Section("Diane") {
-                Label("Sessions", systemImage: "message")
-                    .tag(SidebarItem.sessions)
-                Label("MCP Servers", systemImage: "cable.connector.horizontal")
-                    .tag(SidebarItem.mcpServers)
-                Label("Relay Nodes", systemImage: "antenna.radiowaves.left.and.right")
-                    .tag(SidebarItem.relayNodes)
-                Label("Permissions", systemImage: "lock.shield")
-                    .tag(SidebarItem.permissions)
-            }
-
-            Section("Apple Services") {
-                Label("Calendar", systemImage: "calendar")
-                    .tag(SidebarItem.calendar)
-                Label("Reminders", systemImage: "checklist")
-                    .tag(SidebarItem.reminders)
-                Label("Contacts", systemImage: "person.crop.circle")
-                    .tag(SidebarItem.contacts)
-                Label("Mail", systemImage: "envelope")
-                    .tag(SidebarItem.mail)
-                Label("Messages", systemImage: "message")
-                    .tag(SidebarItem.messages)
-                Label("Notes", systemImage: "note.text")
-                    .tag(SidebarItem.notes)
+                ForEach(SidebarItem.allCases) { item in
+                    Label(item.rawValue, systemImage: item.systemIcon)
+                        .tag(item)
+                }
             }
         }
         .listStyle(.sidebar)
@@ -68,26 +49,18 @@ struct MainWindowView: View {
     @ViewBuilder
     private var contentView: some View {
         switch appState.selectedSidebarItem {
+        case .dashboard:
+            StatsView()
         case .sessions:
             SessionsView()
+        case .agents:
+            AgentsView()
         case .mcpServers:
             MCPServersView()
-        case .relayNodes:
+        case .nodes:
             RelayNodesView()
         case .permissions:
             PermissionsView()
-        case .calendar:
-            CalendarView()
-        case .reminders:
-            RemindersView()
-        case .contacts:
-            ContactsView()
-        case .mail:
-            MailView()
-        case .messages:
-            MessagesView()
-        case .notes:
-            NotesView()
         case .none:
             EmptyStateView(
                 title: "Select a Section",

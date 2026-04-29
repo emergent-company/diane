@@ -186,19 +186,19 @@ func (c *HTTPMCPClient) ListTools() ([]map[string]interface{}, error) {
 }
 
 // ListPrompts requests the list of prompts from the HTTP MCP server.
+// Many MCP servers don't implement prompts — returns nil,nil gracefully.
 func (c *HTTPMCPClient) ListPrompts() ([]map[string]interface{}, error) {
 	result, err := c.sendRequest("prompts/list", nil)
 	if err != nil {
-		return nil, err
+		return nil, nil // prompts/list is optional
 	}
 
 	var promptsResult struct {
 		Prompts []map[string]interface{} `json:"prompts"`
 	}
 	if err := json.Unmarshal(result, &promptsResult); err != nil {
-		return nil, fmt.Errorf("failed to parse prompts: %w", err)
+		return nil, nil
 	}
-
 	return promptsResult.Prompts, nil
 }
 

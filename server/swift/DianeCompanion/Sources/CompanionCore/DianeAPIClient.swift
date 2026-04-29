@@ -51,6 +51,12 @@ final class DianeAPIClient: ObservableObject {
 
     // MARK: - Sessions
 
+    /// Log a snippet of response data when JSON decoding fails, so we can debug API mismatches.
+    private func logDecodeFailure<T>(_ type: T.Type, data: Data, context: String) {
+        let prefix = String(data: data.prefix(1024), encoding: .utf8) ?? "<non-utf8>"
+        logger.warning("JSON decode failed for \(context) — expected \(T.self). Response prefix: \(prefix)")
+    }
+
     func fetchSessions(status: String? = nil) async throws -> [DianeSession] {
         var path = "/api/sessions"
         if let s = status {
@@ -61,6 +67,7 @@ final class DianeAPIClient: ObservableObject {
         if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.items {
             return list
         }
+        logDecodeFailure([DianeSession].self, data: data, context: "fetchSessions")
         return (try? JSONDecoder().decode([DianeSession].self, from: data)) ?? []
     }
 
@@ -71,6 +78,7 @@ final class DianeAPIClient: ObservableObject {
         if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.items {
             return list
         }
+        logDecodeFailure([DianeMessage].self, data: data, context: "fetchSessionMessages")
         return (try? JSONDecoder().decode([DianeMessage].self, from: data)) ?? []
     }
 
@@ -82,6 +90,7 @@ final class DianeAPIClient: ObservableObject {
         if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.servers {
             return list
         }
+        logDecodeFailure([MCPServer].self, data: data, context: "fetchMCPServers")
         return (try? JSONDecoder().decode([MCPServer].self, from: data)) ?? []
     }
 
@@ -93,6 +102,7 @@ final class DianeAPIClient: ObservableObject {
         if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.nodes {
             return list
         }
+        logDecodeFailure([RelayNode].self, data: data, context: "fetchRelayNodes")
         return (try? JSONDecoder().decode([RelayNode].self, from: data)) ?? []
     }
 
@@ -136,13 +146,45 @@ final class DianeAPIClient: ObservableObject {
     /// Save (add or update) an MCP server configuration.
     func saveMCPServer(_ server: MCPServer) async throws {
         let body = try JSONEncoder().encode(server)
-        _ = try await post("/api/mcp-servers/save", body: body)
+        _ = try await post("/api/mcp-servers/store", body: body)
     }
 
     /// Delete an MCP server configuration.
     func deleteMCPServer(serverName: String) async throws {
         let encoded = serverName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? serverName
-        _ = try await delete("/api/mcp-servers/\(encoded)")
+        _ = try await post("/api/mcp-servers/delete/\(encoded)", body: nil)
+    }
+
+    // MARK: - Stats
+
+    func fetchAgentStats(hours: Int = 24) async throws -> AgentStatsResponse {
+        let data = try await get("/api/stats?hours=\(hours)")
+        return try JSONDecoder().decode(AgentStatsResponse.self, from: data)
+    }
+
+    // MARK: - Agent Definitions
+
+    func fetchAgentDefs() async throws -> [AgentDef] {
+        let data = try await get("/api/agents")
+        struct Response: Decodable { let agents: [AgentDef]? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.agents {
+            return list
+        }
+        logDecodeFailure([AgentDef].self, data: data, context: "fetchAgentDefs")
+        return []
+    }
+
+    // MARK: - Relay Nodes
+
+    func fetchNodeTools(instanceID: String) async throws -> [MCPToolInfo] {
+        let encoded = instanceID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? instanceID
+        let data = try await get("/api/nodes/\(encoded)/tools")
+        struct Response: Decodable { let tools: [MCPToolInfo]? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.tools {
+            return list
+        }
+        logDecodeFailure([MCPToolInfo].self, data: data, context: "fetchNodeTools")
+        return []
     }
 
     // MARK: - HTTP
@@ -228,6 +270,7 @@ enum DianeAPIError: Error, LocalizedError {
 struct RelayNode: Identifiable, Codable, Hashable, Sendable {
     let instanceID: String
     let hostname: String?
+    let role: String?
     let version: String?
     let toolCount: Int?
     let connectedAt: String?
@@ -236,11 +279,18 @@ struct RelayNode: Identifiable, Codable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case instanceID = "instance_id"
-        case hostname, version
+        case hostname, role, version
         case toolCount = "tool_count"
         case connectedAt = "connected_at"
     }
 
     func hash(into hasher: inout Hasher) { hasher.combine(instanceID) }
     static func == (lhs: RelayNode, rhs: RelayNode) -> Bool { lhs.instanceID == rhs.instanceID }
+}
+
+struct MCPToolInfo: Identifiable, Codable, Sendable {
+    let name: String
+    let description: String?
+
+    var id: String { name }
 }

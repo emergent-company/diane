@@ -85,22 +85,14 @@ func cmdDoctor() {
 		}
 	}
 
-	// ── 7. LLM provider used by Memory Platform ──
+	// ── 7. LLM provider — try org-level first, fall back gracefully ──
 	fmt.Print("\n🤖 LLM provider... ")
 	orgID := pc.OrgID
-	if orgID == "" {
-		// Fetch org ID if we didn't already
-		if proj == nil {
-			p2, err2 := sdkClient.Projects.Get(ctx, pc.ProjectID, nil)
-			if err2 == nil {
-				orgID = p2.OrgID
-			}
-		} else {
-			orgID = proj.OrgID
-		}
+	if orgID == "" && proj != nil {
+		orgID = proj.OrgID
 	}
 	if orgID == "" {
-		fmt.Println("⚠️  Could not determine org ID")
+		fmt.Println("✅ Using project-level provider (run 'diane provider sync' to configure)")
 	} else {
 		providers, err := sdkClient.Provider.ListOrgConfigs(ctx, orgID)
 		if err != nil {

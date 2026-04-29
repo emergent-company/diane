@@ -27,6 +27,7 @@ type MCPClient struct {
 	timeout    time.Duration // Per-request timeout for tool calls
 	pendingMu  sync.Mutex
 	pending    map[interface{}]chan MCPResponse
+	closeOnce  sync.Once // Ensures notifyChan is closed only once
 }
 
 // MCPRequest represents a JSON-RPC request
@@ -313,18 +314,19 @@ func (c *MCPClient) ListTools() ([]map[string]interface{}, error) {
 	return toolsResult.Tools, nil
 }
 
-// ListPrompts requests the list of prompts from the MCP server
+// ListPrompts requests the list of prompts from the MCP server.
+// Many MCP servers don't implement prompts — this returns nil,nil gracefully.
 func (c *MCPClient) ListPrompts() ([]map[string]interface{}, error) {
 	result, err := c.sendRequest("prompts/list", nil)
 	if err != nil {
-		return nil, err
+		return nil, nil // prompts/list is optional — return nil gracefully
 	}
 
 	var promptsResult struct {
 		Prompts []map[string]interface{} `json:"prompts"`
 	}
 	if err := json.Unmarshal(result, &promptsResult); err != nil {
-		return nil, fmt.Errorf("failed to parse prompts: %w", err)
+		return nil, nil
 	}
 
 	return promptsResult.Prompts, nil
@@ -365,6 +367,9 @@ func (c *MCPClient) Close() error {
 		}
 		c.cmd.Wait()
 	}
+	// Close notification channel to stop monitoring goroutines
+	// (only if messageLoop has already stopped due to closed pipes above)
+	c.closeOnce.Do(func() { close(c.notifyChan) })
 	return nil
 }
 

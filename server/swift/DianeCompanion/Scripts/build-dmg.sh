@@ -56,16 +56,28 @@ echo "==> Building Diane v${VERSION}"
 if [ "$NO_SIGN" = true ]; then
     # ── Unsigned build ──
     echo "==> Building unsigned (--no-sign)..."
-    xcodebuild build \
-        -project "${PROJECT}" \
-        -scheme "${SCHEME}" \
-        -configuration "${CONFIGURATION}" \
-        -derivedDataPath "${DERIVED_DATA}" \
-        CODE_SIGN_IDENTITY="" \
-        CODE_SIGNING_REQUIRED=NO \
-        CODE_SIGN_ENTITLEMENTS="" \
-        CODE_SIGNING_ALLOWED=NO \
-        | xcpretty
+    if command -v xcpretty &>/dev/null; then
+        xcodebuild build \
+            -project "${PROJECT}" \
+            -scheme "${SCHEME}" \
+            -configuration "${CONFIGURATION}" \
+            -derivedDataPath "${DERIVED_DATA}" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_ENTITLEMENTS="" \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcpretty
+    else
+        xcodebuild build \
+            -project "${PROJECT}" \
+            -scheme "${SCHEME}" \
+            -configuration "${CONFIGURATION}" \
+            -derivedDataPath "${DERIVED_DATA}" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_ENTITLEMENTS="" \
+            CODE_SIGNING_ALLOWED=NO
+    fi
 
     APP_PATH=$(find "${DERIVED_DATA}/Build/Products/${CONFIGURATION}" -name "${SCHEME}.app" -type d | head -1)
     if [ -z "$APP_PATH" ]; then
@@ -77,18 +89,42 @@ if [ "$NO_SIGN" = true ]; then
     mkdir -p "${EXPORT_PATH}"
     cp -R "$APP_PATH" "${EXPORT_PATH}/${SCHEME}.app"
     APP_PATH="${EXPORT_PATH}/${SCHEME}.app"
+
+    # Ad-hoc sign the app bundle so macOS Gatekeeper doesn't flag it as "damaged"
+    # This creates a CMS signature without an Apple Developer certificate.
+    # Users will still get "unverified developer" on first launch (right-click → Open)
+    # but NOT the "app is damaged and can't be opened" fatal error.
+    echo "==> Ad-hoc signing bundle (unsigned build)..."
+    # Must sign all nested dylibs and frameworks first, then the app
+    find "${APP_PATH}" -name "*.dylib" -o -name "*.framework" -type d | while read -r f; do
+        codesign --force --deep --sign - "${f}" 2>/dev/null || true
+    done
+    codesign --force --deep --sign - "${APP_PATH}" 2>/dev/null || true
+    echo "==> Ad-hoc signature:"
+    codesign -dvv "${APP_PATH}" 2>&1 | head -5 || echo "     (signature not present — non-fatal)"
 else
     # ── Signed/archived build ──
     echo "==> Archiving..."
-    xcodebuild archive \
-        -project "${PROJECT}" \
-        -scheme "${SCHEME}" \
-        -configuration "${CONFIGURATION}" \
-        -archivePath "${ARCHIVE_PATH}" \
-        -derivedDataPath "${DERIVED_DATA}" \
-        DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-}" \
-        CODE_SIGN_STYLE="${DEVELOPMENT_TEAM:+Manual}" \
-        | xcpretty
+    if command -v xcpretty &>/dev/null; then
+        xcodebuild archive \
+            -project "${PROJECT}" \
+            -scheme "${SCHEME}" \
+            -configuration "${CONFIGURATION}" \
+            -archivePath "${ARCHIVE_PATH}" \
+            -derivedDataPath "${DERIVED_DATA}" \
+            DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-}" \
+            CODE_SIGN_STYLE="${DEVELOPMENT_TEAM:+Manual}" \
+            | xcpretty
+    else
+        xcodebuild archive \
+            -project "${PROJECT}" \
+            -scheme "${SCHEME}" \
+            -configuration "${CONFIGURATION}" \
+            -archivePath "${ARCHIVE_PATH}" \
+            -derivedDataPath "${DERIVED_DATA}" \
+            DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-}" \
+            CODE_SIGN_STYLE="${DEVELOPMENT_TEAM:+Manual}"
+    fi
 
     echo "==> Exporting .app..."
     mkdir -p "${EXPORT_PATH}"

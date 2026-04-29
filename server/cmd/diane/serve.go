@@ -4,12 +4,18 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Emergent-Comapny/diane/internal/config"
 )
+
+// httpClient is a shared HTTP client with a 15-second timeout,
+// used across all production API calls.
+var httpClient = &http.Client{Timeout: 15 * time.Second}
 
 // cmdServe is the unified service command for Diane.
 //

@@ -199,9 +199,30 @@ public struct AnyCodable: Codable, Sendable {
         case let i as Int:    try container.encode(i)
         case let d as Double: try container.encode(d)
         case let s as String: try container.encode(s)
+        case let arr as [Any]:
+            var nested = container.unkeyedContainer()
+            for item in arr {
+                try nested.encode(AnyCodable(item))
+            }
+        case let dict as [String: Any]:
+            var nested = container.nestedContainer(keyedBy: AnyCodingKey.self)
+            for (key, val) in dict {
+                if let k = AnyCodingKey(stringValue: key) {
+                    try nested.encode(AnyCodable(val), forKey: k)
+                }
+            }
         default: try container.encodeNil()
         }
     }
+}
+
+/// Dynamic coding key used by AnyCodable for dictionary encoding.
+private struct AnyCodingKey: CodingKey {
+    var stringValue: String
+    var intValue: Int?
+
+    init?(stringValue: String) { self.stringValue = stringValue; self.intValue = nil }
+    init?(intValue: Int) { self.stringValue = "\(intValue)"; self.intValue = intValue }
 }
 
 // MARK: - Agent
@@ -248,48 +269,6 @@ public struct MCPTool: Identifiable, Codable, Sendable {
     public let id: String
     public let name: String
     public let description: String?
-    public let inputSchema: AnyCodable?
-    
-    enum CodingKeys: String, CodingKey {
-        case id, name, description
-        case inputSchema = "input_schema"
-    }
-}
-
-// MARK: - MCP Prompt
-
-public struct MCPPrompt: Identifiable, Codable, Sendable {
-    public let id: String
-    public let name: String
-    public let description: String?
-    public let arguments: [MCPPromptArgument]?
-    
-    enum CodingKeys: String, CodingKey {
-        case id, name, description, arguments
-    }
-    
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        // If the JSON has an "id" field, use it; otherwise default to name
-        self.id = (try? container.decodeIfPresent(String.self, forKey: .id)) ?? ""
-        self.name = try container.decode(String.self, forKey: .name)
-        self.description = try container.decodeIfPresent(String.self, forKey: .description)
-        self.arguments = try container.decodeIfPresent([MCPPromptArgument].self, forKey: .arguments)
-    }
-    
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(id, forKey: .id)
-        try container.encode(name, forKey: .name)
-        try container.encodeIfPresent(description, forKey: .description)
-        try container.encodeIfPresent(arguments, forKey: .arguments)
-    }
-}
-
-public struct MCPPromptArgument: Codable, Sendable {
-    public let name: String
-    public let description: String?
-    public let required: Bool?
 }
 
 // MARK: - User Profile
@@ -533,7 +512,69 @@ public struct ProjectPolicy: Identifiable, Codable, Hashable, Sendable {
     public static func == (lhs: ProjectPolicy, rhs: ProjectPolicy) -> Bool { lhs.id == rhs.id }
 }
 
-// MARK: - Query Result
+// MARK: - Agent Stats (from local /api/stats)
+
+public struct AgentStatsSummary: Identifiable, Codable, Sendable {
+    public let agentName: String
+    public let totalRuns: Int
+    public let successRuns: Int
+    public let errorRuns: Int
+    public let avgDurationMs: Double
+    public let avgStepCount: Double
+    public let avgToolCalls: Double
+    public let avgInputTokens: Double
+    public let avgOutputTokens: Double
+    public let totalDurationMs: Int
+    public let totalInputTokens: Int
+    public let totalOutputTokens: Int
+    public let successRate: Double
+
+    public var id: String { agentName }
+
+    enum CodingKeys: String, CodingKey {
+        case agentName        = "agent_name"
+        case totalRuns        = "total_runs"
+        case successRuns      = "success_runs"
+        case errorRuns        = "error_runs"
+        case avgDurationMs    = "avg_duration_ms"
+        case avgStepCount     = "avg_step_count"
+        case avgToolCalls     = "avg_tool_calls"
+        case avgInputTokens   = "avg_input_tokens"
+        case avgOutputTokens  = "avg_output_tokens"
+        case totalDurationMs  = "total_duration_ms"
+        case totalInputTokens = "total_input_tokens"
+        case totalOutputTokens = "total_output_tokens"
+        case successRate      = "success_rate"
+    }
+}
+
+public struct AgentStatsTotals: Codable, Sendable {
+    public let totalRuns: Int
+    public let totalSuccess: Int
+    public let totalErrors: Int
+    public let totalDurationMs: Int
+    public let totalInputTokens: Int
+    public let totalOutputTokens: Int
+    public let overallAvgDurationMs: Double
+    public let overallSuccessRate: Double
+
+    enum CodingKeys: String, CodingKey {
+        case totalRuns           = "total_runs"
+        case totalSuccess        = "total_success"
+        case totalErrors         = "total_errors"
+        case totalDurationMs     = "total_duration_ms"
+        case totalInputTokens    = "total_input_tokens"
+        case totalOutputTokens   = "total_output_tokens"
+        case overallAvgDurationMs = "overall_avg_duration_ms"
+        case overallSuccessRate  = "overall_success_rate"
+    }
+}
+
+public struct AgentStatsResponse: Codable, Sendable {
+    public let agents: [AgentStatsSummary]
+    public let totals: AgentStatsTotals
+    public let hours: Int
+}
 
 /// Response from POST /api/graph/search
 /// Returns ranked graph objects with semantic + lexical scores.
@@ -591,9 +632,8 @@ private enum AnyValue: Decodable {
     case int(Int)
     case double(Double)
     case bool(Bool)
-    case array([Any])
     case null
-
+    
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if let str = try? container.decode(String.self) {
@@ -604,36 +644,19 @@ private enum AnyValue: Decodable {
             self = .double(d)
         } else if let b = try? container.decode(Bool.self) {
             self = .bool(b)
-        } else if let arr = try? container.decode([AnyValue].self) {
-            self = .array(arr.map(\.anyValue))
         } else if container.decodeNil() {
             self = .null
         } else {
             self = .null
         }
     }
-
+    
     var stringValue: String? {
         switch self { case .string(let s): return s; default: return nil }
     }
-
+    
     var intValue: Int? {
         switch self { case .int(let i): return i; case .double(let d): return Int(d); default: return nil }
-    }
-
-    var arrayValue: [Any]? {
-        switch self { case .array(let a): return a; default: return nil }
-    }
-
-    var anyValue: Any {
-        switch self {
-        case .string(let v): return v
-        case .int(let v): return v
-        case .double(let v): return v
-        case .bool(let v): return v
-        case .array(let v): return v
-        case .null: return NSNull()
-        }
     }
 }
 
@@ -647,19 +670,62 @@ struct DianeSession: Identifiable, Codable, Hashable, Sendable {
     let messageCount: Int?
     let totalTokens: Int?
     let createdAt: String?
+    let updatedAt: String?
+    
+    // Server-side properties we don't store as fields but decode gracefully
+    private let properties: [String: AnyValue]?
     
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
     static func == (lhs: DianeSession, rhs: DianeSession) -> Bool { lhs.id == rhs.id }
     
+    enum CodingKeys: String, CodingKey {
+        case id, key, title, status
+        case messageCount = "message_count"
+        case totalTokens = "total_tokens"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case properties
+        case entityID = "entity_id"
+    }
+    
     init(from decoder: Decoder) throws {
-        let graph = try GraphObjectJSON(from: decoder)
-        self.id = graph.entityID
-        self.key = graph.key
-        self.createdAt = graph.createdAt
-        self.title = graph.properties?["title"]?.stringValue
-        self.status = graph.properties?["status"]?.stringValue
-        self.messageCount = graph.properties?["message_count"]?.intValue
-        self.totalTokens = graph.properties?["total_tokens"]?.intValue
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        // Support both flat (id) and graph (entity_id) formats
+        if let flatID = try? container.decode(String.self, forKey: .id) {
+            self.id = flatID
+        } else {
+            self.id = try container.decode(String.self, forKey: .entityID)
+        }
+        self.key = try container.decodeIfPresent(String.self, forKey: .key)
+        self.createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
+        self.properties = try container.decodeIfPresent([String: AnyValue].self, forKey: .properties)
+        
+        // Flat JSON format
+        if let t = try? container.decodeIfPresent(String.self, forKey: .title) {
+            self.title = t
+        } else {
+            self.title = self.properties?["title"]?.stringValue
+        }
+        if let s = try? container.decodeIfPresent(String.self, forKey: .status) {
+            self.status = s
+        } else {
+            self.status = self.properties?["status"]?.stringValue
+        }
+        if let mc = try? container.decodeIfPresent(Int.self, forKey: .messageCount) {
+            self.messageCount = mc
+        } else {
+            self.messageCount = self.properties?["message_count"]?.intValue
+        }
+        if let tt = try? container.decodeIfPresent(Int.self, forKey: .totalTokens) {
+            self.totalTokens = tt
+        } else {
+            self.totalTokens = self.properties?["total_tokens"]?.intValue
+        }
+        if let ua = try? container.decodeIfPresent(String.self, forKey: .updatedAt) {
+            self.updatedAt = ua
+        } else {
+            self.updatedAt = self.properties?["updated_at"]?.stringValue ?? self.properties?["last_active_at"]?.stringValue
+        }
     }
     
     func encode(to encoder: Encoder) throws {
@@ -671,30 +737,26 @@ struct DianeSession: Identifiable, Codable, Hashable, Sendable {
         try container.encodeIfPresent(messageCount, forKey: .messageCount)
         try container.encodeIfPresent(totalTokens, forKey: .totalTokens)
         try container.encodeIfPresent(createdAt, forKey: .createdAt)
+        try container.encodeIfPresent(updatedAt, forKey: .updatedAt)
     }
+}
+
+// MARK: - Tool Call
+
+struct ToolCall: Identifiable, Codable, Sendable {
+    let id: String
+    let name: String
+    let arguments: String?
     
     enum CodingKeys: String, CodingKey {
-        case id, key, title, status
-        case messageCount = "message_count"
-        case totalTokens = "total_tokens"
-        case createdAt = "created_at"
+        case id, name, arguments
     }
-}
-
-// MARK: - Tool Call Models
-
-/// A tool call made by the assistant during a session.
-struct DianeToolCall: Codable, Sendable {
-    let id: String?
-    let name: String?
-    let arguments: String?
-}
-
-/// A tool result returned after executing a tool call.
-struct ToolResult: Codable, Sendable {
-    let callID: String?
-    let content: String?
-    let isError: Bool?
+    
+    init(id: String, name: String, arguments: String? = nil) {
+        self.id = id
+        self.name = name
+        self.arguments = arguments
+    }
 }
 
 // MARK: - Diane Message
@@ -705,31 +767,58 @@ struct DianeMessage: Identifiable, Codable, Sendable {
     let content: String
     let sequenceNumber: Int?
     let tokenCount: Int?
+    let toolCalls: [ToolCall]?
     let reasoningContent: String?
-    let toolCalls: [DianeToolCall]?
-
+    let createdAt: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case id, role, content
+        case sequenceNumber = "sequence_number"
+        case tokenCount = "token_count"
+        case toolCalls = "tool_calls"
+        case reasoningContent = "reasoning_content"
+        case createdAt = "created_at"
+        case entityID = "entity_id"
+        case properties
+    }
+    
     init(from decoder: Decoder) throws {
-        let graph = try GraphObjectJSON(from: decoder)
-        self.id = graph.entityID
-        self.role = graph.properties?["role"]?.stringValue ?? ""
-        self.content = graph.properties?["content"]?.stringValue ?? ""
-        self.sequenceNumber = graph.properties?["sequence_number"]?.intValue
-        self.tokenCount = graph.properties?["token_count"]?.intValue
-        self.reasoningContent = graph.properties?["reasoning_content"]?.stringValue
-
-        // Decode tool_calls from the properties array
-        if let rawArray = graph.properties?["tool_calls"]?.arrayValue {
-            if let data = try? JSONSerialization.data(withJSONObject: rawArray),
-               let decoded = try? JSONDecoder().decode([DianeToolCall].self, from: data) {
-                self.toolCalls = decoded
-            } else {
-                self.toolCalls = nil
-            }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        // Support both flat (id) and graph (entity_id) formats
+        if let flatID = try? container.decode(String.self, forKey: .id) {
+            self.id = flatID
+        } else {
+            self.id = try container.decode(String.self, forKey: .entityID)
+        }
+        
+        let props = try container.decodeIfPresent([String: AnyValue].self, forKey: .properties)
+        
+        // Decode from flat JSON first, fall back to graph properties
+        self.role = (try? container.decodeIfPresent(String.self, forKey: .role))
+            ?? props?["role"]?.stringValue ?? ""
+        self.content = (try? container.decodeIfPresent(String.self, forKey: .content))
+            ?? props?["content"]?.stringValue ?? ""
+        self.sequenceNumber = (try? container.decodeIfPresent(Int.self, forKey: .sequenceNumber))
+            ?? props?["sequence_number"]?.intValue
+        self.tokenCount = (try? container.decodeIfPresent(Int.self, forKey: .tokenCount))
+            ?? props?["token_count"]?.intValue
+        self.createdAt = (try? container.decodeIfPresent(String.self, forKey: .createdAt))
+        
+        // Reasoning content: check flat JSON first, then graph properties
+        self.reasoningContent = (try? container.decodeIfPresent(String.self, forKey: .reasoningContent))
+            ?? props?["reasoningContent"]?.stringValue
+            ?? props?["reasoning_content"]?.stringValue
+        
+        // Tool calls: check flat JSON first, then graph properties
+        if let flatTCs = try? container.decodeIfPresent([ToolCall].self, forKey: .toolCalls) {
+            self.toolCalls = flatTCs.isEmpty ? nil : flatTCs
+        } else if let rawTCs = props?["toolCalls"] {
+            self.toolCalls = Self.decodeToolCalls(from: rawTCs)
         } else {
             self.toolCalls = nil
         }
     }
-
+    
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
@@ -737,13 +826,85 @@ struct DianeMessage: Identifiable, Codable, Sendable {
         try container.encode(content, forKey: .content)
         try container.encodeIfPresent(sequenceNumber, forKey: .sequenceNumber)
         try container.encodeIfPresent(tokenCount, forKey: .tokenCount)
-        // Skip encoding reasoningContent and toolCalls back (read-only from API)
+        try container.encodeIfPresent(toolCalls, forKey: .toolCalls)
+        try container.encodeIfPresent(reasoningContent, forKey: .reasoningContent)
+        try container.encodeIfPresent(createdAt, forKey: .createdAt)
     }
+    
+    /// Decode tool calls from the graph properties `toolCalls` field, which is stored as an array of dictionaries.
+    private static func decodeToolCalls(from raw: AnyValue?) -> [ToolCall]? {
+        guard let raw = raw else { return nil }
+        // The toolCalls property is stored as a JSON array in graph properties
+        // It might come through as a JSON string or as nested values
+        return nil // Handled below via the Array-typed properties
+    }
+}
+
+// MARK: - Tool Call Parsing from Graph Properties
+
+extension DianeMessage {
+    /// Attempt to extract tool calls from raw graph properties.
+    /// The properties map stores toolCalls as an untyped `Any` from the JSON decoder.
+    static func toolCalls(fromRaw value: Any?) -> [ToolCall]? {
+        guard let value = value else { return nil }
+        if let arr = value as? [[String: Any]] {
+            return arr.compactMap { dict in
+                guard let id = dict["id"] as? String ?? (dict["id"] as? String),
+                      let name = dict["name"] as? String else { return nil }
+                let args: String?
+                if let s = dict["arguments"] as? String { args = s }
+                else if let d = dict["arguments"] {
+                    args = (try? JSONSerialization.data(withJSONObject: d, options: .fragmentsAllowed))
+                        .flatMap { String(data: $0, encoding: .utf8) }
+                } else { args = nil }
+                return ToolCall(id: id, name: name, arguments: args)
+            }.nilIfEmpty
+        }
+        if let arr = value as? [Any] {
+            return arr.compactMap { item in
+                guard let dict = item as? [String: Any],
+                      let id = dict["id"] as? String,
+                      let name = dict["name"] as? String else { return nil }
+                let args: String?
+                if let s = dict["arguments"] as? String { args = s }
+                else if let d = dict["arguments"] {
+                    args = (try? JSONSerialization.data(withJSONObject: d, options: .fragmentsAllowed))
+                        .flatMap { String(data: $0, encoding: .utf8) }
+                } else { args = nil }
+                return ToolCall(id: id, name: name, arguments: args)
+            }.nilIfEmpty
+        }
+        return nil
+    }
+}
+
+// MARK: - Array Extension
+
+private extension Array {
+    var nilIfEmpty: Self? { isEmpty ? nil : self }
+}
+
+// MARK: - Agent Definition
+
+struct AgentDef: Identifiable, Codable, Sendable {
+    let id: String
+    let name: String
+    let description: String?
+    let flowType: String
+    let visibility: String
+    let isDefault: Bool
+    let toolCount: Int
+    let createdAt: String?
+    let updatedAt: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, role, content
-        case sequenceNumber = "sequence_number"
-        case tokenCount = "token_count"
+        case id, name, description
+        case flowType = "flow_type"
+        case visibility
+        case isDefault = "is_default"
+        case toolCount = "tool_count"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
     }
 }
 

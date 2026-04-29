@@ -34,6 +34,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -123,20 +124,19 @@ func cmdMCPRelay(cfg MCPRelayConfig) {
 		err := session.run()
 		if err != nil {
 			log.Printf("[mcp-relay] Connection error: %v (reconnecting in %v)", err, backoff)
+			select {
+			case <-session.done:
+				return
+			case <-time.After(backoff):
+			}
+			// Exponential backoff, cap at 5 minutes
+			backoff *= 2
+			if backoff > 5*time.Minute {
+				backoff = 5 * time.Minute
+			}
 		} else {
+			// Clean exit (shutdown requested or successful reconnect cycle)
 			backoff = cfg.ReconnectDelay
-		}
-
-		select {
-		case <-session.done:
-			return
-		case <-time.After(backoff):
-		}
-
-		// Exponential backoff, cap at 5 minutes
-		backoff *= 2
-		if backoff > 5*time.Minute {
-			backoff = 5 * time.Minute
 		}
 	}
 }
@@ -208,6 +208,12 @@ func (s *MCPSession) run() error {
 
 	go func() {
 		for {
+			select {
+			case <-s.done:
+				return
+			default:
+			}
+
 			_, msg, err := conn.ReadMessage()
 			if err != nil {
 				errCh <- fmt.Errorf("ws read: %w", err)
@@ -248,7 +254,9 @@ func (s *MCPSession) run() error {
 			var respID struct {
 				ID string `json:"id"`
 			}
-			json.Unmarshal(line, &respID)
+			if err := json.Unmarshal(line, &respID); err != nil {
+				log.Printf("[mcp-relay] Failed to parse response ID from MCP output: %v", err)
+			}
 
 			// If this response matches a pending relay tool call, wrap it in
 			// a ResponseFrame so the MP server's relay handler can route it.
@@ -279,7 +287,13 @@ func (s *MCPSession) run() error {
 		}
 	}()
 
-	return <-errCh
+	// Wait for first error or clean shutdown
+	select {
+	case err := <-errCh:
+		return err
+	case <-s.done:
+		return nil
+	}
 }
 
 func (s *MCPSession) startMCP() error {
@@ -336,7 +350,9 @@ func (s *MCPSession) sendWS(msg json.RawMessage) {
 	s.wsMutex.Lock()
 	defer s.wsMutex.Unlock()
 	if s.wsConn != nil {
-		s.wsConn.WriteMessage(websocket.TextMessage, msg)
+		if err := s.wsConn.WriteMessage(websocket.TextMessage, msg); err != nil {
+			log.Printf("[mcp-relay] WS write error: %v", err)
+		}
 	}
 }
 
@@ -356,9 +372,21 @@ func (s *MCPSession) forwardToMCP(frame RelayFrame) {
 	}
 
 	// Send the MCP JSON-RPC request to the subprocess
-	s.mcpIn.Write(frame.Payload)
-	s.mcpIn.WriteByte('\n')
-	s.mcpIn.Flush()
+	s.mcpMu.Lock()
+	if _, err := s.mcpIn.Write(frame.Payload); err != nil {
+		log.Printf("[mcp-relay] Error writing to MCP stdin: %v", err)
+		s.mcpMu.Unlock()
+		return
+	}
+	if err := s.mcpIn.WriteByte('\n'); err != nil {
+		log.Printf("[mcp-relay] Error writing newline to MCP stdin: %v", err)
+		s.mcpMu.Unlock()
+		return
+	}
+	if err := s.mcpIn.Flush(); err != nil {
+		log.Printf("[mcp-relay] Error flushing MCP stdin: %v", err)
+	}
+	s.mcpMu.Unlock()
 }
 
 func (s *MCPSession) sendRegister() {
@@ -682,13 +710,9 @@ func mergeProxyConfigs(configs []scoredConfig) string {
 	seen := map[string]int{} // server name → index in merged.Servers
 
 	// Sort by score ascending so higher scores override lower
-	for i := 0; i < len(configs)-1; i++ {
-		for j := i + 1; j < len(configs); j++ {
-			if configs[i].score > configs[j].score {
-				configs[i], configs[j] = configs[j], configs[i]
-			}
-		}
-	}
+	sort.Slice(configs, func(i, j int) bool {
+		return configs[i].score < configs[j].score
+	})
 
 	for _, sc := range configs {
 		var cfg proxyCfg
@@ -705,7 +729,11 @@ func mergeProxyConfigs(configs []scoredConfig) string {
 		}
 	}
 
-	data, _ := json.MarshalIndent(merged, "", "  ")
+	data, err := json.MarshalIndent(merged, "", "  ")
+	if err != nil {
+		log.Printf("[mcp-relay] Failed to marshal merged config: %v", err)
+		return `{"servers":[]}`
+	}
 	return string(data)
 }
 
@@ -714,7 +742,10 @@ func mergeProxyConfigs(configs []scoredConfig) string {
 // generateInstanceID creates a random instance ID like "diane-a4fd".
 func generateInstanceID() string {
 	bytes := make([]byte, 2)
-	rand.Read(bytes)
+	if _, err := rand.Read(bytes); err != nil {
+		log.Printf("[mcp-relay] Failed to generate random instance ID: %v", err)
+		return "diane-" + fmt.Sprintf("%04x", time.Now().UnixNano()&0xFFFF)
+	}
 	return "diane-" + hex.EncodeToString(bytes)
 }
 

@@ -1,13 +1,11 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
-/// Sessions view — lists Diane conversation sessions with search, filter, and
-/// rich message display (thinking blocks, tool calls, chat bubbles).
+/// Sessions view — lists Diane conversation sessions with chat-like message transcripts.
+/// Shows session status badges, relative timestamps, collapsible tool calls, and thinking sections.
 struct SessionsView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var serverConfig: ServerConfiguration
     @EnvironmentObject var dianeAPI: DianeAPIClient
-    @EnvironmentObject var apiClient: EmergentAPIClient
 
     @State private var sessions: [DianeSession] = []
     @State private var selectedSession: DianeSession? = nil
@@ -15,53 +13,27 @@ struct SessionsView: View {
     @State private var isLoading = false
     @State private var isLoadingMessages = false
     @State private var error: String? = nil
-
-    // Search & filter
-    @State private var searchText = ""
-    @State private var statusFilter: SessionFilter = .all
-
-    enum SessionFilter: String, CaseIterable {
-        case all = "All"
-        case active = "Active"
-        case completed = "Completed"
-    }
+    @State private var messagesError: String? = nil
 
     var body: some View {
         HSplitView {
             sessionsList
-                .frame(minWidth: 250)
+                .frame(minWidth: 220, idealWidth: 350)
 
             if let session = selectedSession {
                 sessionDetailPanel(session)
-                    .frame(minWidth: 320)
+                    .frame(minWidth: 220, idealWidth: 350)
             } else {
                 EmptyStateView(
                     title: "Select a Session",
                     icon: "message",
                     description: "Select a conversation session to view its transcript."
                 )
-                .frame(minWidth: 320)
+                .frame(minWidth: 220, idealWidth: 350)
             }
         }
         .navigationTitle("Sessions")
         .task { await load() }
-    }
-
-    // MARK: - Filtered Sessions
-
-    var filteredSessions: [DianeSession] {
-        var result = sessions
-        // Filter by status
-        switch statusFilter {
-        case .all: break
-        case .active: result = result.filter { $0.status == "active" || $0.status == nil }
-        case .completed: result = result.filter { $0.status == "completed" }
-        }
-        // Filter by search text
-        if !searchText.isEmpty {
-            result = result.filter { ($0.title ?? "").localizedCaseInsensitiveContains(searchText) }
-        }
-        return result
     }
 
     // MARK: - Sessions List
@@ -69,38 +41,6 @@ struct SessionsView: View {
     @ViewBuilder
     private var sessionsList: some View {
         VStack(spacing: 0) {
-            // Search bar
-            HStack {
-                Image(systemName: "magnifyingglass")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                TextField("Search sessions…", text: $searchText)
-                    .textFieldStyle(.plain)
-                    .font(.caption)
-                if !searchText.isEmpty {
-                    Button {
-                        searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.borderless)
-                }
-            }
-            .padding(8)
-            .background(Color.primary.opacity(0.03))
-
-            // Status filter
-            Picker("", selection: $statusFilter) {
-                ForEach(SessionFilter.allCases, id: \.self) { filter in
-                    Text(filter.rawValue).tag(filter)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-
             if let err = error {
                 ErrorBannerView(message: err) {
                     Task { await load() }
@@ -110,16 +50,14 @@ struct SessionsView: View {
 
             if isLoading && sessions.isEmpty {
                 LoadingStateView(message: "Loading sessions…")
-            } else if filteredSessions.isEmpty {
+            } else if sessions.isEmpty {
                 EmptyStateView(
-                    title: searchText.isEmpty ? "No Sessions" : "No Results",
-                    icon: searchText.isEmpty ? "message" : "magnifyingglass",
-                    description: searchText.isEmpty
-                        ? "No conversation sessions found."
-                        : "No sessions match \"\(searchText)\"."
+                    title: "No Sessions",
+                    icon: "message",
+                    description: "No conversation sessions found."
                 )
             } else {
-                List(filteredSessions, selection: $selectedSession) { session in
+                List(sessions, selection: $selectedSession) { session in
                     sessionRow(session)
                         .tag(session)
                 }
@@ -128,7 +66,7 @@ struct SessionsView: View {
 
             Divider()
             HStack {
-                Text("\(filteredSessions.count) session\(filteredSessions.count == 1 ? "" : "s")")
+                Text("\(sessions.count) session\(sessions.count == 1 ? "" : "s")")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -147,78 +85,116 @@ struct SessionsView: View {
     }
 
     private func sessionRow(_ session: DianeSession) -> some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(session.status == "active" ? Color.green : Color.secondary)
-                .frame(width: 7, height: 7)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(session.title ?? "Untitled")
-                    .font(.subheadline)
-                    .lineLimit(1)
+        HStack(spacing: 10) {
+            // Status indicator
+            statusIcon(session.status)
+                .font(.system(size: 10))
+                .frame(width: 20, height: 20)
+
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
+                    Text(session.title ?? "Untitled")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .lineLimit(1)
+                    statusBadge(session.status)
+                }
+                HStack(spacing: 8) {
                     if let count = session.messageCount {
-                        Text("\(count) messages")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                        HStack(spacing: 3) {
+                            Image(systemName: "text.bubble")
+                                .font(.system(size: 9))
+                            Text("\(count)")
+                                .font(.caption2)
+                        }
+                        .foregroundStyle(.secondary)
                     }
                     if let tokens = session.totalTokens {
-                        Text("\(tokens) tokens")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                        HStack(spacing: 3) {
+                            Image(systemName: "number")
+                                .font(.system(size: 9))
+                            Text(formatTokenCount(tokens))
+                                .font(.caption2)
+                        }
+                        .foregroundStyle(.tertiary)
                     }
-                    if let date = session.createdAt {
-                        Text(formatDate(date))
+                    Spacer()
+                    if let dateStr = session.updatedAt ?? session.createdAt {
+                        Text(relativeTimestamp(dateStr))
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
+                            .help(dateStr)
                     }
                 }
             }
-            Spacer()
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 3)
     }
 
-    // MARK: - Session Detail (Message Transcript)
+    @ViewBuilder
+    private func statusIcon(_ status: String?) -> some View {
+        switch status?.lowercased() {
+        case "active", "running":
+            Image(systemName: "circle.fill")
+                .foregroundStyle(.green)
+        case "paused", "idle":
+            Image(systemName: "pause.circle.fill")
+                .foregroundStyle(.orange)
+        case "completed", "closed", "done":
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.secondary)
+        case "error", "failed":
+            Image(systemName: "exclamationmark.circle.fill")
+                .foregroundStyle(.red)
+        default:
+            Image(systemName: "circle.dashed")
+                .foregroundStyle(.tertiary)
+        }
+    }
 
-    @State private var expandedReasoning: Set<String> = []
-    @State private var expandedToolCalls: Set<String> = []
-    @State private var showingExporter = false
-    @State private var exportData: Data? = nil
+    @ViewBuilder
+    private func statusBadge(_ status: String?) -> some View {
+        if let s = status, !s.isEmpty {
+            Text(s.capitalized)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(statusColor(s))
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(statusColor(s).opacity(0.1))
+                .cornerRadius(3)
+        }
+    }
+
+    private func statusColor(_ status: String) -> Color {
+        switch status.lowercased() {
+        case "active", "running": return .green
+        case "paused", "idle": return .orange
+        case "completed", "closed", "done": return .secondary
+        case "error", "failed": return .red
+        default: return .secondary
+        }
+    }
+
+    // MARK: - Session Detail (Chat-like Transcript)
 
     private func sessionDetailPanel(_ session: DianeSession) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             // Header
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(session.title ?? "Untitled")
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                    HStack(spacing: 6) {
-                        Text(session.status?.capitalized ?? "Unknown")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        if let count = session.messageCount {
-                            Text("\(count) messages")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                }
-                Spacer()
-
-                Button("Export") {
-                    exportSession(session)
-                }
-                .font(.caption)
-                .buttonStyle(.borderless)
-            }
-            .padding(12)
-            .background(Color.primary.opacity(0.04))
+            sessionHeader(session)
 
             Divider()
 
             if isLoadingMessages {
                 LoadingStateView(message: "Loading messages…")
+            } else if let err = messagesError {
+                ErrorBannerView(message: err) {
+                    Task {
+                        if let session = selectedSession {
+                            await loadMessages(session: session)
+                        }
+                    }
+                }
+                .padding(8)
             } else if messages.isEmpty {
                 EmptyStateView(
                     title: "No Messages",
@@ -230,11 +206,12 @@ struct SessionsView: View {
                     ScrollView {
                         LazyVStack(spacing: 0) {
                             ForEach(messages) { message in
-                                messageBlock(message)
+                                messageBubble(message)
                                     .id(message.id)
                             }
                         }
-                        .padding(12)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
                     }
                     .onAppear {
                         if let last = messages.last {
@@ -244,147 +221,289 @@ struct SessionsView: View {
                 }
             }
         }
-        .fileExporter(
-            isPresented: $showingExporter,
-            document: JSONFile(data: exportData ?? Data()),
-            contentType: .json,
-            defaultFilename: "session-\(session.id.prefix(8)).json"
-        ) { _ in }
     }
 
-    // MARK: - Message Block
+    private func sessionHeader(_ session: DianeSession) -> some View {
+        HStack(spacing: 10) {
+            statusIcon(session.status)
+                .font(.system(size: 14))
 
-    private func messageBlock(_ message: DianeMessage) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            // Header row
+            VStack(alignment: .leading, spacing: 3) {
+                Text(session.title ?? "Untitled")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                HStack(spacing: 8) {
+                    statusBadge(session.status)
+                    if let dateStr = session.updatedAt ?? session.createdAt {
+                        Text(relativeTimestamp(dateStr))
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    if let count = session.messageCount {
+                        Text("\(count) messages")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+
+            Spacer()
+        }
+        .padding(12)
+        .background(Color.primary.opacity(0.04))
+    }
+
+    // MARK: - Message Bubble
+
+    @ViewBuilder
+    private func messageBubble(_ message: DianeMessage) -> some View {
+        let isUser = message.role.lowercased() == "user"
+        let isSystem = message.role.lowercased() == "system"
+        let isAssistant = message.role.lowercased() == "assistant"
+
+        VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
+            // Role label + sequence
             HStack(spacing: 6) {
-                roleBadge(message.role)
+                if !isUser {
+                    roleBadge(message.role)
+                }
                 if let seq = message.sequenceNumber {
                     Text("#\(seq)")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
-                Spacer()
+                if let tokens = message.tokenCount, tokens > 0 {
+                    Text("\(tokens) tok")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
             }
+            .padding(.horizontal, 4)
 
-            // Reasoning content (thinking block) — collapsible, orange
-            if let reasoning = message.reasoningContent, !reasoning.isEmpty {
-                let isExpanded = expandedReasoning.contains(message.id)
-                VStack(alignment: .leading, spacing: 4) {
-                    Button {
-                        if isExpanded {
-                            expandedReasoning.remove(message.id)
-                        } else {
-                            expandedReasoning.insert(message.id)
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "brain")
-                                .font(.caption2)
-                            Text("Thinking")
-                                .font(.caption)
-                                .fontWeight(.medium)
-                            Spacer()
-                            Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                                .font(.caption2)
-                        }
-                        .foregroundStyle(.orange)
-                    }
-                    .buttonStyle(.plain)
+            // Content bubble
+            VStack(alignment: .leading, spacing: 6) {
+                // Reasoning / Thinking section (collapsible)
+                if let thinking = message.reasoningContent, !thinking.isEmpty {
+                    thinkingSection(thinking)
+                }
 
-                    if isExpanded {
-                        Text(reasoning)
-                            .font(.system(.caption, design: .monospaced))
+                // Tool calls section (collapsible)
+                if let toolCalls = message.toolCalls, !toolCalls.isEmpty {
+                    toolCallsSection(toolCalls)
+                }
+
+                // Main content
+                if !message.content.isEmpty {
+                    if isSystem {
+                        // System messages: subtle italic style
+                        Text(message.content)
+                            .font(.callout)
                             .foregroundStyle(.secondary)
+                            .italic()
+                    } else {
+                        Text(message.content)
+                            .font(.body)
                             .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(8)
-                            .background(Color.orange.opacity(0.05))
-                            .cornerRadius(6)
                     }
                 }
-                .padding(.vertical, 4)
             }
-
-            // Tool calls — collapsible, purple
-            if let calls = message.toolCalls, !calls.isEmpty {
-                let isExpanded = expandedToolCalls.contains(message.id)
-                VStack(alignment: .leading, spacing: 4) {
-                    Button {
-                        if isExpanded {
-                            expandedToolCalls.remove(message.id)
-                        } else {
-                            expandedToolCalls.insert(message.id)
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "wrench")
-                                .font(.caption2)
-                            Text("\(calls.count) tool call\(calls.count == 1 ? "" : "s")")
-                                .font(.caption)
-                                .fontWeight(.medium)
-                            Spacer()
-                            Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                                .font(.caption2)
-                        }
-                        .foregroundStyle(.purple)
-                    }
-                    .buttonStyle(.plain)
-
-                    if isExpanded {
-                        ForEach(Array(calls.enumerated()), id: \.offset) { idx, call in
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 4) {
-                                    Text(call.name ?? "tool")
-                                        .font(.caption)
-                                        .fontWeight(.semibold)
-                                        .foregroundStyle(.purple)
-                                }
-                                if let args = call.arguments, !args.isEmpty {
-                                    Text(args)
-                                        .font(.system(.caption2, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(5)
-                                }
-                            }
-                            .padding(8)
-                            .background(Color.purple.opacity(0.05))
-                            .cornerRadius(6)
-                        }
-                    }
-                }
-                .padding(.vertical, 4)
+            .padding(10)
+            .background(bubbleBackground(isUser: isUser, isSystem: isSystem))
+            .cornerRadius(10)
+            .overlay(alignment: isUser ? .bottomTrailing : .bottomLeading) {
+                BubbleTail(isUser: isUser)
+                    .fill(bubbleTailColor(isUser: isUser, isSystem: isSystem))
+                    .frame(width: 8, height: 8)
+                    .offset(x: isUser ? 6 : -6, y: 4)
             }
+        }
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+    }
 
-            // Main content
-            Text(message.content)
-                .font(.system(.body, design: .monospaced))
+    private func bubbleBackground(isUser: Bool, isSystem: Bool) -> Color {
+        if isUser { return Color.blue.opacity(0.12) }
+        if isSystem { return Color.clear }
+        return Color.primary.opacity(0.05)
+    }
+
+    private func bubbleTailColor(isUser: Bool, isSystem: Bool) -> Color {
+        if isUser { return Color.blue.opacity(0.12) }
+        if isSystem { return Color.clear }
+        return Color.primary.opacity(0.05)
+    }
+
+    // MARK: - Thinking / Reasoning Section
+
+    @ViewBuilder
+    private func thinkingSection(_ content: String) -> some View {
+        DisclosureGroup {
+            Text(content)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 4)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "brain")
+                    .font(.system(size: 10))
+                Text("Thinking")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                Text("(\(content.count) chars)")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .foregroundStyle(.orange)
         }
-        .padding(10)
-        .background(message.role == "assistant" ? Color.primary.opacity(0.03) : Color.clear)
+        .disclosureGroupStyle(PlainDisclosureGroupStyle())
+        .padding(6)
+        .background(Color.orange.opacity(0.06))
+        .cornerRadius(6)
+    }
+
+    // MARK: - Tool Calls Section
+
+    @ViewBuilder
+    private func toolCallsSection(_ toolCalls: [ToolCall]) -> some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(toolCalls) { tc in
+                    toolCallRow(tc)
+                }
+            }
+            .padding(.top, 4)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "wrench.and.screwdriver")
+                    .font(.system(size: 10))
+                Text("Tool Calls")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                Text("(\(toolCalls.count))")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .foregroundStyle(.purple)
+        }
+        .disclosureGroupStyle(PlainDisclosureGroupStyle())
+        .padding(6)
+        .background(Color.purple.opacity(0.06))
+        .cornerRadius(6)
+    }
+
+    @ViewBuilder
+    private func toolCallRow(_ tc: ToolCall) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: "function")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.purple)
+                Text(tc.name)
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.purple)
+                if !tc.id.isEmpty {
+                    Text(tc.id)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+
+            if let args = tc.arguments, !args.isEmpty {
+                Text(formatToolArgs(args))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .lineLimit(3)
+            }
+        }
+        .padding(6)
+        .background(Color.purple.opacity(0.04))
+        .cornerRadius(4)
+    }
+
+    /// Format tool arguments: try to pretty-print JSON, fall back to raw string.
+    private func formatToolArgs(_ raw: String) -> String {
+        guard let data = raw.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data),
+              let pretty = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys, .withoutEscapingSlashes]),
+              let str = String(data: pretty, encoding: .utf8)
+        else { return raw }
+        return str
     }
 
     // MARK: - Role Badge
 
     private func roleBadge(_ role: String) -> some View {
-        Text(role.capitalized)
-            .font(.caption2)
-            .fontWeight(.semibold)
-            .foregroundStyle(roleColor(role))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(roleColor(role).opacity(0.1))
-            .cornerRadius(4)
+        HStack(spacing: 3) {
+            roleIcon(role)
+            Text(role.capitalized)
+                .font(.caption2)
+                .fontWeight(.semibold)
+        }
+        .foregroundStyle(roleColor(role))
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(roleColor(role).opacity(0.1))
+        .cornerRadius(4)
+    }
+
+    private func roleIcon(_ role: String) -> Image {
+        switch role.lowercased() {
+        case "user":      return Image(systemName: "person.fill")
+        case "assistant": return Image(systemName: "brain.head.profile")
+        case "system":    return Image(systemName: "gearshape.fill")
+        case "tool":      return Image(systemName: "wrench.fill")
+        default:          return Image(systemName: "questionmark")
+        }
     }
 
     private func roleColor(_ role: String) -> Color {
         switch role.lowercased() {
-        case "user": return .blue
+        case "user":      return .blue
         case "assistant": return .green
-        case "system": return .orange
-        default: return .secondary
+        case "system":    return .orange
+        case "tool":      return .purple
+        default:          return .secondary
+        }
+    }
+
+    // MARK: - Helpers
+
+    /// Convert ISO8601 or RFC3339 timestamp to a relative string like "2m ago", "3h ago", "yesterday".
+    private func relativeTimestamp(_ dateStr: String) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let date = formatter.date(from: dateStr)
+            ?? ISO8601DateFormatter().date(from: dateStr) else {
+            return dateStr
+        }
+        let interval = -date.timeIntervalSinceNow
+        switch interval {
+        case ..<60:      return "just now"
+        case ..<3600:    return "\(Int(interval / 60))m ago"
+        case ..<86400:   return "\(Int(interval / 3600))h ago"
+        case ..<172800:  return "yesterday"
+        case ..<604800:  return "\(Int(interval / 86400))d ago"
+        case ..<2592000: return "\(Int(interval / 604800))w ago"
+        default:         return "\(Int(interval / 2592000))mo ago"
+        }
+    }
+
+    /// Format large token counts: "1.5K", "12K", "1.2M".
+    private func formatTokenCount(_ count: Int) -> String {
+        switch count {
+        case 0..<1000:   return "\(count)"
+        case 1000..<1_000_000:
+            let k = Double(count) / 1000
+            return k >= 100 ? "\(Int(k))K" : String(format: "%.1fK", k)
+        default:
+            let m = Double(count) / 1_000_000
+            return m >= 10 ? "\(Int(m))M" : String(format: "%.1fM", m)
         }
     }
 
@@ -394,11 +513,7 @@ struct SessionsView: View {
     private func load() async {
         isLoading = true
         do {
-            if dianeAPI.isReachable {
-                sessions = try await dianeAPI.fetchSessions()
-            } else {
-                sessions = try await apiClient.fetchSessions(projectID: serverConfig.projectID)
-            }
+            sessions = try await dianeAPI.fetchSessions()
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -409,85 +524,62 @@ struct SessionsView: View {
     @MainActor
     private func loadMessages(session: DianeSession) async {
         isLoadingMessages = true
-        expandedReasoning.removeAll()
-        expandedToolCalls.removeAll()
+        messagesError = nil
         do {
-            if dianeAPI.isReachable {
-                messages = try await dianeAPI.fetchSessionMessages(sessionID: session.id)
-            } else {
-                messages = try await apiClient.fetchSessionMessages(projectID: serverConfig.projectID, sessionID: session.id)
-            }
+            messages = try await dianeAPI.fetchSessionMessages(sessionID: session.id)
         } catch {
             messages = []
+            messagesError = error.localizedDescription
         }
         isLoadingMessages = false
     }
+}
 
-    // MARK: - Export
+// MARK: - Bubble Tail Shape
 
-    private func exportSession(_ session: DianeSession) {
-        let exportDict: [String: Any] = [
-            "session": [
-                "id": session.id,
-                "title": session.title ?? "",
-                "status": session.status ?? "",
-                "message_count": session.messageCount ?? 0,
-                "total_tokens": session.totalTokens ?? 0,
-                "created_at": session.createdAt ?? ""
-            ] as [String: Any],
-            "messages": messages.map { msg -> [String: Any] in
-                var dict: [String: Any] = [
-                    "id": msg.id,
-                    "role": msg.role,
-                    "content": msg.content,
-                    "sequence_number": msg.sequenceNumber ?? 0
-                ]
-                if let reasoning = msg.reasoningContent {
-                    dict["reasoning_content"] = reasoning
-                }
-                if let calls = msg.toolCalls {
-                    dict["tool_calls"] = calls.map { c in
-                        [
-                            "id": c.id ?? "",
-                            "name": c.name ?? "",
-                            "arguments": c.arguments ?? ""
-                        ]
-                    }
-                }
-                return dict
-            }
-        ]
-        exportData = try? JSONSerialization.data(withJSONObject: exportDict, options: [.prettyPrinted, .sortedKeys])
-        showingExporter = true
-    }
+/// A small triangular tail that points to the message sender.
+private struct BubbleTail: Shape {
+    let isUser: Bool
 
-    // MARK: - Date Formatting
-
-    private func formatDate(_ iso: String) -> String {
-        // Show just the date part for brevity
-        if iso.count >= 10 {
-            return String(iso.prefix(10))
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        if isUser {
+            path.move(to: CGPoint(x: 0, y: 0))
+            path.addLine(to: CGPoint(x: rect.width, y: 0))
+            path.addLine(to: CGPoint(x: rect.width, y: rect.height))
+        } else {
+            path.move(to: CGPoint(x: 0, y: rect.height))
+            path.addLine(to: CGPoint(x: rect.width, y: 0))
+            path.addLine(to: CGPoint(x: 0, y: 0))
         }
-        return iso
+        path.closeSubpath()
+        return path
     }
 }
 
-// MARK: - JSON File Exporter
+// MARK: - Plain Disclosure Group Style
 
-struct JSONFile: FileDocument {
-    var data: Data
+/// A disclosure group style that doesn't add its own indentation or extra styling.
+private struct PlainDisclosureGroupStyle: DisclosureGroupStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    configuration.isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: configuration.isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    configuration.label
+                }
+            }
+            .buttonStyle(.plain)
 
-    static var readableContentTypes: [UTType] { [.json] }
-
-    init(data: Data) {
-        self.data = data
-    }
-
-    init(configuration: ReadConfiguration) throws {
-        data = configuration.file.regularFileContents ?? Data()
-    }
-
-    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        FileWrapper(regularFileWithContents: data)
+            if configuration.isExpanded {
+                configuration.content
+            }
+        }
     }
 }
