@@ -23,6 +23,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -84,6 +85,46 @@ type MCPSession struct {
 	// re-register when new MCP servers appear (slow starters like AirMCP
 	// get picked up via periodic tool watch).
 	toolWatchID int64 // incrementing request ID for tool watch polls
+}
+
+// upsertNodeConfigInGraph registers this node's config in the Memory Platform graph.
+// This is a best-effort operation — failures are logged but not fatal.
+func upsertNodeConfigInGraph(pc *config.ProjectConfig, instanceID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	bridge, err := memory.New(memory.Config{
+		ServerURL:         pc.ServerURL,
+		APIKey:            pc.Token,
+		ProjectID:         pc.ProjectID,
+		OrgID:             pc.OrgID,
+		HTTPClientTimeout: 10 * time.Second,
+	})
+	if err != nil {
+		log.Printf("[mcp-relay] Warning: cannot create bridge for node config: %v", err)
+		return
+	}
+	defer bridge.Close()
+
+	hostname, _ := os.Hostname()
+	mode := "master"
+	if pc.IsSlave() {
+		mode = "slave"
+	}
+
+	nc := &memory.NodeConfig{
+		InstanceID: instanceID,
+		Hostname:   hostname,
+		Mode:       mode,
+		Version:    Version,
+		LastSeen:   time.Now().UTC().Format(time.RFC3339),
+	}
+
+	if _, err := bridge.UpsertNodeConfig(ctx, nc); err != nil {
+		log.Printf("[mcp-relay] Warning: failed to upsert node config: %v", err)
+	} else {
+		log.Printf("[mcp-relay] Node config registered in graph (instance=%s, mode=%s)", instanceID, mode)
+	}
 }
 
 func cmdMCPRelay(cfg MCPRelayConfig) {
@@ -842,7 +883,7 @@ func runMCPRelay(args []string) {
 	syncConfigFromGraph(pc.ServerURL, pc.Token, pc.ProjectID, instanceID)
 
 	// Register this node's config in the graph so other nodes can discover it
-	upsertNodeConfigInGraph(pc, instanceID, relayerVersion)
+	upsertNodeConfigInGraph(pc, instanceID)
 
 	cmdMCPRelay(relayCfg)
 }

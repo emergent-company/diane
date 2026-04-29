@@ -151,6 +151,78 @@ struct StatsView: View {
         )
     }
 
+    // MARK: - Project-Level Providers
+
+    private func projectProvidersSection(providers: [ProjectProviderInfo]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "gearshape.2")
+                    .foregroundStyle(.teal)
+                Text("Configured Providers")
+                    .font(.headline)
+                Spacer()
+                Text("\(providers.count) provider\(providers.count == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.top, 8)
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 200, maximum: 280), spacing: 12)], spacing: 12) {
+                ForEach(providers) { provider in
+                    projectProviderCard(provider)
+                }
+            }
+        }
+    }
+
+    private func projectProviderCard(_ p: ProjectProviderInfo) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: providerIcon(p.provider))
+                    .font(.title3)
+                    .foregroundStyle(providerColor(p.provider))
+                Text(providerDisplayName(p.provider))
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                Spacer()
+            }
+
+            if let model = p.generativeModel, !model.isEmpty {
+                labelRow(icon: "sparkle", label: "Model", value: model)
+            }
+            if let embed = p.embeddingModel, !embed.isEmpty {
+                labelRow(icon: "square.text.square", label: "Embed", value: embed)
+            }
+            if let url = p.baseUrl, !url.isEmpty {
+                labelRow(icon: "link", label: "URL", value: url)
+                    .help(url)
+            }
+        }
+        .padding(12)
+        .background(Color.primary.opacity(0.03))
+        .cornerRadius(10)
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+        )
+    }
+
+    private func labelRow(icon: String, label: String, value: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+            Text(label + ":")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            Text(value)
+                .font(.caption2)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
+
     // MARK: - Provider Usage
 
     private func providerUsageSection(providers: [ProviderStatsSummary], totals: ProviderStatsResponse) -> some View {
@@ -458,9 +530,11 @@ struct StatsView: View {
         do {
             async let statsTask = dianeAPI.fetchAgentStats(hours: selectedHours)
             async let providersTask = dianeAPI.fetchProviderStats(hours: selectedHours)
-            let (s, p) = try await (statsTask, providersTask)
+            async let projectTask = dianeAPI.fetchProjectProviders()
+            let (s, p, pp) = try await (statsTask, providersTask, projectTask)
             stats = s
             providerStats = p
+            projectProviders = pp
         } catch {
             self.error = error.localizedDescription
         }

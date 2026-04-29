@@ -502,104 +502,129 @@ type relaySessionData struct {
 	ConnectedAt string `json:"connected_at,omitempty"`
 }
 
-// GET /api/nodes — list connected MCP relay nodes with role info
+// GET /api/nodes — list registered nodes, supplemented with online status from relay sessions
 func (a *localAPIServer) handleNodes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
+	// ── 1. Query registered nodes from the graph (DianeNodeConfig) ──
+	ctx := r.Context()
+	registeredNodes, graphErr := a.bridge.ListNodeConfigs(ctx)
+
+	// ── 2. Query active MCP relay sessions (for online status) ──
 	relayURL := strings.TrimSuffix(a.config.ServerURL, "/") + "/api/mcp-relay/sessions"
 	req, err := http.NewRequest("GET", relayURL, nil)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("create request: %v", err))
-		return
-	}
-	req.Header.Set("Authorization", "Bearer "+a.config.Token)
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("query nodes: %v", err))
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		jsonError(w, resp.StatusCode, fmt.Sprintf("relay API returned %d", resp.StatusCode))
-		return
+		req = nil // proceed without relay data
+	} else {
+		req.Header.Set("Authorization", "Bearer "+a.config.Token)
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("read response: %v", err))
-		return
-	}
-
-	// Parse response — could be array, {"items":[...]}, {"data":[...]}, or {"sessions":[...]}
-	var sessions []relaySessionData
-	if err := json.Unmarshal(body, &sessions); err != nil {
-		// Try wrapped response formats
-		var wrapped struct {
-			Items    []relaySessionData `json:"items"`
-			Data     []relaySessionData `json:"data"`
-			Sessions []relaySessionData `json:"sessions"`
-		}
-		if err2 := json.Unmarshal(body, &wrapped); err2 == nil {
-			switch {
-			case wrapped.Sessions != nil:
-				sessions = wrapped.Sessions
-			case wrapped.Items != nil:
-				sessions = wrapped.Items
-			case wrapped.Data != nil:
-				sessions = wrapped.Data
+	var onlineSessions []relaySessionData
+	if req != nil {
+		resp, err2 := httpClient.Do(req)
+		if err2 == nil && resp.StatusCode == 200 {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			// Parse response formats
+			if err := json.Unmarshal(body, &onlineSessions); err != nil {
+				var wrapped struct {
+					Items    []relaySessionData `json:"items"`
+					Data     []relaySessionData `json:"data"`
+					Sessions []relaySessionData `json:"sessions"`
+				}
+				if err2 := json.Unmarshal(body, &wrapped); err2 == nil {
+					switch {
+					case wrapped.Sessions != nil:
+						onlineSessions = wrapped.Sessions
+					case wrapped.Items != nil:
+						onlineSessions = wrapped.Items
+					case wrapped.Data != nil:
+						onlineSessions = wrapped.Data
+					}
+				}
 			}
 		}
-		if sessions == nil {
-			jsonError(w, http.StatusInternalServerError, fmt.Sprintf("failed to parse relay sessions: %s", string(body)))
-			return
+	}
+
+	// Build online lookup: instance_id -> relay session data
+	online := make(map[string]relaySessionData)
+	for _, s := range onlineSessions {
+		online[s.InstanceID] = s
+	}
+
+	// Build registered lookup: instance_id -> node config
+	registered := make(map[string]memory.NodeConfig)
+	if graphErr == nil {
+		for _, nc := range registeredNodes {
+			registered[nc.InstanceID] = nc
 		}
 	}
 
-	// Get local hostname and instance ID for role determination
-	localHostname, _ := os.Hostname()
-	localInstanceID := a.config.InstanceID
-
+	// ── 3. Merge: use registered nodes as base, add online-only as fallback ──
 	type nodeJSON struct {
 		InstanceID  string `json:"instance_id"`
 		Hostname    string `json:"hostname,omitempty"`
-		Role        string `json:"role,omitempty"`
+		Mode        string `json:"mode,omitempty"` // from graph config
 		Version     string `json:"version,omitempty"`
 		ToolCount   int    `json:"tool_count,omitempty"`
 		ConnectedAt string `json:"connected_at,omitempty"`
+		Online      bool   `json:"online"`
 	}
 
-	nodes := make([]nodeJSON, 0, len(sessions))
-	for _, s := range sessions {
+	seen := make(map[string]bool)
+	nodes := make([]nodeJSON, 0)
+
+	// First: all registered nodes from graph (with online status from relay)
+	for _, nc := range registeredNodes {
+		seen[nc.InstanceID] = true
+		n := nodeJSON{
+			InstanceID: nc.InstanceID,
+			Hostname:   nc.Hostname,
+			Mode:       nc.Mode,
+			Version:    nc.Version,
+		}
+		if s, ok := online[nc.InstanceID]; ok {
+			n.Online = true
+			n.ToolCount = s.ToolCount
+			if s.ToolCount == 0 && s.Tools != nil {
+				if toolsMap, ok := s.Tools.(map[string]interface{}); ok {
+					if tl, ok := toolsMap["tools"].([]interface{}); ok {
+						n.ToolCount = len(tl)
+					}
+				}
+			}
+			n.ConnectedAt = s.ConnectedAt
+			// Prefer relay version if more specific
+			if s.Version != "" {
+				n.Version = s.Version
+			}
+		}
+		nodes = append(nodes, n)
+	}
+
+	// Second: online-only nodes (registered in relay but not yet in graph — older nodes)
+	for _, s := range onlineSessions {
+		if seen[s.InstanceID] {
+			continue
+		}
 		toolCount := s.ToolCount
 		if toolCount == 0 && s.Tools != nil {
-			// Fallback: attempt to count tools from the tools object
 			if toolsMap, ok := s.Tools.(map[string]interface{}); ok {
 				if tl, ok := toolsMap["tools"].([]interface{}); ok {
 					toolCount = len(tl)
 				}
 			}
 		}
-
-		// Determine role: master if it matches the local instance, slave otherwise
-		role := "slave"
-		if localInstanceID != "" && s.InstanceID == localInstanceID {
-			role = "master"
-		} else if localHostname != "" && s.Hostname == localHostname {
-			role = "master"
-		}
-
 		nodes = append(nodes, nodeJSON{
 			InstanceID:  s.InstanceID,
 			Hostname:    s.Hostname,
-			Role:        role,
 			Version:     s.Version,
 			ToolCount:   toolCount,
 			ConnectedAt: s.ConnectedAt,
+			Online:      true,
 		})
 	}
 
