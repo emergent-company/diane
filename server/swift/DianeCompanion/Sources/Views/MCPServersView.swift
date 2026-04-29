@@ -543,3 +543,14 @@ private struct MCPServerDetailView: View {
         isLoadingPrompts = false
     }
 }
+
+// MARK: - Previews
+
+#Preview {
+    MCPServersView()
+        .environmentObject(AppState())
+        .environmentObject(ServerConfiguration())
+        .environmentObject(DianeAPIClient())
+        .environmentObject(EmergentAPIClient())
+        .frame(width: 800, height: 600)
+}

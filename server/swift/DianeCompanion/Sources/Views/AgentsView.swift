@@ -228,3 +228,14 @@ struct AgentsView: View {
         isLoading = false
     }
 }
+
+// MARK: - Previews
+
+#Preview {
+    AgentsView()
+        .environmentObject(AppState())
+        .environmentObject(DianeAPIClient())
+        .environmentObject(ServerConfiguration())
+        .environmentObject(EmergentAPIClient())
+        .frame(width: 800, height: 600)
+}

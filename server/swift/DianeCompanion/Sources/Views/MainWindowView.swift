@@ -113,3 +113,14 @@ struct MainWindowView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
+
+// MARK: - Previews
+
+#Preview {
+    MainWindowView()
+        .environmentObject(AppState())
+        .environmentObject(EmergentAPIClient())
+        .environmentObject(StatusMonitor())
+        .environmentObject(ServerConfiguration())
+        .frame(width: 800, height: 600)
+}

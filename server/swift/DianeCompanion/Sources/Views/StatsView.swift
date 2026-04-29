@@ -541,3 +541,12 @@ struct StatsView: View {
         isLoading = false
     }
 }
+
+// MARK: - Previews
+
+#Preview {
+    StatsView()
+        .environmentObject(AppState())
+        .environmentObject(DianeAPIClient())
+        .frame(width: 800, height: 600)
+}

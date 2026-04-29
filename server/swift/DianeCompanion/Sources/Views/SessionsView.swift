@@ -660,3 +660,13 @@ private struct PlainDisclosureGroupStyle: DisclosureGroupStyle {
         }
     }
 }
+
+// MARK: - Previews
+
+#Preview {
+    SessionsView()
+        .environmentObject(AppState())
+        .environmentObject(ServerConfiguration())
+        .environmentObject(DianeAPIClient())
+        .frame(width: 800, height: 600)
+}

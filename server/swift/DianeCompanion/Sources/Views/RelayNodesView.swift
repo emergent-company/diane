@@ -315,3 +315,13 @@ struct RelayNodesView: View {
         loadingTools.remove(node.instanceID)
     }
 }
+
+// MARK: - Previews
+
+#Preview {
+    RelayNodesView()
+        .environmentObject(AppState())
+        .environmentObject(DianeAPIClient())
+        .environmentObject(ServerConfiguration())
+        .frame(width: 800, height: 600)
+}
