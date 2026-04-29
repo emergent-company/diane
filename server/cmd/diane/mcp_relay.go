@@ -41,6 +41,7 @@ import (
 	"time"
 
 	"github.com/Emergent-Comapny/diane/internal/config"
+	"github.com/Emergent-Comapny/diane/internal/memory"
 	"github.com/gorilla/websocket"
 )
 
