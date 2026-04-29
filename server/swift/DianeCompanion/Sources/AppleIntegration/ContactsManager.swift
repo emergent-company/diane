@@ -6,7 +6,7 @@ import OSLog
 @MainActor
 final class ContactsManager: ObservableObject {
     private let logger = Logger(subsystem: "com.emergent-company.diane-companion", category: "Contacts")
-    private let store = CNContactStore()
+    private nonisolated(unsafe) let store = CNContactStore()
     
     @Published private(set) var isAuthorized = false
     

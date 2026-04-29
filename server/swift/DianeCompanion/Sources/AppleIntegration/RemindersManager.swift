@@ -6,7 +6,7 @@ import OSLog
 @MainActor
 final class RemindersManager: ObservableObject {
     private let logger = Logger(subsystem: "com.emergent-company.diane-companion", category: "Reminders")
-    private let store = EKEventStore()
+    private nonisolated(unsafe) let store = EKEventStore()
     
     @Published private(set) var isAuthorized = false
     @Published private(set) var lists: [EKCalendar] = []
