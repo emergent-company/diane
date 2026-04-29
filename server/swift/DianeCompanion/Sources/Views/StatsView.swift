@@ -97,6 +97,12 @@ struct StatsView: View {
                 icon: "textformat.size",
                 color: .purple
             )
+            summaryCard(
+                title: "Total Cost",
+                value: formatCost(totals.totalCostUsd),
+                icon: "dollarsign.circle.fill",
+                color: .yellow
+            )
         }
     }
 
@@ -185,6 +191,7 @@ struct StatsView: View {
                 metricItem(formatDuration(agent.avgDurationMs))
                 metricItem("\(String(format: "%.0f", agent.avgInputTokens)) in")
                 metricItem("\(String(format: "%.0f", agent.avgOutputTokens)) out")
+                metricItem(formatCost(agent.avgCostUsd) + "/run")
             }
         }
         .padding(12)
@@ -224,6 +231,18 @@ struct StatsView: View {
             return String(format: "%.1fK", Double(count) / 1_000)
         }
         return "\(count)"
+    }
+
+    private func formatCost(_ usd: Double) -> String {
+        if usd >= 100 {
+            return String(format: "$%.2f", usd)
+        } else if usd >= 1 {
+            return String(format: "$%.3f", usd)
+        } else if usd >= 0.001 {
+            return String(format: "%.1f¢", usd * 100)
+        } else {
+            return String(format: "%.2f¢", usd * 100)
+        }
     }
 
     // MARK: - Data Loading

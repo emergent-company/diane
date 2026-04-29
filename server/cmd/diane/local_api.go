@@ -693,6 +693,8 @@ func (a *localAPIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 		TotalDurationMs   int     `json:"total_duration_ms"`
 		TotalInputTokens  int     `json:"total_input_tokens"`
 		TotalOutputTokens int     `json:"total_output_tokens"`
+		TotalCostUSD      float64 `json:"total_cost_usd"`
+		AvgCostUSD        float64 `json:"avg_cost_usd"`
 		SuccessRate       float64 `json:"success_rate"`
 	}
 
@@ -703,6 +705,7 @@ func (a *localAPIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 		TotalDurationMs int     `json:"total_duration_ms"`
 		TotalInput      int     `json:"total_input_tokens"`
 		TotalOutput     int     `json:"total_output_tokens"`
+		TotalCostUSD    float64 `json:"total_cost_usd"`
 		OverallAvgDurMs float64 `json:"overall_avg_duration_ms"`
 		OverallSuccess  float64 `json:"overall_success_rate"`
 	}
@@ -732,6 +735,8 @@ func (a *localAPIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 			TotalDurationMs:   int(float64(totalRuns) * as.AvgDurationMs),
 			TotalInputTokens:  int(as.AvgInputTokens * float64(totalRuns)),
 			TotalOutputTokens: int(as.AvgOutputTokens * float64(totalRuns)),
+			TotalCostUSD:      as.TotalCostUSD,
+			AvgCostUSD:        as.AvgCostUSD,
 			SuccessRate:       successRate,
 		})
 		totals.TotalRuns += totalRuns
@@ -740,6 +745,7 @@ func (a *localAPIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 		totals.TotalDurationMs += int(float64(totalRuns) * as.AvgDurationMs)
 		totals.TotalInput += int(as.AvgInputTokens * float64(totalRuns))
 		totals.TotalOutput += int(as.AvgOutputTokens * float64(totalRuns))
+		totals.TotalCostUSD += as.TotalCostUSD
 	}
 
 	if totals.TotalRuns > 0 {

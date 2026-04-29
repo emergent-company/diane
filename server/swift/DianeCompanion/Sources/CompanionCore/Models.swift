@@ -561,6 +561,8 @@ public struct AgentStatsSummary: Identifiable, Codable, Sendable {
     public let totalDurationMs: Int
     public let totalInputTokens: Int
     public let totalOutputTokens: Int
+    public let totalCostUsd: Double
+    public let avgCostUsd: Double
     public let successRate: Double
 
     public var id: String { agentName }
@@ -578,6 +580,8 @@ public struct AgentStatsSummary: Identifiable, Codable, Sendable {
         case totalDurationMs  = "total_duration_ms"
         case totalInputTokens = "total_input_tokens"
         case totalOutputTokens = "total_output_tokens"
+        case totalCostUsd     = "total_cost_usd"
+        case avgCostUsd       = "avg_cost_usd"
         case successRate      = "success_rate"
     }
 }
@@ -589,6 +593,7 @@ public struct AgentStatsTotals: Codable, Sendable {
     public let totalDurationMs: Int
     public let totalInputTokens: Int
     public let totalOutputTokens: Int
+    public let totalCostUsd: Double
     public let overallAvgDurationMs: Double
     public let overallSuccessRate: Double
 
@@ -599,6 +604,7 @@ public struct AgentStatsTotals: Codable, Sendable {
         case totalDurationMs     = "total_duration_ms"
         case totalInputTokens    = "total_input_tokens"
         case totalOutputTokens   = "total_output_tokens"
+        case totalCostUsd        = "total_cost_usd"
         case overallAvgDurationMs = "overall_avg_duration_ms"
         case overallSuccessRate  = "overall_success_rate"
     }
