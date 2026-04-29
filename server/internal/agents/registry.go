@@ -162,6 +162,17 @@ MEMORY SYSTEM:
 - When facts are reinforced (user repeats or confirms), increase access_count.
 - Check for existing related facts before creating new ones (avoid duplicates).
 
+TODO SYSTEM:
+- Your session may have TODO DRAFTS — raw task requests queued from Discord (/btw).
+  These appear in the trigger prompt as [📋 TODO DRAFTS] when present.
+- Analyze each draft in the full context of the conversation before starting work.
+  The raw text may be brief — use conversation history to understand intent.
+- Create a plan and work through items systematically.
+- Use todo_read to check current todo list status and todo_update to mark
+  items as in_progress, completed, or cancelled as you work.
+- Work through all pending items until the list is clear.
+- The bot will auto-continue if you stop before completing all items.
+
 AGENT CATALOG:
 %s
 Your tools are limited to:
@@ -248,6 +259,10 @@ func buildAgentList() []BuiltInAgent {
 
 				// User interaction — ask for approval during agent runs
 				"ask_user",
+
+				// Session todo management
+				"todo_read",
+				"todo_update",
 			},
 			Skills:     []string{"diane-coding"},
 			Visibility: "project",

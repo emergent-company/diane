@@ -1034,6 +1034,8 @@ func (b *Bot) handleMessage(m *discordgo.Message) {
 	// ── Process loop: drain messages until queue empty or cancelled ──
 	processingOK := false
 	currentMsg := m
+	autoContinueCount := 0
+	maxAutoContinues := 5
 
 	for {
 		// Log queue state
@@ -1089,7 +1091,17 @@ func (b *Bot) handleMessage(m *discordgo.Message) {
 		// Check queue for next message
 		nextMsg := b.popPending(responseChannel)
 		if nextMsg == nil {
-			break // queue empty, done
+			// Queue empty — check for auto-continue (remaining todos)
+			if autoContinueCount < maxAutoContinues {
+				if contMsg := b.checkAutoContinue(ctx, responseChannel); contMsg != nil {
+					nextMsg = contMsg
+					autoContinueCount++
+					log.Printf("[AUTO] Auto-continue #%d/%d", autoContinueCount, maxAutoContinues)
+				}
+			}
+		}
+		if nextMsg == nil {
+			break // queue empty, nothing to continue
 		}
 		currentMsg = nextMsg
 		log.Printf("[QUEUE] Processing queued msg %s (channel %s)", truncateStr(currentMsg.ID, 8), responseChannel)
@@ -1567,6 +1579,28 @@ func (b *Bot) createTodo(m *discordgo.Message, text string) {
 	}
 	b.mu.RUnlock()
 
+	// Try MP API first, fall back to SQLite
+	if globalBridge != nil && sessionID != "" {
+		todo, err := globalBridge.CreateSessionTodo(context.Background(), sessionID, text, author)
+		if err != nil {
+			log.Printf("[BTW] MP create error: %v, falling back to SQLite", err)
+		} else {
+			b.api.MessageReactionAdd(ch, m.ID, "✅")
+			shortID := todo.ID
+			if len(shortID) > 8 {
+				shortID = shortID[:8]
+			}
+			b.sendMessage(ch, fmt.Sprintf("✅ Added todo `%s`: **%s**", shortID, text))
+			log.Printf("[BTW] Created todo %s: %q (session=%s)", todo.ID, text, sessionID)
+			return
+		}
+	}
+
+	// Fallback to SQLite
+	if b.sqliteDB == nil {
+		b.sendMessage(ch, "❌ Todo database is not available.")
+		return
+	}
 	todo, err := b.sqliteDB.CreateTodo(ch, sessionID, text, author)
 	if err != nil {
 		log.Printf("[BTW] Create error: %v", err)
@@ -1581,6 +1615,30 @@ func (b *Bot) createTodo(m *discordgo.Message, text string) {
 
 func (b *Bot) listTodos(m *discordgo.Message) {
 	ch := m.ChannelID
+
+	// Try MP API first
+	var sessionID string
+	b.mu.RLock()
+	if cs, exists := b.sessions[ch]; exists {
+		sessionID = cs.SessionID
+	}
+	b.mu.RUnlock()
+
+	if globalBridge != nil && sessionID != "" {
+		todos, err := globalBridge.ListSessionTodos(context.Background(), sessionID, "")
+		if err != nil {
+			log.Printf("[BTW] MP list error: %v, falling back to SQLite", err)
+		} else {
+			b.renderTodoList(m, ch, todos)
+			return
+		}
+	}
+
+	// Fallback to SQLite
+	if b.sqliteDB == nil {
+		b.sendMessage(ch, "❌ Todo database is not available.")
+		return
+	}
 	todos, err := b.sqliteDB.ListTodos(ch, "")
 	if err != nil {
 		log.Printf("[BTW] List error: %v", err)
@@ -1624,27 +1682,99 @@ func (b *Bot) listTodos(m *discordgo.Message) {
 	b.sendMessage(ch, msg)
 }
 
-func (b *Bot) updateTodoStatus(m *discordgo.Message, idStr, newStatus string) {
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
-		b.sendMessage(m.ChannelID, "❌ Invalid todo ID: \""+idStr+"\" — use a number like `/btw done 1`")
+// renderTodoList formats and sends MP API todo list to Discord.
+func (b *Bot) renderTodoList(m *discordgo.Message, ch string, todos []memory.SessionTodo) {
+	if len(todos) == 0 {
+		b.api.MessageReactionAdd(ch, m.ID, "✅")
+		b.sendMessage(ch, "📝 No todos for this session.")
 		return
 	}
 
+	var pending, completed, cancelled []string
+	for _, t := range todos {
+		shortID := t.ID
+		if len(shortID) > 8 {
+			shortID = shortID[:8]
+		}
+		line := fmt.Sprintf("`%s` %s — %s", shortID, t.Content, t.Author)
+		switch t.Status {
+		case "draft", "pending":
+			pending = append(pending, line)
+		case "completed":
+			completed = append(completed, line)
+		case "cancelled":
+			cancelled = append(cancelled, line)
+		}
+	}
+
+	var msg string
+	msg += fmt.Sprintf("📝 **Todos for this session** (%d total)\n", len(todos))
+	if len(pending) > 0 {
+		msg += "\n⏳ **Pending:**\n" + strings.Join(pending, "\n")
+	}
+	if len(completed) > 0 {
+		msg += "\n✅ **Completed:**\n" + strings.Join(completed, "\n")
+	}
+	if len(cancelled) > 0 {
+		msg += "\n❌ **Cancelled:**\n" + strings.Join(cancelled, "\n")
+	}
+
+	b.api.MessageReactionAdd(ch, m.ID, "✅")
+	b.sendMessage(ch, msg)
+}
+
+func (b *Bot) updateTodoStatus(m *discordgo.Message, idStr, newStatus string) {
+	ch := m.ChannelID
+
+	// Try MP API first
+	var sessionID string
+	b.mu.RLock()
+	if cs, exists := b.sessions[ch]; exists {
+		sessionID = cs.SessionID
+	}
+	b.mu.RUnlock()
+
+	if globalBridge != nil && sessionID != "" {
+		todo, err := globalBridge.UpdateSessionTodo(context.Background(), sessionID, idStr, newStatus)
+		if err != nil {
+			log.Printf("[BTW] MP update error: %v, falling back to SQLite", err)
+		} else {
+			emoji := "✅"
+			label := "completed"
+			if newStatus == "cancelled" {
+				emoji = "❌"
+				label = "cancelled"
+			}
+			b.api.MessageReactionAdd(ch, m.ID, "✅")
+			b.sendMessage(ch, fmt.Sprintf("%s Todo `%s` marked as **%s**: %s", emoji, idStr, label, todo.Content))
+			return
+		}
+	}
+
+	// Fallback to SQLite
+	if b.sqliteDB == nil {
+		b.sendMessage(ch, "❌ Todo database is not available.")
+		return
+	}
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		b.sendMessage(ch, "❌ Invalid todo ID: \""+idStr+"\" — use a number like `/btw done 1`")
+		return
+	}
 	todo, err := b.sqliteDB.GetTodo(id)
 	if err != nil {
 		log.Printf("[BTW] Get error: %v", err)
-		b.sendMessage(m.ChannelID, "❌ Error looking up todo #%d: "+err.Error())
+		b.sendMessage(ch, "❌ Error looking up todo #%d: "+err.Error())
 		return
 	}
 	if todo == nil {
-		b.sendMessage(m.ChannelID, fmt.Sprintf("❌ Todo #%d not found.", id))
+		b.sendMessage(ch, fmt.Sprintf("❌ Todo #%d not found.", id))
 		return
 	}
 
 	if err := b.sqliteDB.UpdateTodoStatus(id, newStatus); err != nil {
 		log.Printf("[BTW] Update error: %v", err)
-		b.sendMessage(m.ChannelID, "❌ Failed to update todo: "+err.Error())
+		b.sendMessage(ch, "❌ Failed to update todo: "+err.Error())
 		return
 	}
 
@@ -1655,9 +1785,8 @@ func (b *Bot) updateTodoStatus(m *discordgo.Message, idStr, newStatus string) {
 		label = "cancelled"
 	}
 
-	b.api.MessageReactionAdd(m.ChannelID, m.ID, "✅")
-	b.sendMessage(m.ChannelID, fmt.Sprintf("%s Todo #%d marked as **%s**: %s", emoji, id, label, todo.Content))
-	log.Printf("[BTW] Todo #%d → %s: %q", id, newStatus, todo.Content)
+	b.api.MessageReactionAdd(ch, m.ID, "✅")
+	b.sendMessage(ch, fmt.Sprintf("%s Todo #%d marked as **%s**: %s", emoji, id, label, todo.Content))
 }
 
 // resolveQuestionChannel determines where to send an agent question.
@@ -1700,6 +1829,46 @@ func (b *Bot) sendMessage(channelID, content string) {
 			log.Printf("[ERR] Send message part: %v", err)
 			return
 		}
+	}
+}
+
+// checkAutoContinue checks if the session has remaining active todos and returns
+// a synthetic message to trigger auto-continuation. Returns nil if no todos remain.
+func (b *Bot) checkAutoContinue(ctx context.Context, responseChannel string) *discordgo.Message {
+	b.mu.RLock()
+	cs, exists := b.sessions[responseChannel]
+	b.mu.RUnlock()
+	if !exists || cs.SessionID == "" || globalBridge == nil {
+		return nil
+	}
+
+	todos, err := globalBridge.ListSessionTodos(ctx, cs.SessionID, "")
+	if err != nil {
+		log.Printf("[AUTO] List error: %v", err)
+		return nil
+	}
+
+	// Count active todos
+	var active int
+	for _, t := range todos {
+		if t.Status == "draft" || t.Status == "pending" || t.Status == "in_progress" {
+			active++
+		}
+	}
+	if active == 0 {
+		return nil
+	}
+
+	// Create a synthetic message to continue working
+	// Use a unique ID that won't collide with real messages
+	return &discordgo.Message{
+		ID:        fmt.Sprintf("auto-continue-%d", time.Now().UnixNano()),
+		ChannelID: responseChannel,
+		Content:   fmt.Sprintf("Continue working. You still have %d pending todos in your todo list.", active),
+		Author: &discordgo.User{
+			ID:       "auto-continue",
+			Username: "System",
+		},
 	}
 }
 
@@ -1824,6 +1993,54 @@ func (b *Bot) detectAgentType(content string) string {
 	return AgentTypeDefault
 }
 
+// buildTriggerPromptWithTodos builds the trigger prompt, injecting pending todos
+// as instructions for the agent to analyze and work through.
+func (b *Bot) buildTriggerPromptWithTodos(ctx context.Context, cs *ChannelSession, userMsg string) string {
+	if globalBridge == nil || cs.SessionID == "" {
+		return userMsg
+	}
+
+	todos, err := globalBridge.ListSessionTodos(ctx, cs.SessionID, "")
+	if err != nil {
+		log.Printf("[TODO] List error (skipping injection): %v", err)
+		return userMsg
+	}
+
+	// Filter to active todos (draft + pending + in_progress)
+	var active []memory.SessionTodo
+	for _, t := range todos {
+		if t.Status == "draft" || t.Status == "pending" || t.Status == "in_progress" {
+			active = append(active, t)
+		}
+	}
+
+	if len(active) == 0 {
+		return userMsg
+	}
+
+	// Build todo block
+	var bld strings.Builder
+	bld.WriteString("\n\n[📋 TODO DRAFTS — analyze these in the conversation context and work through them:]\n")
+	for i, t := range active {
+		shortID := t.ID
+		if len(shortID) > 8 {
+			shortID = shortID[:8]
+		}
+		status := t.Status
+		if status == "draft" {
+			status = "❓ draft (not yet analyzed)"
+		}
+		bld.WriteString(fmt.Sprintf("%d. [%s] %s (from %s, id=%s)\n", i+1, status, t.Content, t.Author, shortID))
+	}
+	bld.WriteString("\nAnalyze each todo draft in the context of the conversation.")
+	bld.WriteString(" Create a plan and work through items systematically.")
+	bld.WriteString(" Mark items complete when done. Continue until all items are resolved.")
+
+	bld.WriteString("\n\n" + userMsg)
+
+	return bld.String()
+}
+
 // triggerAgentWithContext triggers a Memory Platform agent with the user's message
 // and returns the response text. It creates a runtime agent, triggers it, polls for
 // completion, fetches the response + tool calls, cleans up, and returns the text.
@@ -1888,8 +2105,8 @@ func (b *Bot) triggerAgentWithContext(ctx context.Context, cs *ChannelSession, u
 		}
 	}()
 
-	// 3. Build trigger prompt (context is now provided via sessionId on the trigger request)
-	triggerPrompt := userMsg
+	// 3. Build trigger prompt with todo injection
+	triggerPrompt := b.buildTriggerPromptWithTodos(ctx, cs, userMsg)
 
 	dlog("AGT", "action", "triggering", "prompt_chars", len(triggerPrompt))
 	triggerResp, err := globalBridge.TriggerAgentWithInput(ctx, agentID, triggerPrompt, cs.SessionID)
