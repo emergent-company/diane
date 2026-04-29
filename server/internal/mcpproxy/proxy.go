@@ -146,6 +146,30 @@ func (p *Proxy) ListAllTools() ([]map[string]interface{}, error) {
 	return allTools, nil
 }
 
+// ListServerTools returns tools for a specific MCP server by name.
+// Returns nil if the server is not connected.
+func (p *Proxy) ListServerTools(serverName string) ([]map[string]interface{}, error) {
+	p.mu.RLock()
+	client, ok := p.clients[serverName]
+	p.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("MCP server '%s' not connected", serverName)
+	}
+	return client.ListTools()
+}
+
+// ListServerPrompts returns prompts for a specific MCP server by name.
+// Returns nil if the server is not connected.
+func (p *Proxy) ListServerPrompts(serverName string) ([]map[string]interface{}, error) {
+	p.mu.RLock()
+	client, ok := p.clients[serverName]
+	p.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("MCP server '%s' not connected", serverName)
+	}
+	return client.ListPrompts()
+}
+
 // CallTool routes a tool call to the appropriate MCP client
 func (p *Proxy) CallTool(toolName string, arguments map[string]interface{}) (json.RawMessage, error) {
 	p.mu.RLock()

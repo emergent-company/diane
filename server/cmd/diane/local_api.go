@@ -24,10 +24,12 @@ import (
 
 // localAPIServer manages the local HTTP API for the companion app.
 type localAPIServer struct {
-	server *http.Server
-	config *config.ProjectConfig
-	bridge *memory.Bridge
-	port   int
+	server    *http.Server
+	config    *config.ProjectConfig
+	bridge    *memory.Bridge
+	port      int
+	proxy     *mcpproxy.Proxy
+	proxyOnce sync.Once
 }
 
 // startLocalAPI starts a local HTTP API server on 127.0.0.1:port.

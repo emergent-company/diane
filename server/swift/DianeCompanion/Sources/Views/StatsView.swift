@@ -17,7 +17,6 @@ struct StatsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                // Time range picker
                 timeRangePicker
 
                 if let err = error {
@@ -36,22 +35,18 @@ struct StatsView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.top, 60)
                 } else {
-                    // Summary cards
                     if let s = stats {
                         summaryCardsSection(totals: s.totals)
                     }
 
-                    // Project-level configured providers
                     if let pp = projectProviders, !pp.isEmpty {
                         projectProvidersSection(providers: pp)
                     }
 
-                    // Provider usage section (from actual runs)
                     if let ps = providerStats, !ps.providers.isEmpty {
                         providerUsageSection(providers: ps.providers, totals: ps)
                     }
 
-                    // Per-agent breakdown
                     if let s = stats {
                         agentBreakdownSection(agents: s.agents, hours: s.hours)
                             .padding(.top, 8)
@@ -92,63 +87,37 @@ struct StatsView: View {
 
     private func summaryCardsSection(totals: AgentStatsTotals) -> some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 160, maximum: 220), spacing: 12)], spacing: 12) {
-            summaryCard(
+            SummaryCardView(
                 title: "Total Runs",
                 value: "\(totals.totalRuns)",
                 icon: "arrow.triangle.branch",
                 color: .blue
             )
-            summaryCard(
+            SummaryCardView(
                 title: "Success Rate",
                 value: String(format: "%.1f%%", totals.overallSuccessRate),
                 icon: "checkmark.circle.fill",
                 color: .green
             )
-            summaryCard(
+            SummaryCardView(
                 title: "Avg Duration",
                 value: formatDuration(totals.overallAvgDurationMs),
                 icon: "clock.fill",
                 color: .orange
             )
-            summaryCard(
+            SummaryCardView(
                 title: "Total Tokens",
                 value: formatCount(totals.totalInputTokens + totals.totalOutputTokens),
                 icon: "textformat.size",
                 color: .purple
             )
-            summaryCard(
+            SummaryCardView(
                 title: "Total Cost",
                 value: formatCost(totals.totalCostUsd),
                 icon: "dollarsign.circle.fill",
                 color: .yellow
             )
         }
-    }
-
-    private func summaryCard(title: String, value: String, icon: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .foregroundStyle(color)
-                    .font(.system(size: 14, weight: .semibold))
-                Text(title)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Text(value)
-                .font(.title2)
-                .fontWeight(.bold)
-                .monospacedDigit()
-                .foregroundStyle(.primary)
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.primary.opacity(0.04))
-        .cornerRadius(10)
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
-        )
     }
 
     // MARK: - Project-Level Providers
@@ -188,13 +157,13 @@ struct StatsView: View {
             }
 
             if let model = p.generativeModel, !model.isEmpty {
-                labelRow(icon: "sparkle", label: "Model", value: model)
+                LabelRowView(icon: "sparkle", label: "Model", value: model)
             }
             if let embed = p.embeddingModel, !embed.isEmpty {
-                labelRow(icon: "square.text.square", label: "Embed", value: embed)
+                LabelRowView(icon: "square.text.square", label: "Embed", value: embed)
             }
             if let url = p.baseUrl, !url.isEmpty {
-                labelRow(icon: "link", label: "URL", value: url)
+                LabelRowView(icon: "link", label: "URL", value: url)
                     .help(url)
             }
         }
@@ -205,22 +174,6 @@ struct StatsView: View {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(Color.primary.opacity(0.06), lineWidth: 1)
         )
-    }
-
-    private func labelRow(icon: String, label: String, value: String) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: icon)
-                .font(.system(size: 9))
-                .foregroundStyle(.secondary)
-            Text(label + ":")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-            Text(value)
-                .font(.caption2)
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-        }
     }
 
     // MARK: - Provider Usage
@@ -235,7 +188,6 @@ struct StatsView: View {
             }
             .padding(.top, 8)
 
-            // Provider summary mini-cards
             let grouped = Dictionary(grouping: providers, by: { $0.providerName.lowercased() })
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 200, maximum: 280), spacing: 12)], spacing: 12) {
                 ForEach(Array(grouped.keys.sorted()), id: \.self) { key in
@@ -277,7 +229,7 @@ struct StatsView: View {
                             .frame(width: 4, height: 4)
                         Text(model)
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.primary)
                             .lineLimit(1)
                     }
                 }
@@ -288,10 +240,7 @@ struct StatsView: View {
             }
 
             HStack {
-                Text(formatCost(totalCost))
-                    .font(.caption)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
+                LabelRowView(icon: "dollarsign.circle", label: "Cost", value: formatCost(totalCost))
                 Spacer()
             }
         }
@@ -304,60 +253,13 @@ struct StatsView: View {
         )
     }
 
-    private func providerIcon(_ name: String) -> String {
-        let lower = name.lowercased()
-        if lower.contains("openai") { return "sparkles" }
-        if lower.contains("anthropic") || lower.contains("claude") { return "brain.head.profile" }
-        if lower.contains("google") || lower.contains("gemini") { return "leaf" }
-        if lower.contains("meta") || lower.contains("llama") { return "m.square.fill" }
-        if lower.contains("mistral") { return "cloud" }
-        if lower.contains("deepseek") { return "magnifyingglass" }
-        if lower.contains("xai") || lower.contains("grok") { return "x.square.fill" }
-        return "cpu"
-    }
-
-    private func providerColor(_ name: String) -> Color {
-        let lower = name.lowercased()
-        if lower.contains("openai") { return .green }
-        if lower.contains("anthropic") || lower.contains("claude") { return .orange }
-        if lower.contains("google") || lower.contains("gemini") { return .blue }
-        if lower.contains("meta") || lower.contains("llama") { return .purple }
-        if lower.contains("mistral") { return .cyan }
-        if lower.contains("deepseek") { return .red }
-        if lower.contains("xai") || lower.contains("grok") { return .black }
-        return .indigo
-    }
-
-    private func providerDisplayName(_ name: String) -> String {
-        let lower = name.lowercased()
-        if lower == "unknown" { return "Unknown Provider" }
-        if lower == "openai" { return "OpenAI" }
-        if lower == "anthropic" { return "Anthropic" }
-        if lower == "google" || lower == "googleai" { return "Google AI" }
-        if lower == "meta" { return "Meta" }
-        if lower == "mistral" { return "Mistral AI" }
-        if lower == "deepseek" { return "DeepSeek" }
-        if lower == "xai" { return "xAI" }
-        // Capitalize first letter of each word
-        return name.split(separator: " ")
-            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
-            .joined(separator: " ")
-    }
-
-    // MARK: - Agent Breakdown
+    // MARK: - Per-Agent Breakdown
 
     private func agentBreakdownSection(agents: [AgentStatsSummary], hours: Int) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: "person.2.circle")
-                    .foregroundStyle(.blue)
-                Text("Agents")
-                    .font(.headline)
-                Spacer()
-                Text("Last \(hours == 24 ? "24h" : hours == 168 ? "7d" : "30d")")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            Text("Per-Agent Breakdown")
+                .font(.headline)
+                .padding(.top, 8)
 
             if agents.isEmpty {
                 Text("No agent runs in this period.")
@@ -367,157 +269,45 @@ struct StatsView: View {
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 300, maximum: 480), spacing: 12)], spacing: 12) {
                     ForEach(agents) { agent in
-                        agentStatsRow(agent)
+                        AgentStatsCardView(agent: agent)
                     }
                 }
             }
         }
     }
 
-    private func agentStatsRow(_ agent: AgentStatsSummary) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // Header
-            HStack {
-                Circle()
-                    .fill(agent.successRate >= 80 ? Color.green :
-                          agent.successRate >= 50 ? Color.orange : Color.red)
-                    .frame(width: 8, height: 8)
-                Text(agent.displayName)
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                    .lineLimit(1)
-                if let desc = agent.agentDescription, !desc.isEmpty {
-                    Text(desc)
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                }
-                if let flow = agent.agentFlowType {
-                    Text(flow)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(Color.secondary.opacity(0.1))
-                        .cornerRadius(3)
-                }
-                Spacer()
-                Text("\(agent.totalRuns) runs")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(Color.primary.opacity(0.08))
-                        .frame(height: 6)
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(successBarColor(agent.successRate))
-                        .frame(width: max(geo.size.width * CGFloat(agent.successRate / 100), 2), height: 6)
-                }
-            }
-            .frame(height: 6)
+    // MARK: - Provider Helpers
 
-            // Metrics grid
-            LazyVGrid(columns: [
-                GridItem(.flexible()), GridItem(.flexible()),
-                GridItem(.flexible()), GridItem(.flexible())
-            ], spacing: 6) {
-                metricBox(icon: "arrow.triangle.branch", value: "\(agent.totalRuns)", label: "Runs")
-                metricBox(icon: "checkmark", value: "\(agent.successRuns)", label: "OK", color: .green)
-                metricBox(icon: "xmark", value: "\(agent.errorRuns)", label: "Err", color: .red)
-                metricBox(icon: "clock", value: formatDuration(agent.avgDurationMs), label: "Avg")
-                metricBox(icon: "arrow.up.doc", value: formatCount(Int(agent.avgInputTokens)), label: "In")
-                metricBox(icon: "arrow.down.doc", value: formatCount(Int(agent.avgOutputTokens)), label: "Out")
-                metricBox(icon: "dollarsign", value: formatCost(agent.avgCostUsd), label: "/run")
-                metricBox(icon: "percent", value: String(format: "%.0f%%", agent.successRate), label: "Rate")
-            }
-        }
-        .padding(14)
-        .background(Color.primary.opacity(0.03))
-        .cornerRadius(12)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
-        )
-    }
-
-    private func statusBadge(_ agent: AgentStatsSummary) -> some View {
-        HStack(spacing: 4) {
-            Circle()
-                .fill(agent.successRate >= 80 ? Color.green :
-                      agent.successRate >= 50 ? Color.orange : Color.red)
-                .frame(width: 6, height: 6)
-            Text(agent.successRate >= 80 ? "Healthy" :
-                 agent.successRate >= 50 ? "Degraded" : "Unhealthy")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .background(Color.primary.opacity(0.06))
-        .cornerRadius(6)
-    }
-
-    private func metricBox(icon: String, value: String, label: String, color: Color = .secondary) -> some View {
-        VStack(spacing: 2) {
-            HStack(spacing: 3) {
-                Image(systemName: icon)
-                    .font(.system(size: 9))
-                    .foregroundStyle(color)
-                Text(value)
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .monospacedDigit()
-                    .foregroundStyle(.primary)
-            }
-            Text(label)
-                .font(.system(size: 9))
-                .foregroundStyle(.tertiary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 4)
-        .background(Color.primary.opacity(0.04))
-        .cornerRadius(6)
-    }
-
-    private func successBarColor(_ rate: Double) -> Color {
-        if rate >= 80 { return .green }
-        if rate >= 50 { return .orange }
-        return .red
-    }
-
-    // MARK: - Formatters
-
-    private func formatDuration(_ ms: Double) -> String {
-        if ms >= 60000 {
-            return String(format: "%.1fm", ms / 60000)
-        } else if ms >= 1000 {
-            return String(format: "%.1fs", ms / 1000)
-        } else {
-            return String(format: "%.0fms", ms)
+    private func providerIcon(_ name: String) -> String {
+        switch name.lowercased() {
+        case _ where name.contains("openai"):   return "sparkles.square"
+        case _ where name.contains("anthropic"): return "brain"
+        case _ where name.contains("google"):    return "leaf"
+        case _ where name.contains("mistral"):   return "wind"
+        case _ where name.contains("gemini"):    return "sparkle.magnifyingglass"
+        default:                                 return "globe"
         }
     }
 
-    private func formatCount(_ count: Int) -> String {
-        if count >= 1_000_000 {
-            return String(format: "%.1fM", Double(count) / 1_000_000)
-        } else if count >= 1_000 {
-            return String(format: "%.1fK", Double(count) / 1_000)
+    private func providerColor(_ name: String) -> Color {
+        switch name.lowercased() {
+        case _ where name.contains("openai"):   return .green
+        case _ where name.contains("anthropic"): return .purple
+        case _ where name.contains("google"):    return .blue
+        case _ where name.contains("mistral"):   return .orange
+        case _ where name.contains("gemini"):    return .yellow
+        default:                                  return .secondary
         }
-        return "\(count)"
     }
 
-    private func formatCost(_ usd: Double) -> String {
-        if usd >= 100 {
-            return String(format: "$%.2f", usd)
-        } else if usd >= 1 {
-            return String(format: "$%.3f", usd)
-        } else if usd >= 0.001 {
-            return String(format: "%.1f¢", usd * 100)
-        } else {
-            return String(format: "%.2f¢", usd * 100)
+    private func providerDisplayName(_ name: String) -> String {
+        switch name.lowercased() {
+        case "openai":   return "OpenAI"
+        case "anthropic": return "Anthropic"
+        case "google", "vertex": return "Google Vertex"
+        case "mistral":  return "Mistral AI"
+        case "gemini":   return "Gemini"
+        default:         return name
         }
     }
 
