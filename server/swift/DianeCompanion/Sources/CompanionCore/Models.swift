@@ -833,7 +833,7 @@ struct DianeMessage: Identifiable, Codable, Sendable {
     
     /// Decode tool calls from the graph properties `toolCalls` field, which is stored as an array of dictionaries.
     private static func decodeToolCalls(from raw: AnyValue?) -> [ToolCall]? {
-        guard let raw = raw else { return nil }
+        guard raw != nil else { return nil }
         // The toolCalls property is stored as a JSON array in graph properties
         // It might come through as a JSON string or as nested values
         return nil // Handled below via the Array-typed properties

@@ -163,7 +163,7 @@ struct RemindersView: View {
         let title = newReminderTitle.trimmingCharacters(in: .whitespaces)
         guard !title.isEmpty else { return }
         do {
-            try manager.createReminder(title: title, list: selectedList)
+            _ = try manager.createReminder(title: title, list: selectedList)
             newReminderTitle = ""
             Task { await loadReminders() }
         } catch {

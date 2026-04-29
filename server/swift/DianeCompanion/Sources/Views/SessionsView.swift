@@ -259,7 +259,6 @@ struct SessionsView: View {
     private func messageBubble(_ message: DianeMessage) -> some View {
         let isUser = message.role.lowercased() == "user"
         let isSystem = message.role.lowercased() == "system"
-        let isAssistant = message.role.lowercased() == "assistant"
 
         VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
             // Role label + sequence
