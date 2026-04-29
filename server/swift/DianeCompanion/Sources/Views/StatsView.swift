@@ -289,7 +289,7 @@ struct StatsView: View {
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 300, maximum: 480), spacing: 12)], spacing: 12) {
                     ForEach(agents) { agent in
-                        agentWidgetCard(agent)
+                        agentStatsRow(agent)
                     }
                 }
             }
