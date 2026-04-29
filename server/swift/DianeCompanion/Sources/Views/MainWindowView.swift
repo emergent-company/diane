@@ -10,12 +10,21 @@ struct MainWindowView: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        mainContent
-            .onAppear {
-                if serverConfig.serverURL.isEmpty {
-                    openWindow(id: "settings")
+        if statusMonitor.isLocalAPIReachable {
+            mainContent
+                .onAppear {
+                    if serverConfig.serverURL.isEmpty {
+                        openWindow(id: "settings")
+                    }
                 }
-            }
+        } else {
+            notConnectedView
+                .onAppear {
+                    if serverConfig.serverURL.isEmpty {
+                        openWindow(id: "settings")
+                    }
+                }
+        }
     }
 
     // MARK: - Main two-column content

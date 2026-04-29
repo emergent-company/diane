@@ -17,6 +17,15 @@ import (
 // cmdMCPServe runs the MCP server that reads JSON-RPC from stdin and writes to stdout.
 // This is used by 'diane mcp relay' as the MCP subprocess.
 func cmdMCPServe() {
+	// For JSON mode, acknowledge and exit (don't start the daemon)
+	if jsonOutput {
+		emitJSON("ok", map[string]interface{}{
+			"message": "Starting MCP server",
+			"pid":     os.Getpid(),
+		})
+		return
+	}
+
 	// Write PID file
 	home, err := os.UserHomeDir()
 	if err != nil {

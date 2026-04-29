@@ -104,9 +104,19 @@ echo "   ✅ Bundled: $(ls -lh "$BUILD_APP/Contents/Resources/diane" | awk '{pri
 
 # ── Step 5: Install to /Applications ──
 echo "==> [5/6] Installing to /Applications..."
-# Kill running instance
+# Kill running instance and any orphaned diane serve processes
 pkill -x "$APP_NAME" 2>/dev/null || true
-sleep 0.5
+pkill -f "diane serve" 2>/dev/null || true
+sleep 1
+# Wait for port to be free
+for i in 1 2 3; do
+  if lsof -ti :8890 >/dev/null 2>&1; then
+    echo "   ⏳ Waiting for port 8890... ($i)"
+    sleep 1
+  else
+    break
+  fi
+done
 rm -rf "$INSTALL_PATH"
 cp -R "$BUILD_APP" "$INSTALL_PATH"
 # Register with LaunchServices

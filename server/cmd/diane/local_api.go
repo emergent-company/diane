@@ -448,6 +448,7 @@ type relaySessionData struct {
 	InstanceID  string `json:"instance_id"`
 	Hostname    string `json:"hostname,omitempty"`
 	Version     string `json:"version,omitempty"`
+	ToolCount   int    `json:"tool_count,omitempty"`
 	Tools       any    `json:"tools,omitempty"`
 	ConnectedAt string `json:"connected_at,omitempty"`
 }
@@ -525,8 +526,9 @@ func (a *localAPIServer) handleNodes(w http.ResponseWriter, r *http.Request) {
 
 	nodes := make([]nodeJSON, 0, len(sessions))
 	for _, s := range sessions {
-		toolCount := 0
-		if s.Tools != nil {
+		toolCount := s.ToolCount
+		if toolCount == 0 && s.Tools != nil {
+			// Fallback: attempt to count tools from the tools object
 			if toolsMap, ok := s.Tools.(map[string]interface{}); ok {
 				if tl, ok := toolsMap["tools"].([]interface{}); ok {
 					toolCount = len(tl)

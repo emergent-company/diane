@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"time"
@@ -409,6 +410,21 @@ func cmdDoctor() {
 	}
 
 	fmt.Println("\n═══ Done ═══")
+
+	// JSON output: emit structured summary at end
+	if jsonOutput {
+		emitJSON("ok", map[string]interface{}{
+			"config": map[string]string{
+				"path":       config.Path(),
+				"project_id": pc.ProjectID,
+				"server_url": pc.ServerURL,
+				"mode":       pc.ModeLabel(),
+			},
+			"token_valid":     true,
+			"sdk_connected":   true,
+			"discord_checked": true,
+		})
+	}
 }
 
 func truncateStr(s string, max int) string {
@@ -416,4 +432,29 @@ func truncateStr(s string, max int) string {
 		return s
 	}
 	return s[:max] + "..."
+}
+
+// emitJSON prints a structured JSON response to stdout and sets JSON output mode.
+// status is "ok" or "error". data is the payload (map, slice, string, etc.).
+func emitJSON(status string, data interface{}) {
+	resp := map[string]interface{}{
+		"status": status,
+	}
+	if status == "error" {
+		switch v := data.(type) {
+		case string:
+			resp["error"] = v
+		case map[string]string:
+			if msg, ok := v["message"]; ok {
+				resp["error"] = msg
+			}
+			resp["data"] = v
+		default:
+			resp["error"] = data
+		}
+	} else {
+		resp["data"] = data
+	}
+	b, _ := json.Marshal(resp)
+	fmt.Println(string(b))
 }

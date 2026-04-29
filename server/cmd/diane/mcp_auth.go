@@ -32,7 +32,11 @@ func cmdMCPAuth(args []string) {
 
 	cfg, err := mcpproxy.LoadConfig(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		if jsonOutput {
+			emitJSON("error", map[string]string{"message": "Error loading config: " + err.Error()})
+		} else {
+			fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		}
 		osExit(1)
 	}
 
@@ -45,7 +49,11 @@ func cmdMCPAuth(args []string) {
 		}
 	}
 	if server == nil {
-		fmt.Fprintf(os.Stderr, "Error: server %q not found in %s\n", *serverName, path)
+		if jsonOutput {
+			emitJSON("error", map[string]string{"message": fmt.Sprintf("Server %q not found in %s", *serverName, path)})
+		} else {
+			fmt.Fprintf(os.Stderr, "Error: server %q not found in %s\n", *serverName, path)
+		}
 		osExit(1)
 	}
 
@@ -59,32 +67,53 @@ func cmdMCPAuth(args []string) {
 	// If we have a discovered config (or config with endpoints) but no client_id,
 	// check if dynamic client registration is available
 	if oauth != nil && oauth.RegistrationURL != "" && oauth.ClientID == "" {
-		fmt.Printf("🔄 Registering client with authorization server...\n")
+		if !jsonOutput {
+			fmt.Printf("🔄 Registering client with authorization server...\n")
+		}
 		clientID, err := mcpproxy.DynamicClientRegistration(oauth.RegistrationURL)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "❌ Dynamic client registration failed: %v\n", err)
+			if jsonOutput {
+				emitJSON("error", map[string]string{"message": "Dynamic client registration failed: " + err.Error()})
+			} else {
+				fmt.Fprintf(os.Stderr, "❌ Dynamic client registration failed: %v\n", err)
+			}
 			osExit(1)
 		}
 		oauth.ClientID = clientID
 		// Save the updated config with the client_id back to disk
 		_ = mcpproxy.SaveDiscoveredConfig(*serverName, oauth)
-		fmt.Printf("✅ Registered client: %s\n", clientID)
+		if !jsonOutput {
+			fmt.Printf("✅ Registered client: %s\n", clientID)
+		}
 	}
 
 	if oauth == nil {
 		// Check if tokens already exist (pre-authenticated)
 		tokens, err := mcpproxy.LoadTokens(*serverName)
 		if err == nil && tokens.AccessToken != "" {
-			fmt.Printf("✅ %s is already authenticated (token expires at %s)\n", *serverName, tokens.ExpiresAt.Format(time.RFC3339))
+			if jsonOutput {
+				emitJSON("ok", map[string]interface{}{
+					"server":       *serverName,
+					"message":      "Already authenticated",
+					"expires_at":   tokens.ExpiresAt.Format(time.RFC3339),
+				})
+			} else {
+				fmt.Printf("✅ %s is already authenticated (token expires at %s)\n", *serverName, tokens.ExpiresAt.Format(time.RFC3339))
+			}
 			return
 		}
-		fmt.Fprintf(os.Stderr, "Error: no OAuth configuration for server %q\n", *serverName)
-		fmt.Fprintf(os.Stderr, "Tip: run diane mcp relay first to auto-discover OAuth endpoints for HTTP servers\n")
+		if jsonOutput {
+			emitJSON("error", map[string]string{"message": fmt.Sprintf("No OAuth configuration for server %q", *serverName)})
+		} else {
+			fmt.Fprintf(os.Stderr, "Error: no OAuth configuration for server %q\n", *serverName)
+			fmt.Fprintf(os.Stderr, "Tip: run diane mcp relay first to auto-discover OAuth endpoints for HTTP servers\n")
+		}
 		osExit(1)
 	}
 
-	// Run the appropriate OAuth flow
-	fmt.Printf("🔐 Authenticating MCP server: %s\n\n", *serverName)
+	if !jsonOutput {
+		fmt.Printf("🔐 Authenticating MCP server: %s\n\n", *serverName)
+	}
 
 	var token string
 	if oauth.DeviceAuthURL != "" {
@@ -92,17 +121,37 @@ func cmdMCPAuth(args []string) {
 	} else if oauth.AuthorizationURL != "" {
 		token, err = mcpproxy.AuthenticateAuthCodeFlow(*serverName, oauth)
 	} else {
-		fmt.Fprintf(os.Stderr, "Error: no OAuth flow configured (need device_auth_url or authorization_url)\n")
+		if jsonOutput {
+			emitJSON("error", map[string]string{"message": "No OAuth flow configured (need device_auth_url or authorization_url)"})
+		} else {
+			fmt.Fprintf(os.Stderr, "Error: no OAuth flow configured (need device_auth_url or authorization_url)\n")
+		}
 		osExit(1)
 	}
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Authentication failed: %v\n", err)
+		if jsonOutput {
+			emitJSON("error", map[string]interface{}{
+				"server": *serverName,
+				"message": "Authentication failed",
+				"error":   err.Error(),
+			})
+		} else {
+			fmt.Fprintf(os.Stderr, "❌ Authentication failed: %v\n", err)
+		}
 		osExit(1)
 	}
 
 	_ = token
 
-	fmt.Printf("\n✅ Successfully authenticated %s\n", *serverName)
-	fmt.Printf("   Token saved to: %s\n", mcpproxy.TokenPath(*serverName))
+	if jsonOutput {
+		emitJSON("ok", map[string]interface{}{
+			"server":   *serverName,
+			"message":  "Successfully authenticated",
+			"token_path": mcpproxy.TokenPath(*serverName),
+		})
+	} else {
+		fmt.Printf("\n✅ Successfully authenticated %s\n", *serverName)
+		fmt.Printf("   Token saved to: %s\n", mcpproxy.TokenPath(*serverName))
+	}
 }

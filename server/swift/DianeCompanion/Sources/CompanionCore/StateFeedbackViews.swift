@@ -103,6 +103,8 @@ struct SplitListDetailView<ListContent: View, DetailContent: View>: View {
     let listContent: ListContent
     let detailContent: DetailContent
 
+    @State private var dividerRatio: CGFloat = 0.5
+
     init(
         emptyTitle: String,
         emptyIcon: String = "tray",
@@ -120,14 +122,35 @@ struct SplitListDetailView<ListContent: View, DetailContent: View>: View {
     }
 
     var body: some View {
-        HSplitView {
-            listContent
-                .frame(minWidth: minWidth)
-                .layoutPriority(1)
+        GeometryReader { geo in
+            let listWidth = max(minWidth, (geo.size.width - 4) * dividerRatio)
+            let detailWidth = max(minWidth, (geo.size.width - 4) * (1 - dividerRatio))
 
-            detailContent
-                .frame(minWidth: minWidth)
-                .layoutPriority(1)
+            HStack(spacing: 0) {
+                listContent
+                    .frame(width: listWidth)
+                    .clipped()
+
+                Rectangle()
+                    .fill(.separator)
+                    .frame(width: 4)
+                    .onHover { inside in
+                        if inside { NSCursor.resizeLeftRight.push() }
+                        else { NSCursor.pop() }
+                    }
+                    .gesture(
+                        DragGesture()
+                            .onChanged { value in
+                                let newRatio = value.location.x / geo.size.width
+                                dividerRatio = min(0.8, max(0.2, newRatio))
+                            }
+                    )
+
+                detailContent
+                    .frame(width: detailWidth)
+                    .clipped()
+            }
         }
+        .frame(minHeight: 200)
     }
 }

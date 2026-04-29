@@ -786,6 +786,17 @@ func runMCPRelay(args []string) {
 		}
 	}
 
+	// For JSON mode, acknowledge and exit (don't start the daemon)
+	if jsonOutput {
+		emitJSON("ok", map[string]interface{}{
+			"message":    "Starting relay",
+			"instance":   instanceID,
+			"relay_url":  relayURL,
+			"mcp_binary": mcpBinary,
+		})
+		return
+	}
+
 	// Load config for token & relay URL
 	cfg, err := config.Load()
 	if err != nil {

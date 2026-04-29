@@ -28,7 +28,23 @@ import (
 // Defaults to "dev" for local builds.
 var Version = "dev"
 
+// jsonOutput is set when --json flag is passed to any diane command.
+var jsonOutput bool
+
 func main() {
+	// Parse --json globally before command dispatch
+	args := os.Args[1:]
+	jsonOutput = false
+	filtered := make([]string, 0, len(args))
+	for _, a := range args {
+		if a == "--json" || a == "-json" {
+			jsonOutput = true
+		} else {
+			filtered = append(filtered, a)
+		}
+	}
+	os.Args = append([]string{os.Args[0]}, filtered...)
+
 	if len(os.Args) < 2 {
 		fmt.Println("Usage: diane <command>")
 		fmt.Println("")
@@ -272,6 +288,16 @@ func cmdInit() {
 		log.Fatalf("Failed to save config: %v", err)
 	}
 
+	if jsonOutput {
+		emitJSON("ok", map[string]interface{}{
+			"project_name": name,
+			"server_url":   serverURL,
+			"project_id":   projectID,
+			"mode":         mode,
+		})
+		return
+	}
+
 	fmt.Printf("\n✅ Configuration saved to %s\n", config.Path())
 	fmt.Printf("   Project: %s\n", name)
 	fmt.Printf("   Server:  %s\n", serverURL)
@@ -314,6 +340,17 @@ func cmdBot() {
 	restartPtr := fs.Bool("restart", false, "Auto-restart on crash")
 	restartDelay := fs.Duration("restart-delay", 5*time.Second, "Restart delay")
 	fs.Parse(os.Args[2:])
+
+	// For JSON mode, acknowledge and exit (don't start the daemon)
+	if jsonOutput {
+		emitJSON("ok", map[string]interface{}{
+			"message": "Starting bot",
+			"pid":     os.Getpid(),
+			"pidfile": *pidfilePtr,
+			"restart": *restartPtr,
+		})
+		return
+	}
 
 	// ── PID file: check for existing instance, then write ──
 	if *pidfilePtr != "" {
@@ -427,6 +464,7 @@ func cmdProjects() {
 }
 
 // doApplySchemas applies the embedded schemas to the configured project.
+// Supports --json output via the global jsonOutput flag.
 func doApplySchemas(pc *config.ProjectConfig) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -438,19 +476,30 @@ func doApplySchemas(pc *config.ProjectConfig) {
 		OrgID:     pc.OrgID,
 	})
 	if err != nil {
-		fmt.Printf("  ⚠️  Cannot apply schemas: %v\n", err)
+		if jsonOutput {
+			emitJSON("error", map[string]string{"message": "Cannot apply schemas: " + err.Error()})
+		} else {
+			fmt.Printf("  ⚠️  Cannot apply schemas: %v\n", err)
+		}
 		return
 	}
 	defer bridge.Close()
 
-	fmt.Print("  Applying schemas... ")
+	if !jsonOutput {
+		fmt.Print("  Applying schemas... ")
+	}
 	results, err := schema.Apply(ctx, bridge.Client(), pc.ProjectID, nil)
 	if err != nil {
-		fmt.Printf("❌ %v\n", err)
+		if jsonOutput {
+			emitJSON("error", map[string]string{"message": err.Error()})
+		} else {
+			fmt.Printf("❌ %v\n", err)
+		}
 		return
 	}
 
 	var created, updated int
+	var errors []map[string]string
 	for _, r := range results {
 		switch r.Action {
 		case "created":
@@ -458,10 +507,26 @@ func doApplySchemas(pc *config.ProjectConfig) {
 		case "updated":
 			updated++
 		case "error":
-			fmt.Printf("\n  ❌ %s: %v", r.TypeName, r.Error)
+			if jsonOutput {
+				errors = append(errors, map[string]string{"type": r.TypeName, "error": r.Error.Error()})
+			} else {
+				fmt.Printf("\n  ❌ %s: %v", r.TypeName, r.Error)
+			}
 		}
 	}
-	fmt.Printf("✅ %d created, %d updated\n", created, updated)
+
+	if jsonOutput {
+		data := map[string]interface{}{
+			"created": created,
+			"updated": updated,
+		}
+		if len(errors) > 0 {
+			data["errors"] = errors
+		}
+		emitJSON("ok", data)
+	} else {
+		fmt.Printf("✅ %d created, %d updated\n", created, updated)
+	}
 }
 
 // readLine reads a trimmed line from stdin.

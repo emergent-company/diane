@@ -83,25 +83,33 @@ func cmdToolTest(args []string) {
 		}
 	}
 
-	fmt.Printf("🔧 Testing tool: %s\n", toolName)
-	fmt.Printf("   Timeout:     %v\n", timeout)
-	if len(arguments) > 0 {
-		fmt.Printf("   Arguments:   %v\n", arguments)
-	} else {
-		fmt.Printf("   Arguments:   (none)\n")
+	if !jsonOutput {
+		fmt.Printf("🔧 Testing tool: %s\n", toolName)
+		fmt.Printf("   Timeout:     %v\n", timeout)
+		if len(arguments) > 0 {
+			fmt.Printf("   Arguments:   %v\n", arguments)
+		} else {
+			fmt.Printf("   Arguments:   (none)\n")
+		}
+		fmt.Println()
 	}
-	fmt.Println()
 
 	// Initialize MCP proxy (same config as diane mcp serve)
 	configPath := mcpproxy.GetDefaultConfigPath()
 	proxy, err := mcpproxy.NewProxy(configPath)
 	if err != nil {
-		log.Fatalf("Failed to initialize MCP proxy: %v", err)
+		if jsonOutput {
+			emitJSON("error", map[string]string{"message": "Failed to initialize MCP proxy: " + err.Error()})
+		} else {
+			log.Fatalf("Failed to initialize MCP proxy: %v", err)
+		}
+		return
 	}
 	defer proxy.Close()
 
-	// Call the tool with a timeout
-	fmt.Printf("⏳ Calling tool... (timeout: %v)\n", timeout)
+	if !jsonOutput {
+		fmt.Printf("⏳ Calling tool... (timeout: %v)\n", timeout)
+	}
 
 	start := time.Now()
 
@@ -121,26 +129,55 @@ func cmdToolTest(args []string) {
 	case res := <-resultCh:
 		elapsed := time.Since(start)
 		if res.err != nil {
-			fmt.Printf("❌ Tool call failed after %v:\n", elapsed)
-			fmt.Printf("   Error: %v\n", res.err)
+			if jsonOutput {
+				emitJSON("error", map[string]interface{}{
+					"tool":        toolName,
+					"duration_ms": elapsed.Milliseconds(),
+					"error":       res.err.Error(),
+				})
+			} else {
+				fmt.Printf("❌ Tool call failed after %v:\n", elapsed)
+				fmt.Printf("   Error: %v\n", res.err)
+			}
 			os.Exit(1)
 		}
-		fmt.Printf("✅ Tool call succeeded in %v\n", elapsed)
-		// Pretty-print the result
-		var prettyResult interface{}
-		if err := json.Unmarshal(res.output, &prettyResult); err == nil {
-			pretty, _ := json.MarshalIndent(prettyResult, "   ", "  ")
-			fmt.Printf("   Result:\n")
-			fmt.Printf("   %s\n", string(pretty))
+
+		if jsonOutput {
+			var resultObj interface{}
+			if err := json.Unmarshal(res.output, &resultObj); err != nil {
+				resultObj = string(res.output)
+			}
+			emitJSON("ok", map[string]interface{}{
+				"tool":        toolName,
+				"duration_ms": elapsed.Milliseconds(),
+				"result":      resultObj,
+			})
 		} else {
-			fmt.Printf("   Result: %s\n", string(res.output))
+			fmt.Printf("✅ Tool call succeeded in %v\n", elapsed)
+			var prettyResult interface{}
+			if err := json.Unmarshal(res.output, &prettyResult); err == nil {
+				pretty, _ := json.MarshalIndent(prettyResult, "   ", "  ")
+				fmt.Printf("   Result:\n")
+				fmt.Printf("   %s\n", string(pretty))
+			} else {
+				fmt.Printf("   Result: %s\n", string(res.output))
+			}
 		}
 
 	case <-time.After(timeout):
 		elapsed := time.Since(start)
-		fmt.Printf("❌ Tool call TIMED OUT after %v\n", elapsed)
-		fmt.Printf("   The downstream service is hanging and needs investigation.\n")
-		fmt.Printf("   Try a shorter --timeout or check the upstream service health.\n")
+		if jsonOutput {
+			emitJSON("error", map[string]interface{}{
+				"tool":        toolName,
+				"duration_ms": elapsed.Milliseconds(),
+				"error":       "timeout",
+				"timeout":     timeout.String(),
+			})
+		} else {
+			fmt.Printf("❌ Tool call TIMED OUT after %v\n", elapsed)
+			fmt.Printf("   The downstream service is hanging and needs investigation.\n")
+			fmt.Printf("   Try a shorter --timeout or check the upstream service health.\n")
+		}
 		os.Exit(1)
 	}
 }

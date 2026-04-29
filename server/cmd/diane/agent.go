@@ -157,63 +157,61 @@ func cmdAgentList() {
 		return
 	}
 
-	fmt.Println("═══ Agent Definitions ═══")
-	fmt.Println()
-
-	// Local agents
-	fmt.Println("📋 Local config:")
-	if len(pc.Agents) == 0 {
-		fmt.Println("   No agents configured")
-	} else {
-		for name, a := range pc.Agents {
-			toolCount := len(a.Tools)
-			skillCount := len(a.Skills)
-			fmt.Printf("   %s\n", name)
-			if a.Description != "" {
-				fmt.Printf("       %s\n", a.Description)
-			}
-			fmt.Printf("       Tools: %d | Skills: %d | Flow: %s\n", toolCount, skillCount, orDefault(a.FlowType, ""))
-			if a.Sandbox != nil && a.Sandbox.Enabled {
-				fmt.Printf("       Sandbox: %s\n", orDefault(a.Sandbox.BaseImage, "default"))
-			}
-		}
-	}
-
-	fmt.Println()
-
-	// Remote agents
-	fmt.Println("🌐 Memory Platform (synced):")
+	// Fetch remote agents for display
+	var remoteAgents *sdkagents.APIResponse[[]sdkagents.AgentDefinitionSummary]
 	bridge, err := memory.New(memory.Config{
 		ServerURL: pc.ServerURL,
 		APIKey:    pc.Token,
 		ProjectID: pc.ProjectID,
 		OrgID:     pc.OrgID,
 	})
-	if err != nil {
-		fmt.Printf("   ⚠️  Cannot connect: %v\n", err)
-		return
+	if err == nil {
+		defer bridge.Close()
+		remoteAgents, _ = bridge.ListAgentDefs(context.Background())
 	}
-	defer bridge.Close()
 
-	remoteAgents, err := bridge.ListAgentDefs(context.Background())
-	if err != nil {
-		fmt.Printf("   ⚠️  %v\n", err)
-		return
-	}
-	if remoteAgents == nil || len(remoteAgents.Data) == 0 {
-		fmt.Println("   No agents synced yet")
-		fmt.Println("   Run 'diane agent sync' to push local agents")
-	} else {
-		for _, a := range remoteAgents.Data {
-			def := ""
-			if a.IsDefault {
-				def = " [default]"
+	if !jsonOutput {
+		fmt.Println("═══ Agent Definitions ═══")
+		fmt.Println()
+
+		// Local agents
+		fmt.Println("📋 Local config:")
+		if len(pc.Agents) == 0 {
+			fmt.Println("   No agents configured")
+		} else {
+			for name, a := range pc.Agents {
+				toolCount := len(a.Tools)
+				skillCount := len(a.Skills)
+				fmt.Printf("   %s\n", name)
+				if a.Description != "" {
+					fmt.Printf("       %s\n", a.Description)
+				}
+				fmt.Printf("       Tools: %d | Skills: %d | Flow: %s\n", toolCount, skillCount, orDefault(a.FlowType, ""))
+				if a.Sandbox != nil && a.Sandbox.Enabled {
+					fmt.Printf("       Sandbox: %s\n", orDefault(a.Sandbox.BaseImage, "default"))
+				}
 			}
-			fmt.Printf("   %s — %s%s\n", a.Name, a.FlowType, def)
-			if a.Description != nil {
-				fmt.Printf("       %s\n", *a.Description)
+		}
+
+		fmt.Println()
+
+		// Remote agents
+		fmt.Println("🌐 Memory Platform (synced):")
+		if remoteAgents == nil || len(remoteAgents.Data) == 0 {
+			fmt.Println("   No agents synced yet")
+			fmt.Println("   Run 'diane agent sync' to push local agents")
+		} else {
+			for _, a := range remoteAgents.Data {
+				def := ""
+				if a.IsDefault {
+					def = " [default]"
+				}
+				fmt.Printf("   %s — %s%s\n", a.Name, a.FlowType, def)
+				if a.Description != nil {
+					fmt.Printf("       %s\n", *a.Description)
+				}
+				fmt.Printf("       Tools: %d | Visibility: %s\n", a.ToolCount, a.Visibility)
 			}
-			fmt.Printf("       Tools: %d | Visibility: %s\n", a.ToolCount, a.Visibility)
 		}
 	}
 }
@@ -473,16 +471,42 @@ func cmdAgentDefine(name string) {
 func cmdAgentShow(name string) {
 	cfg, err := config.Load()
 	if err != nil {
+		if jsonOutput {
+			emitJSON("error", map[string]string{"message": fmt.Sprintf("Failed to load config: %v", err)})
+		}
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
 		os.Exit(1)
 	}
 	pc := cfg.Active()
 	if pc == nil || pc.Agents == nil || pc.Agents[name] == nil {
+		if jsonOutput {
+			emitJSON("error", map[string]string{"message": fmt.Sprintf("Agent '%s' not found in local config.", name)})
+		}
 		fmt.Printf("Agent '%s' not found in local config.\n", name)
 		return
 	}
 
 	ac := pc.Agents[name]
+
+	if jsonOutput {
+		emitJSON("ok", map[string]interface{}{
+			"name":           name,
+			"description":    ac.Description,
+			"system_prompt":  ac.SystemPrompt,
+			"flow_type":      orDefault(ac.FlowType, "standard"),
+			"visibility":     orDefault(ac.Visibility, "project"),
+			"dispatch_mode":  orDefault(ac.DispatchMode, "auto"),
+			"max_steps":      orDefaultInt(ac.MaxSteps, 50),
+			"default_timeout": orDefaultInt(ac.DefaultTimeout, 300),
+			"tools":          ac.Tools,
+			"skills":         ac.Skills,
+			"model":          ac.Model,
+			"sandbox":        ac.Sandbox,
+			"acp":            ac.ACP,
+		})
+		return
+	}
+
 	fmt.Printf("═══ Agent: %s ═══\n", name)
 	fmt.Printf("  Description:     %s\n", ac.Description)
 	if ac.SystemPrompt != "" {
