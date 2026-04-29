@@ -13,22 +13,23 @@ struct AgentsView: View {
     @State private var error: String? = nil
 
     var body: some View {
-        HSplitView {
-            agentsList
-                .frame(minWidth: 220, idealWidth: 350)
-
-            if let agent = selectedAgent {
-                agentDetailPanel(agent)
-                    .frame(minWidth: 220, idealWidth: 350)
-            } else {
-                EmptyStateView(
-                    title: "Select an Agent",
-                    icon: "brain.head.profile",
-                    description: "Select an agent definition to view its configuration."
-                )
-                .frame(minWidth: 220, idealWidth: 350)
+        SplitListDetailView(
+            emptyTitle: "Select an Agent",
+            emptyIcon: "brain.head.profile",
+            emptyDescription: "Select an agent definition to view its configuration.",
+            listContent: { agentsList },
+            detailContent: {
+                if let agent = selectedAgent {
+                    agentDetailPanel(agent)
+                } else {
+                    EmptyStateView(
+                        title: "Select an Agent",
+                        icon: "brain.head.profile",
+                        description: "Select an agent definition to view its configuration."
+                    )
+                }
             }
-        }
+        )
         .navigationTitle("Agents")
         .task { await load() }
     }

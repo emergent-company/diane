@@ -16,22 +16,23 @@ struct SessionsView: View {
     @State private var messagesError: String? = nil
 
     var body: some View {
-        HSplitView {
-            sessionsList
-                .frame(minWidth: 220, idealWidth: 350)
-
-            if let session = selectedSession {
-                sessionDetailPanel(session)
-                    .frame(minWidth: 220, idealWidth: 350)
-            } else {
-                EmptyStateView(
-                    title: "Select a Session",
-                    icon: "message",
-                    description: "Select a conversation session to view its transcript."
-                )
-                .frame(minWidth: 220, idealWidth: 350)
+        SplitListDetailView(
+            emptyTitle: "Select a Session",
+            emptyIcon: "message",
+            emptyDescription: "Select a conversation session to view its transcript.",
+            listContent: { sessionsList },
+            detailContent: {
+                if let session = selectedSession {
+                    sessionDetailPanel(session)
+                } else {
+                    EmptyStateView(
+                        title: "Select a Session",
+                        icon: "message",
+                        description: "Select a conversation session to view its transcript."
+                    )
+                }
             }
-        }
+        )
         .navigationTitle("Sessions")
         .task { await load() }
     }

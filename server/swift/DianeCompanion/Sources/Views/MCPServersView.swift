@@ -18,22 +18,23 @@ struct MCPServersView: View {
     @State private var nodeError: String? = nil
 
     var body: some View {
-        HSplitView {
-            serversList
-                .frame(minWidth: 220, idealWidth: 350)
-
-            if let server = selectedServer {
-                serverDetailPanel(server)
-                    .frame(minWidth: 220, idealWidth: 350)
-            } else {
-                EmptyStateView(
-                    title: "Select a Server",
-                    icon: "plug",
-                    description: "Select an MCP server to inspect its configuration and tools."
-                )
-                .frame(minWidth: 220, idealWidth: 350)
+        SplitListDetailView(
+            emptyTitle: "Select a Server",
+            emptyIcon: "plug",
+            emptyDescription: "Select an MCP server to inspect its configuration and tools.",
+            listContent: { serversList },
+            detailContent: {
+                if let server = selectedServer {
+                    serverDetailPanel(server)
+                } else {
+                    EmptyStateView(
+                        title: "Select a Server",
+                        icon: "plug",
+                        description: "Select an MCP server to inspect its configuration and tools."
+                    )
+                }
             }
-        }
+        )
         .navigationTitle("MCP Servers")
         .task { await load() }
     }

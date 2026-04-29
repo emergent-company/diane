@@ -14,9 +14,10 @@ import (
 	"time"
 
 	"github.com/Emergent-Comapny/diane/internal/config"
-	"github.com/Emergent-Comapny/diane/internal/db"
 	"github.com/Emergent-Comapny/diane/internal/mcpproxy"
 	"github.com/Emergent-Comapny/diane/internal/memory"
+
+	sdkagentrun "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agents"
 )
 
 // localAPIServer manages the local HTTP API for the companion app.
@@ -61,7 +62,6 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	mux.HandleFunc("/api/nodes/", api.handleNodeByID)
 	mux.HandleFunc("/api/status", api.handleStatus)
 	mux.HandleFunc("/api/stats", api.handleStats)
-	mux.HandleFunc("/api/agents", api.handleAgents)
 
 	api.server = &http.Server{
 		Addr:    fmt.Sprintf("127.0.0.1:%d", port),
@@ -654,7 +654,7 @@ func (a *localAPIServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GET /api/stats — agent run statistics (mirrors `diane stats`)
+// GET /api/stats — agent run statistics from the Memory Platform
 func (a *localAPIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -666,18 +666,19 @@ func (a *localAPIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 		hours = 24
 	}
 
-	database, err := db.New("")
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("open db: %v", err))
-		return
+	ctx := context.Background()
+	since := time.Now().Add(-time.Duration(hours) * time.Hour)
+	opts := &sdkagentrun.RunStatsOptions{
+		Since: &since,
 	}
-	defer database.Close()
 
-	summaries, err := database.GetAgentStatsSummary(hours)
+	resp, err := a.bridge.GetProjectRunStats(ctx, opts)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("query stats: %v", err))
 		return
 	}
+
+	stats := resp.Data
 
 	type summaryJSON struct {
 		AgentName         string  `json:"agent_name"`
@@ -706,35 +707,41 @@ func (a *localAPIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 		OverallSuccess  float64 `json:"overall_success_rate"`
 	}
 
-	items := make([]summaryJSON, 0, len(summaries))
+	items := make([]summaryJSON, 0, len(stats.ByAgent))
 	var totals totalsJSON
-	for _, s := range summaries {
+
+	for name, as := range stats.ByAgent {
+		totalRuns := int(as.Total)
+		successRuns := int(as.Success)
+		errorRuns := int(as.Failed) + int(as.Errored)
 		successRate := float64(0)
-		if s.TotalRuns > 0 {
-			successRate = float64(s.SuccessRuns) / float64(s.TotalRuns) * 100
+		if totalRuns > 0 {
+			successRate = float64(successRuns) / float64(totalRuns) * 100
 		}
+
 		items = append(items, summaryJSON{
-			AgentName:         s.AgentName,
-			TotalRuns:         s.TotalRuns,
-			SuccessRuns:       s.SuccessRuns,
-			ErrorRuns:         s.ErrorRuns,
-			AvgDurationMs:     s.AvgDurationMs,
-			AvgStepCount:      s.AvgStepCount,
-			AvgToolCalls:      s.AvgToolCalls,
-			AvgInputTokens:    s.AvgInputTokens,
-			AvgOutputTokens:   s.AvgOutputTokens,
-			TotalDurationMs:   s.TotalDurationMs,
-			TotalInputTokens:  s.TotalInputTokens,
-			TotalOutputTokens: s.TotalOutputTokens,
+			AgentName:         name,
+			TotalRuns:         totalRuns,
+			SuccessRuns:       successRuns,
+			ErrorRuns:         errorRuns,
+			AvgDurationMs:     as.AvgDurationMs,
+			AvgStepCount:      0,
+			AvgToolCalls:      0,
+			AvgInputTokens:    as.AvgInputTokens,
+			AvgOutputTokens:   as.AvgOutputTokens,
+			TotalDurationMs:   int(float64(totalRuns) * as.AvgDurationMs),
+			TotalInputTokens:  int(as.AvgInputTokens * float64(totalRuns)),
+			TotalOutputTokens: int(as.AvgOutputTokens * float64(totalRuns)),
 			SuccessRate:       successRate,
 		})
-		totals.TotalRuns += s.TotalRuns
-		totals.TotalSuccess += s.SuccessRuns
-		totals.TotalErrors += s.ErrorRuns
-		totals.TotalDurationMs += s.TotalDurationMs
-		totals.TotalInput += s.TotalInputTokens
-		totals.TotalOutput += s.TotalOutputTokens
+		totals.TotalRuns += totalRuns
+		totals.TotalSuccess += successRuns
+		totals.TotalErrors += errorRuns
+		totals.TotalDurationMs += int(float64(totalRuns) * as.AvgDurationMs)
+		totals.TotalInput += int(as.AvgInputTokens * float64(totalRuns))
+		totals.TotalOutput += int(as.AvgOutputTokens * float64(totalRuns))
 	}
+
 	if totals.TotalRuns > 0 {
 		totals.OverallAvgDurMs = float64(totals.TotalDurationMs) / float64(totals.TotalRuns)
 		totals.OverallSuccess = float64(totals.TotalSuccess) / float64(totals.TotalRuns) * 100

@@ -27,7 +27,7 @@ func cmdAgent(args []string) {
 		fmt.Println("  seed            Seed all built-in agents to Memory Platform")
 		fmt.Println("  seed-db         Seed all built-in agents to local SQLite database")
 		fmt.Println("  list-db         List agents from local SQLite database")
-		fmt.Println("  stats [name]    Show run stats for agents (from local DB)")
+		fmt.Println("  stats [name]    Show run stats for agents (from Memory Platform)")
 		fmt.Println("  trace <runID>    Fetch full trace of an agent run (messages, tools, parent)")
 		fmt.Println("  runs [name] [--since <duration>]  List recent agent runs from Memory Platform")
 		fmt.Println("  define <name>   Create or update a user-defined agent  [master only]")
@@ -1191,66 +1191,80 @@ func cmdAgentListDB() {
 	}
 }
 
-// cmdAgentStats shows run statistics for agents from the local DB.
+// cmdAgentStats shows run statistics for agents from the Memory Platform.
 func cmdAgentStats(name string) {
-	d, err := db.New("")
+	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Database: %v\n", err)
+		fmt.Fprintf(os.Stderr, "❌ Config: %v\n", err)
 		return
 	}
-	defer d.Close()
+	pc := cfg.Active()
+	if pc == nil {
+		fmt.Fprintln(os.Stderr, "❌ No active project. Run 'diane init' or configure ~/.config/diane.yml")
+		return
+	}
+
+	ctx := context.Background()
+	since := time.Now().Add(-24 * time.Hour)
+	opts := &sdkagentrun.RunStatsOptions{
+		Since: &since,
+	}
+
+	if name != "" {
+		opts.AgentID = name
+	}
+
+	bridge, err := memory.New(memory.Config{
+		ServerURL: pc.ServerURL,
+		APIKey:    pc.Token,
+		ProjectID: pc.ProjectID,
+		OrgID:     pc.OrgID,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Memory Platform: %v\n", err)
+		return
+	}
+	defer bridge.Close()
+
+	resp, err := bridge.GetProjectRunStats(ctx, opts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Stats: %v\n", err)
+		return
+	}
+
+	stats := resp.Data
 
 	if name != "" {
 		// Show individual agent stats
-		stats, err := d.GetAgentRunStats(name, 24)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "❌ Stats: %v\n", err)
+		as, ok := stats.ByAgent[name]
+		if !ok {
+			fmt.Printf("No runs recorded for %q in the last 24 hours.\n", name)
 			return
 		}
-		a, _ := d.GetAgentDefinition(name)
-		if a != nil {
-			tags, _ := db.TagsFromJSON(a.TagsJSON)
-			fmt.Printf("═══ Stats for %s ═══\n", name)
-			fmt.Printf("  Status: %s | Tags: %v | Weight: %.2f\n\n", a.Status, tags, a.RoutingWeight)
+		successRate := float64(0)
+		if as.Total > 0 {
+			successRate = float64(as.Success) / float64(as.Total) * 100
 		}
-		if len(stats) == 0 {
-			fmt.Println("  No runs recorded in the last 24 hours.")
-			return
-		}
-		var totalDur, totalInput, totalOutput, success int
-		for _, s := range stats {
-			totalDur += s.DurationMs
-			totalInput += s.InputTokens
-			totalOutput += s.OutputTokens
-			if s.Status == "success" || s.Status == "completed" {
-				success++
-			}
-		}
-		n := len(stats)
-		fmt.Printf("  Runs: %d | Success: %d | Failures: %d\n", n, success, n-success)
-		fmt.Printf("  Avg duration: %dms | Avg input: %d | Avg output: %d\n",
-			totalDur/n, totalInput/n, totalOutput/n)
+		fmt.Printf("═══ Stats for %s ═══\n", name)
+		fmt.Printf("  Runs: %d | Success: %d | Failures: %d\n", as.Total, as.Success, as.Failed+as.Errored)
+		fmt.Printf("  Success rate: %.0f%% | Avg duration: %.0fms\n", successRate, as.AvgDurationMs)
+		fmt.Printf("  Avg input: %.0f | Avg output: %.0f\n", as.AvgInputTokens, as.AvgOutputTokens)
 	} else {
 		// Show summary for all agents
-		summaries, err := d.GetAgentStatsSummary(24)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "❌ Stats summary: %v\n", err)
-			return
-		}
-		if len(summaries) == 0 {
+		if len(stats.ByAgent) == 0 {
 			fmt.Println("No runs recorded in the last 24 hours.")
 			return
 		}
 		fmt.Println("═══ Agent Stats (last 24h) ═══")
-		for _, s := range summaries {
+		for name, as := range stats.ByAgent {
 			successRate := float64(0)
-			if s.TotalRuns > 0 {
-				successRate = float64(s.SuccessRuns) / float64(s.TotalRuns) * 100
+			if as.Total > 0 {
+				successRate = float64(as.Success) / float64(as.Total) * 100
 			}
-			fmt.Printf("  %s\n", s.AgentName)
-			fmt.Printf("    Runs: %d | Success: %.0f%% | Avg: %dms | Avg tokens: %d in / %d out\n",
-				s.TotalRuns, successRate, int(s.AvgDurationMs),
-				int(s.AvgInputTokens), int(s.AvgOutputTokens))
+			fmt.Printf("  %s\n", name)
+			fmt.Printf("    Runs: %d | Success: %.0f%% | Avg: %.0fms | Avg tokens: %.0f in / %.0f out\n",
+				as.Total, successRate, as.AvgDurationMs,
+				as.AvgInputTokens, as.AvgOutputTokens)
 		}
 	}
 }
