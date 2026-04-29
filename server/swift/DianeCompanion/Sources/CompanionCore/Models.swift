@@ -174,7 +174,7 @@ public struct GraphObject: Identifiable, Codable, Hashable, Sendable {
 }
 
 /// Type-erased Codable wrapper for mixed-type JSON values.
-public struct AnyCodable: Codable, Sendable {
+public struct AnyCodable: Codable, @unchecked Sendable {
     public let value: Any
 
     public init(_ value: Any) { self.value = value }

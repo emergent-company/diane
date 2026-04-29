@@ -68,7 +68,10 @@ final class StatusMonitor: ObservableObject {
     private func startPolling(interval: TimeInterval) {
         Task { await performCheck() }
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            self?.checkNow()
+            guard let self = self else { return }
+            Task { @MainActor in
+                self.checkNow()
+            }
         }
     }
 

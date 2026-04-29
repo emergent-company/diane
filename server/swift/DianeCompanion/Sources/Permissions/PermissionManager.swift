@@ -223,6 +223,8 @@ final class PermissionManager: ObservableObject {
         case .denied: return .denied
         case .notDetermined: return .notDetermined
         case .restricted: return .restricted
+        case .fullAccess: return .granted
+        case .writeOnly: return .granted
         @unknown default: return .notDetermined
         }
     }
