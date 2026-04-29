@@ -840,5 +840,8 @@ func runMCPRelay(args []string) {
 	// This lets one node define config centrally and other nodes auto-pull it
 	syncConfigFromGraph(pc.ServerURL, pc.Token, pc.ProjectID, instanceID)
 
+	// Register this node's config in the graph so other nodes can discover it
+	upsertNodeConfigInGraph(pc, instanceID, relayerVersion)
+
 	cmdMCPRelay(relayCfg)
 }

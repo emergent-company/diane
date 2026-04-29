@@ -187,10 +187,10 @@ struct AgentsView: View {
 
             Section("Timestamps") {
                 if let created = agent.createdAt {
-                    detailRow(label: "Created", value: created)
+                    detailRow(label: "Created", value: DateUtils.formatTimestamp(created))
                 }
                 if let updated = agent.updatedAt {
-                    detailRow(label: "Updated", value: updated)
+                    detailRow(label: "Updated", value: DateUtils.formatTimestamp(updated))
                 }
             }
         }
@@ -213,21 +213,7 @@ struct AgentsView: View {
     // MARK: - Helpers
 
     private func relativeTimestamp(_ dateStr: String) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        guard let date = formatter.date(from: dateStr)
-            ?? ISO8601DateFormatter().date(from: dateStr) else {
-            return dateStr
-        }
-        let interval = -date.timeIntervalSinceNow
-        switch interval {
-        case ..<60:      return "just now"
-        case ..<3600:    return "\(Int(interval / 60))m ago"
-        case ..<86400:   return "\(Int(interval / 3600))h ago"
-        case ..<172800:  return "yesterday"
-        case ..<604800:  return "\(Int(interval / 86400))d ago"
-        default:         return "\(Int(interval / 604800))w ago"
-        }
+        DateUtils.formatTimestamp(dateStr)
     }
 
     // MARK: - Data Loading

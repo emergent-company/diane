@@ -7,6 +7,7 @@ struct StatsView: View {
 
     @State private var stats: AgentStatsResponse? = nil
     @State private var providerStats: ProviderStatsResponse? = nil
+    @State private var projectProviders: [ProjectProviderInfo]? = nil
     @State private var isLoading = false
     @State private var error: String? = nil
     @State private var selectedHours: Int = 24
@@ -40,7 +41,12 @@ struct StatsView: View {
                         summaryCardsSection(totals: s.totals)
                     }
 
-                    // Provider usage section
+                    // Project-level configured providers
+                    if let pp = projectProviders, !pp.isEmpty {
+                        projectProvidersSection(providers: pp)
+                    }
+
+                    // Provider usage section (from actual runs)
                     if let ps = providerStats, !ps.providers.isEmpty {
                         providerUsageSection(providers: ps.providers, totals: ps)
                     }

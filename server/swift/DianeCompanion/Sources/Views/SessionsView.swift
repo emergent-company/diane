@@ -542,24 +542,10 @@ struct SessionsView: View {
 
     // MARK: - Helpers
 
-    /// Convert ISO8601 or RFC3339 timestamp to a relative string like "2m ago", "3h ago", "yesterday".
+    /// Convert ISO8601 or RFC3339 timestamp to a human-friendly string.
+    /// Recent (< 7d) → relative; older → absolute date.
     private func relativeTimestamp(_ dateStr: String) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        guard let date = formatter.date(from: dateStr)
-            ?? ISO8601DateFormatter().date(from: dateStr) else {
-            return dateStr
-        }
-        let interval = -date.timeIntervalSinceNow
-        switch interval {
-        case ..<60:      return "just now"
-        case ..<3600:    return "\(Int(interval / 60))m ago"
-        case ..<86400:   return "\(Int(interval / 3600))h ago"
-        case ..<172800:  return "yesterday"
-        case ..<604800:  return "\(Int(interval / 86400))d ago"
-        case ..<2592000: return "\(Int(interval / 604800))w ago"
-        default:         return "\(Int(interval / 2592000))mo ago"
-        }
+        DateUtils.formatTimestamp(dateStr)
     }
 
     /// Format large token counts: "1.5K", "12K", "1.2M".

@@ -570,15 +570,10 @@ public struct AgentStatsSummary: Identifiable, Codable, Sendable {
     public let avgCostUsd: Double
     public let successRate: Double
 
-    /// The display name: use the agent definition name (extracted from the
-    /// run name prefix), fall back to the raw agent name.
+    /// The display name: uses the matched agent definition name (set by the
+    /// API when a definition is found), falls back to the raw run name.
     public var displayName: String {
-        // Try to extract the clean name from a run agent name like
-        // "discord-diane-default-1777453872264" — take everything up to
-        // the last numeric suffix if no agent_id is set.
-        if agentId != nil {
-            return agentName
-        }
+        if agentId != nil { return agentName }
         // Remove trailing timestamp-like suffix: -<digits>
         if let range = agentName.range(of: "-\\d+$", options: .regularExpression) {
             return String(agentName[..<range.lowerBound])
@@ -685,6 +680,24 @@ public struct ProviderStatsResponse: Codable, Sendable {
         case totalOutputTokens = "total_output_tokens"
         case totalCostUsd     = "total_cost_usd"
         case hours            = "hours"
+    }
+}
+
+// MARK: - Project-Level Providers (from GET /api/providers)
+
+public struct ProjectProviderInfo: Codable, Sendable, Identifiable {
+    public let provider: String
+    public let baseUrl: String?
+    public let generativeModel: String?
+    public let embeddingModel: String?
+
+    public var id: String { provider }
+
+    enum CodingKeys: String, CodingKey {
+        case provider        = "provider"
+        case baseUrl         = "base_url"
+        case generativeModel = "generative_model"
+        case embeddingModel  = "embedding_model"
     }
 }
 

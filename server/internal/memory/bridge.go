@@ -28,6 +28,17 @@ import (
 	sdkagentrun "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agents"
 )
 
+// NodeConfig represents a Diane node's configuration stored in the MP graph.
+// Each node creates/updates its config on startup for cross-node discovery.
+type NodeConfig struct {
+	InstanceID string `json:"instance_id"`
+	Hostname   string `json:"hostname,omitempty"`
+	Mode       string `json:"mode"`         // "master" or "slave"
+	Version    string `json:"version,omitempty"`
+	LastSeen   string `json:"last_seen,omitempty"` // ISO 8601
+	EntityID   string `json:"entity_id,omitempty"` // graph object EntityID, populated on read
+}
+
 // bridgeHTTPClient is a shared HTTP client with a 15-second timeout.
 var bridgeHTTPClient = &http.Client{Timeout: 15 * time.Second}
 
@@ -345,6 +356,42 @@ func (b *Bridge) UpsertProjectProvider(ctx context.Context, projectID, providerT
 	return b.client.Provider.UpsertProjectConfig(ctx, projectID, providerType, req)
 }
 
+// These provider names are tried when listing a project's configured providers.
+var knownProviderNames = []string{
+	"google", "openai", "anthropic", "deepseek",
+	"openai-compatible", "meta", "mistral", "xai",
+}
+
+// ProjectProviderInfo holds a project-level provider config (no secrets).
+type ProjectProviderInfo struct {
+	Provider        string `json:"provider"`
+	BaseURL         string `json:"base_url,omitempty"`
+	GenerativeModel string `json:"generative_model,omitempty"`
+	EmbeddingModel  string `json:"embedding_model,omitempty"`
+}
+
+// ListProjectProviders queries known provider names to discover which ones
+// are configured at the project level. Returns only configured providers.
+func (b *Bridge) ListProjectProviders(ctx context.Context) ([]ProjectProviderInfo, error) {
+	var result []ProjectProviderInfo
+	for _, name := range knownProviderNames {
+		cfg, err := b.client.Provider.GetProjectConfig(ctx, b.projectID, name)
+		if err != nil {
+			// not_found is expected — skip silently
+			continue
+		}
+		if cfg != nil {
+			result = append(result, ProjectProviderInfo{
+				Provider:        cfg.Provider,
+				BaseURL:         cfg.BaseURL,
+				GenerativeModel: cfg.GenerativeModel,
+				EmbeddingModel:  cfg.EmbeddingModel,
+			})
+		}
+	}
+	return result, nil
+}
+
 // TestProvider sends a live generation call to verify provider credentials work.
 // Uses the bridge's configured project ID. orgID is optional (pass "" for project-level test).
 func (b *Bridge) TestProvider(ctx context.Context, orgID, providerType string) (*sdkprovider.TestProviderResponse, error) {
@@ -542,6 +589,91 @@ func hasSessionID(meta map[string]any, sessionID string) bool {
 		}
 	}
 	return false
+}
+
+// ============================================================================
+// Node Config (DianeNodeConfig graph objects)
+// ============================================================================
+
+// NodeConfigType is the graph object type name for node configuration objects.
+const NodeConfigType = "DianeNodeConfig"
+
+// UpsertNodeConfig creates or updates this node's config in the graph.
+// Nodes call this on startup so other nodes can discover them via the MP.
+func (b *Bridge) UpsertNodeConfig(ctx context.Context, cfg *NodeConfig) (*NodeConfig, error) {
+	props := map[string]any{
+		"instance_id": cfg.InstanceID,
+		"hostname":    cfg.Hostname,
+		"mode":        cfg.Mode,
+		"version":     cfg.Version,
+		"last_seen":   cfg.LastSeen,
+	}
+
+	// Try to find existing object by key (instance_id)
+	existing, err := b.client.Graph.ListObjects(ctx, &graph.ListObjectsOptions{
+		Type: NodeConfigType,
+		Key:  cfg.InstanceID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list node configs: %w", err)
+	}
+
+	if len(existing.Items) > 0 {
+		// Update existing
+		entityID := existing.Items[0].EntityID
+		_, err = b.client.Graph.UpdateObject(ctx, entityID, &graph.UpdateObjectRequest{
+			Properties: props,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("update node config %s: %w", cfg.InstanceID, err)
+		}
+		cfg.EntityID = entityID
+		return cfg, nil
+	}
+
+	// Create new
+	key := cfg.InstanceID
+	obj, err := b.client.Graph.CreateObject(ctx, &graph.CreateObjectRequest{
+		Type:       NodeConfigType,
+		Key:        &key,
+		Properties: props,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create node config %s: %w", cfg.InstanceID, err)
+	}
+	cfg.EntityID = obj.EntityID
+	return cfg, nil
+}
+
+// ListNodeConfigs returns all node configs registered in the project's graph.
+func (b *Bridge) ListNodeConfigs(ctx context.Context) ([]NodeConfig, error) {
+	resp, err := b.client.Graph.ListObjects(ctx, &graph.ListObjectsOptions{
+		Type: NodeConfigType,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list node configs: %w", err)
+	}
+
+	nodes := make([]NodeConfig, 0, len(resp.Items))
+	for _, obj := range resp.Items {
+		props := obj.Properties
+		if props == nil {
+			continue
+		}
+		nc := NodeConfig{
+			InstanceID: safePropStr(props, "instance_id"),
+			Hostname:   safePropStr(props, "hostname"),
+			Mode:       safePropStr(props, "mode"),
+			Version:    safePropStr(props, "version"),
+			LastSeen:   safePropStr(props, "last_seen"),
+			EntityID:   obj.EntityID,
+		}
+		if nc.InstanceID == "" {
+			continue
+		}
+		nodes = append(nodes, nc)
+	}
+	return nodes, nil
 }
 
 // ProviderStats holds aggregated metrics grouped by (provider, model).

@@ -270,24 +270,8 @@ struct RelayNodesView: View {
 
     // MARK: - Helpers
 
-    /// Shared ISO8601 formatter — creating it is expensive, so reuse a single instance.
-    private static let isoFormatter: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
-    }()
-
     private func formatTime(_ iso: String) -> String {
-        // Show relative time from ISO string
-        guard let date = Self.isoFormatter.date(from: iso)
-                ?? ISO8601DateFormatter().date(from: iso) else {
-            return iso
-        }
-        let interval = Date().timeIntervalSince(date)
-        if interval < 60 { return "just now" }
-        if interval < 3600 { return "\(Int(interval / 60))m ago" }
-        if interval < 86400 { return "\(Int(interval / 3600))h ago" }
-        return "\(Int(interval / 86400))d ago"
+        DateUtils.formatTimestamp(iso)
     }
 
     // MARK: - Data Loading

@@ -173,6 +173,15 @@ final class DianeAPIClient: ObservableObject {
         return try JSONDecoder().decode(ProviderStatsResponse.self, from: data)
     }
 
+    func fetchProjectProviders() async throws -> [ProjectProviderInfo] {
+        let data = try await get("/api/providers")
+        struct Response: Decodable { let providers: [ProjectProviderInfo]? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.providers {
+            return list
+        }
+        return []
+    }
+
     // MARK: - Agent Definitions
 
     func fetchAgentDefs() async throws -> [AgentDef] {

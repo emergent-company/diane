@@ -18,6 +18,7 @@ import (
 	"github.com/Emergent-Comapny/diane/internal/memory"
 
 	sdkagentrun "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agents"
+	sdkagents "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agentdefinitions"
 )
 
 // localAPIServer manages the local HTTP API for the companion app.
@@ -60,6 +61,7 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	mux.HandleFunc("/api/agents", api.handleAgents)
 	mux.HandleFunc("/api/nodes", api.handleNodes)
 	mux.HandleFunc("/api/nodes/", api.handleNodeByID)
+	mux.HandleFunc("/api/providers", api.handleProjectProviders)
 	mux.HandleFunc("/api/status", api.handleStatus)
 	mux.HandleFunc("/api/stats", api.handleStats)
 	mux.HandleFunc("/api/stats/providers", api.handleProviderStats)
@@ -740,23 +742,33 @@ func (a *localAPIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Match a run stats agent name to an agent definition.
-	// Runtime agent names may have suffixes (e.g. "discord-diane-default-1777453872264")
-	// while agent definitions have clean names (e.g. "discord-diane-default").
-	// Try exact match first, then longest prefix match.
+	// Runtime agent names follow the pattern: "discord-<defname>-<timestamp>"
+	// or just the raw defname. Try exact match, then strip common prefixes/suffixes.
 	matchAgent := func(runName string) *sdkagents.AgentDefinitionSummary {
 		if d, ok := defLookup[runName]; ok {
 			return &d
 		}
-		var best *sdkagents.AgentDefinitionSummary
-		bestLen := 0
-		for name, d := range defLookup {
-			if len(name) > bestLen && len(runName) >= len(name) && runName[:len(name)] == name {
-				cp := d
-				best = &cp
-				bestLen = len(name)
+		// Try stripping "discord-" prefix and trailing "-<timestamp>"
+		candidates := []string{runName}
+		if after, ok := strings.CutPrefix(runName, "discord-"); ok {
+			candidates = append(candidates, after)
+		}
+		for _, c := range candidates {
+			// Try prefix matching against definition names
+			var best *sdkagents.AgentDefinitionSummary
+			bestLen := 0
+			for name, d := range defLookup {
+				if len(name) > bestLen && len(c) >= len(name) && c[:len(name)] == name {
+					cp := d
+					best = &cp
+					bestLen = len(name)
+				}
+			}
+			if best != nil {
+				return best
 			}
 		}
-		return best
+		return nil
 	}
 
 	type summaryJSON struct {
@@ -829,6 +841,8 @@ func (a *localAPIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 				item.AgentDescription = *def.Description
 			}
 			item.AgentFlowType = def.FlowType
+			// Use the clean definition name for display
+			item.AgentName = def.Name
 		}
 
 		items = append(items, item)
@@ -894,6 +908,25 @@ func (a *localAPIServer) handleProviderStats(w http.ResponseWriter, r *http.Requ
 		"total_output_tokens": totalOutputTokens,
 		"total_cost_usd":    totalCost,
 		"hours":             hours,
+	})
+}
+
+// GET /api/providers — list project-level configured providers
+func (a *localAPIServer) handleProjectProviders(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	ctx := context.Background()
+	providers, err := a.bridge.ListProjectProviders(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("list providers: %v", err))
+		return
+	}
+
+	jsonResponse(w, map[string]any{
+		"providers": providers,
 	})
 }
 
