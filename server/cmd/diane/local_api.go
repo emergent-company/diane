@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Emergent-Comapny/diane/internal/config"
@@ -94,6 +95,28 @@ func (a *localAPIServer) close() {
 	if a.bridge != nil {
 		a.bridge.Close()
 	}
+	if a.proxy != nil {
+		a.proxy.Close()
+	}
+}
+
+// ensureProxy lazily starts the MCP proxy for tool/prompt discovery.
+// Safe to call multiple times — only initializes once.
+func (a *localAPIServer) ensureProxy() {
+	a.proxyOnce.Do(func() {
+		configPath := mcpproxy.GetDefaultConfigPath()
+		if _, err := os.Stat(configPath); os.IsNotExist(err) {
+			log.Printf("[LOCAL-API] No MCP config at %s — proxy disabled", configPath)
+			return
+		}
+		p, err := mcpproxy.NewProxy(configPath)
+		if err != nil {
+			log.Printf("[LOCAL-API] Failed to start MCP proxy: %v", err)
+			return
+		}
+		a.proxy = p
+		log.Printf("[LOCAL-API] MCP proxy started")
+	})
 }
 
 // ─── Handlers ────────────────────────────────────────────────
@@ -369,7 +392,7 @@ func (a *localAPIServer) handleMCPServerByID(w http.ResponseWriter, r *http.Requ
 	// Query based on server type
 	switch action {
 	case "tools":
-		tools, queryErr := queryMCPTools(serverCfg)
+		tools, queryErr := a.queryToolsViaProxy(serverName, serverCfg)
 		if queryErr != nil {
 			jsonResponse(w, map[string]any{
 				"error": queryErr.Error(),
@@ -383,7 +406,7 @@ func (a *localAPIServer) handleMCPServerByID(w http.ResponseWriter, r *http.Requ
 			"total": len(tools),
 		})
 	case "prompts":
-		prompts, queryErr := queryMCPPrompts(serverCfg)
+		prompts, queryErr := a.queryPromptsViaProxy(serverName, serverCfg)
 		if queryErr != nil {
 			jsonResponse(w, map[string]any{
 				"error":   queryErr.Error(),
@@ -397,6 +420,32 @@ func (a *localAPIServer) handleMCPServerByID(w http.ResponseWriter, r *http.Requ
 			"total":   len(prompts),
 		})
 	}
+}
+
+// queryToolsViaProxy tries the proxy first, falling back to a direct connection.
+func (a *localAPIServer) queryToolsViaProxy(name string, cfg *mcpproxy.ServerConfig) ([]map[string]any, error) {
+	a.ensureProxy()
+	if a.proxy != nil {
+		tools, err := a.proxy.ListServerTools(name)
+		if err == nil {
+			return tools, nil
+		}
+		log.Printf("[LOCAL-API] Proxy tools query failed for %s: %v — falling back to direct query", name, err)
+	}
+	return queryMCPTools(cfg)
+}
+
+// queryPromptsViaProxy tries the proxy first, falling back to a direct connection.
+func (a *localAPIServer) queryPromptsViaProxy(name string, cfg *mcpproxy.ServerConfig) ([]map[string]any, error) {
+	a.ensureProxy()
+	if a.proxy != nil {
+		prompts, err := a.proxy.ListServerPrompts(name)
+		if err == nil {
+			return prompts, nil
+		}
+		log.Printf("[LOCAL-API] Proxy prompts query failed for %s: %v — falling back to direct query", name, err)
+	}
+	return queryMCPPrompts(cfg)
 }
 
 // queryMCPTools connects to an MCP server and retrieves its tools list.

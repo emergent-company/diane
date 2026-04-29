@@ -118,10 +118,16 @@ final class DianeAPIClient: ObservableObject {
     func fetchMCPTools(serverName: String) async throws -> [MCPTool] {
         let encoded = serverName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? serverName
         let data = try await get("/api/mcp-servers/\(encoded)/tools")
-        struct Response: Decodable { let tools: [MCPTool]? }
-        if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.tools {
-            return list
+        struct Response: Decodable { let tools: [MCPTool]?; let error: String? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data) {
+            if let errMsg = resp.error {
+                throw DianeAPIError.serverError(errMsg)
+            }
+            if let list = resp.tools {
+                return list
+            }
         }
+        logDecodeFailure([MCPTool].self, data: data, context: "fetchMCPTools")
         return (try? JSONDecoder().decode([MCPTool].self, from: data)) ?? []
     }
 
@@ -129,9 +135,14 @@ final class DianeAPIClient: ObservableObject {
     func fetchMCPPrompts(serverName: String) async throws -> [MCPPrompt] {
         let encoded = serverName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? serverName
         let data = try await get("/api/mcp-servers/\(encoded)/prompts")
-        struct Response: Decodable { let prompts: [MCPPrompt]? }
-        if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.prompts {
-            return list
+        struct Response: Decodable { let prompts: [MCPPrompt]?; let error: String? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data) {
+            if let errMsg = resp.error {
+                throw DianeAPIError.serverError(errMsg)
+            }
+            if let list = resp.prompts {
+                return list
+            }
         }
         return (try? JSONDecoder().decode([MCPPrompt].self, from: data)) ?? []
     }
@@ -275,12 +286,14 @@ enum DianeAPIError: Error, LocalizedError {
     case invalidURL(String)
     case network(String)
     case httpError(Int, String)
+    case serverError(String)
 
     var errorDescription: String? {
         switch self {
         case .invalidURL(let p): return "Invalid URL: \(p)"
         case .network(let msg):  return "Network error: \(msg)"
         case .httpError(let c, let b): return "HTTP \(c): \(b)"
+        case .serverError(let msg): return "Server error: \(msg)"
         }
     }
 }
