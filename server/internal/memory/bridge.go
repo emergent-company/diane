@@ -644,6 +644,52 @@ func (b *Bridge) GetProviderStats(ctx context.Context, hours int) ([]ProviderSta
 }
 
 // ============================================================================
+// Auth Info — retrieve project metadata from the auth/me endpoint.
+// This works for project-scoped API tokens (emt_*) that lack projects:read scope.
+// ============================================================================
+
+// AuthInfo represents the response from GET /api/auth/me for API tokens.
+type AuthInfo struct {
+	UserID      string   `json:"user_id"`
+	Email       string   `json:"email"`
+	Scopes      []string `json:"scopes"`
+	Type        string   `json:"type"`
+	ProjectID   string   `json:"project_id"`
+	ProjectName string   `json:"project_name"`
+	OrgID       string   `json:"org_id"`
+	TokenID     string   `json:"token_id"`
+	TokenName   string   `json:"token_name"`
+}
+
+// GetProjectInfo calls GET /api/auth/me and returns project metadata.
+// This is preferred over sdkClient.Projects.Get() for project-scoped tokens
+// that may not have projects:read scope (e.g. slave mode tokens).
+func (b *Bridge) GetProjectInfo(ctx context.Context) (*AuthInfo, error) {
+	url := fmt.Sprintf("%s/api/auth/me", b.serverURL)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create auth/me request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+b.apiKey)
+
+	resp, err := bridgeHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("auth/me http: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("auth/me: %d %s", resp.StatusCode, resp.Status)
+	}
+
+	var info AuthInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return nil, fmt.Errorf("decode auth/me response: %w", err)
+	}
+	return &info, nil
+}
+
+// ============================================================================
 // Internal helpers
 // ============================================================================
 
