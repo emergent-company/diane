@@ -96,6 +96,55 @@ final class DianeAPIClient: ObservableObject {
         return (try? JSONDecoder().decode([RelayNode].self, from: data)) ?? []
     }
 
+    // MARK: - MCP Tools & Prompts
+
+    /// Fetch tools exposed by a specific MCP server.
+    func fetchMCPTools(serverName: String) async throws -> [MCPTool] {
+        let encoded = serverName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? serverName
+        let data = try await get("/api/mcp-servers/\(encoded)/tools")
+        struct Response: Decodable { let tools: [MCPTool]? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.tools {
+            return list
+        }
+        return (try? JSONDecoder().decode([MCPTool].self, from: data)) ?? []
+    }
+
+    /// Fetch prompts exposed by a specific MCP server.
+    func fetchMCPPrompts(serverName: String) async throws -> [MCPPrompt] {
+        let encoded = serverName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? serverName
+        let data = try await get("/api/mcp-servers/\(encoded)/prompts")
+        struct Response: Decodable { let prompts: [MCPPrompt]? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.prompts {
+            return list
+        }
+        return (try? JSONDecoder().decode([MCPPrompt].self, from: data)) ?? []
+    }
+
+    // MARK: - MCP Server CRUD
+
+    /// Toggle an MCP server's enabled/disabled state.
+    func toggleMCPServer(serverName: String) async throws -> Bool {
+        let encoded = serverName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? serverName
+        let data = try await post("/api/mcp-servers/toggle/\(encoded)", body: nil)
+        struct Response: Decodable { let ok: Bool?; let enabled: Bool? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data) {
+            return resp.enabled ?? false
+        }
+        return false
+    }
+
+    /// Save (add or update) an MCP server configuration.
+    func saveMCPServer(_ server: MCPServer) async throws {
+        let body = try JSONEncoder().encode(server)
+        _ = try await post("/api/mcp-servers/save", body: body)
+    }
+
+    /// Delete an MCP server configuration.
+    func deleteMCPServer(serverName: String) async throws {
+        let encoded = serverName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? serverName
+        _ = try await delete("/api/mcp-servers/\(encoded)")
+    }
+
     // MARK: - HTTP
 
     private func get(_ path: String) async throws -> Data {
@@ -104,6 +153,48 @@ final class DianeAPIClient: ObservableObject {
         }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
+        request.timeoutInterval = 10
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw DianeAPIError.network("No HTTP response")
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw DianeAPIError.httpError(http.statusCode, body)
+        }
+        return data
+    }
+
+    private func post(_ path: String, body: Data?) async throws -> Data {
+        guard let url = URL(string: "\(baseURL)\(path)") else {
+            throw DianeAPIError.invalidURL(path)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 10
+        if let b = body {
+            request.httpBody = b
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw DianeAPIError.network("No HTTP response")
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw DianeAPIError.httpError(http.statusCode, body)
+        }
+        return data
+    }
+
+    private func delete(_ path: String) async throws -> Data {
+        guard let url = URL(string: "\(baseURL)\(path)") else {
+            throw DianeAPIError.invalidURL(path)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
         request.timeoutInterval = 10
 
         let (data, response) = try await session.data(for: request)

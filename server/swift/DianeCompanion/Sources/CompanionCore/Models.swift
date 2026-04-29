@@ -248,6 +248,48 @@ public struct MCPTool: Identifiable, Codable, Sendable {
     public let id: String
     public let name: String
     public let description: String?
+    public let inputSchema: AnyCodable?
+    
+    enum CodingKeys: String, CodingKey {
+        case id, name, description
+        case inputSchema = "input_schema"
+    }
+}
+
+// MARK: - MCP Prompt
+
+public struct MCPPrompt: Identifiable, Codable, Sendable {
+    public let id: String
+    public let name: String
+    public let description: String?
+    public let arguments: [MCPPromptArgument]?
+    
+    enum CodingKeys: String, CodingKey {
+        case id, name, description, arguments
+    }
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        // If the JSON has an "id" field, use it; otherwise default to name
+        self.id = (try? container.decodeIfPresent(String.self, forKey: .id)) ?? ""
+        self.name = try container.decode(String.self, forKey: .name)
+        self.description = try container.decodeIfPresent(String.self, forKey: .description)
+        self.arguments = try container.decodeIfPresent([MCPPromptArgument].self, forKey: .arguments)
+    }
+    
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encodeIfPresent(description, forKey: .description)
+        try container.encodeIfPresent(arguments, forKey: .arguments)
+    }
+}
+
+public struct MCPPromptArgument: Codable, Sendable {
+    public let name: String
+    public let description: String?
+    public let required: Bool?
 }
 
 // MARK: - User Profile
@@ -549,8 +591,9 @@ private enum AnyValue: Decodable {
     case int(Int)
     case double(Double)
     case bool(Bool)
+    case array([Any])
     case null
-    
+
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if let str = try? container.decode(String.self) {
@@ -561,19 +604,36 @@ private enum AnyValue: Decodable {
             self = .double(d)
         } else if let b = try? container.decode(Bool.self) {
             self = .bool(b)
+        } else if let arr = try? container.decode([AnyValue].self) {
+            self = .array(arr.map(\.anyValue))
         } else if container.decodeNil() {
             self = .null
         } else {
             self = .null
         }
     }
-    
+
     var stringValue: String? {
         switch self { case .string(let s): return s; default: return nil }
     }
-    
+
     var intValue: Int? {
         switch self { case .int(let i): return i; case .double(let d): return Int(d); default: return nil }
+    }
+
+    var arrayValue: [Any]? {
+        switch self { case .array(let a): return a; default: return nil }
+    }
+
+    var anyValue: Any {
+        switch self {
+        case .string(let v): return v
+        case .int(let v): return v
+        case .double(let v): return v
+        case .bool(let v): return v
+        case .array(let v): return v
+        case .null: return NSNull()
+        }
     }
 }
 
@@ -621,13 +681,33 @@ struct DianeSession: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+// MARK: - Tool Call Models
+
+/// A tool call made by the assistant during a session.
+struct DianeToolCall: Codable, Sendable {
+    let id: String?
+    let name: String?
+    let arguments: String?
+}
+
+/// A tool result returned after executing a tool call.
+struct ToolResult: Codable, Sendable {
+    let callID: String?
+    let content: String?
+    let isError: Bool?
+}
+
+// MARK: - Diane Message
+
 struct DianeMessage: Identifiable, Codable, Sendable {
     let id: String
     let role: String
     let content: String
     let sequenceNumber: Int?
     let tokenCount: Int?
-    
+    let reasoningContent: String?
+    let toolCalls: [DianeToolCall]?
+
     init(from decoder: Decoder) throws {
         let graph = try GraphObjectJSON(from: decoder)
         self.id = graph.entityID
@@ -635,8 +715,21 @@ struct DianeMessage: Identifiable, Codable, Sendable {
         self.content = graph.properties?["content"]?.stringValue ?? ""
         self.sequenceNumber = graph.properties?["sequence_number"]?.intValue
         self.tokenCount = graph.properties?["token_count"]?.intValue
+        self.reasoningContent = graph.properties?["reasoning_content"]?.stringValue
+
+        // Decode tool_calls from the properties array
+        if let rawArray = graph.properties?["tool_calls"]?.arrayValue {
+            if let data = try? JSONSerialization.data(withJSONObject: rawArray),
+               let decoded = try? JSONDecoder().decode([DianeToolCall].self, from: data) {
+                self.toolCalls = decoded
+            } else {
+                self.toolCalls = nil
+            }
+        } else {
+            self.toolCalls = nil
+        }
     }
-    
+
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
@@ -644,8 +737,9 @@ struct DianeMessage: Identifiable, Codable, Sendable {
         try container.encode(content, forKey: .content)
         try container.encodeIfPresent(sequenceNumber, forKey: .sequenceNumber)
         try container.encodeIfPresent(tokenCount, forKey: .tokenCount)
+        // Skip encoding reasoningContent and toolCalls back (read-only from API)
     }
-    
+
     enum CodingKeys: String, CodingKey {
         case id, role, content
         case sequenceNumber = "sequence_number"

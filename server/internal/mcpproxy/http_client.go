@@ -185,6 +185,23 @@ func (c *HTTPMCPClient) ListTools() ([]map[string]interface{}, error) {
 	return toolsResult.Tools, nil
 }
 
+// ListPrompts requests the list of prompts from the HTTP MCP server.
+func (c *HTTPMCPClient) ListPrompts() ([]map[string]interface{}, error) {
+	result, err := c.sendRequest("prompts/list", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var promptsResult struct {
+		Prompts []map[string]interface{} `json:"prompts"`
+	}
+	if err := json.Unmarshal(result, &promptsResult); err != nil {
+		return nil, fmt.Errorf("failed to parse prompts: %w", err)
+	}
+
+	return promptsResult.Prompts, nil
+}
+
 // CallTool calls a tool on the HTTP MCP server.
 func (c *HTTPMCPClient) CallTool(toolName string, arguments map[string]interface{}) (json.RawMessage, error) {
 	params, err := json.Marshal(map[string]interface{}{

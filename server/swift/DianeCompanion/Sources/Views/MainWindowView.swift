@@ -29,15 +29,34 @@ struct MainWindowView: View {
         }
     }
 
-    // MARK: - Sidebar
+    // MARK: - Sidebar with sections
 
     private var sidebarView: some View {
         List(selection: $appState.selectedSidebarItem) {
             Section("Diane") {
-                ForEach(SidebarItem.allCases) { item in
-                    Label(item.rawValue, systemImage: item.systemIcon)
-                        .tag(item)
-                }
+                Label("Sessions", systemImage: "message")
+                    .tag(SidebarItem.sessions)
+                Label("MCP Servers", systemImage: "cable.connector.horizontal")
+                    .tag(SidebarItem.mcpServers)
+                Label("Relay Nodes", systemImage: "antenna.radiowaves.left.and.right")
+                    .tag(SidebarItem.relayNodes)
+                Label("Permissions", systemImage: "lock.shield")
+                    .tag(SidebarItem.permissions)
+            }
+
+            Section("Apple Services") {
+                Label("Calendar", systemImage: "calendar")
+                    .tag(SidebarItem.calendar)
+                Label("Reminders", systemImage: "checklist")
+                    .tag(SidebarItem.reminders)
+                Label("Contacts", systemImage: "person.crop.circle")
+                    .tag(SidebarItem.contacts)
+                Label("Mail", systemImage: "envelope")
+                    .tag(SidebarItem.mail)
+                Label("Messages", systemImage: "message")
+                    .tag(SidebarItem.messages)
+                Label("Notes", systemImage: "note.text")
+                    .tag(SidebarItem.notes)
             }
         }
         .listStyle(.sidebar)
@@ -53,8 +72,22 @@ struct MainWindowView: View {
             SessionsView()
         case .mcpServers:
             MCPServersView()
+        case .relayNodes:
+            RelayNodesView()
         case .permissions:
             PermissionsView()
+        case .calendar:
+            CalendarView()
+        case .reminders:
+            RemindersView()
+        case .contacts:
+            ContactsView()
+        case .mail:
+            MailView()
+        case .messages:
+            MessagesView()
+        case .notes:
+            NotesView()
         case .none:
             EmptyStateView(
                 title: "Select a Section",
