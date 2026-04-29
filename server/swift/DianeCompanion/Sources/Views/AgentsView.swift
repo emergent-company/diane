@@ -234,15 +234,9 @@ struct AgentsView: View {
     @MainActor
     private func load() async {
         isLoading = true
-        do {
-            agents = try await dianeAPI.fetchAgentDefs()
-            if agents.isEmpty {
-                // Fall back to remote API
-                agents = try await apiClient.fetchAgentDefs(projectID: serverConfig.projectID)
-            }
-            error = nil
-        } catch {
-            self.error = error.localizedDescription
+        agents = (try? await dianeAPI.fetchAgentDefs()) ?? []
+        if agents.isEmpty {
+            agents = (try? await apiClient.fetchAgentDefs(projectID: serverConfig.projectID)) ?? []
         }
         isLoading = false
     }
