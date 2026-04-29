@@ -225,7 +225,27 @@ private struct AnyCodingKey: CodingKey {
     init?(intValue: Int) { self.stringValue = "\(intValue)"; self.intValue = intValue }
 }
 
-// MARK: - Agent
+// MARK: - Agent Definitions
+
+public struct Agent: Identifiable, Codable, Hashable, Sendable {
+    public let id: String
+    public let name: String
+    public let triggerType: String?
+    public let schedule: String?
+    public let prompt: String?
+    public let isActive: Bool
+    public let capabilities: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, schedule, prompt
+        case triggerType = "trigger_type"
+        case isActive    = "is_active"
+        case capabilities
+    }
+
+    public func hash(into hasher: inout Hasher) { hasher.combine(id) }
+    public static func == (lhs: Agent, rhs: Agent) -> Bool { lhs.id == rhs.id }
+}
 
 struct AgentDef: Identifiable, Codable, Hashable, Sendable {
     let id: String
@@ -244,7 +264,7 @@ struct AgentDef: Identifiable, Codable, Hashable, Sendable {
     }
 
     public func hash(into hasher: inout Hasher) { hasher.combine(id) }
-    public static func == (lhs: Agent, rhs: Agent) -> Bool { lhs.id == rhs.id }
+    public static func == (lhs: AgentDef, rhs: AgentDef) -> Bool { lhs.id == rhs.id }
 }
 
 // MARK: - MCP Server (local API format from diane serve)
