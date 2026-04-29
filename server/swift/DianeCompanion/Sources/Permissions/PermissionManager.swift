@@ -4,6 +4,7 @@ import Contacts
 import AppKit
 import OSLog
 import UserNotifications
+@preconcurrency import ApplicationServices
 
 /// Types of macOS permissions the app needs to manage.
 enum PermissionType: String, CaseIterable, Identifiable, Sendable {
@@ -176,8 +177,8 @@ final class PermissionManager: ObservableObject {
     
     private func requestAccessibility() async -> Bool {
         // Accessibility cannot be programmatically requested — user must enable manually
-        let key = nonisolated(unsafe) kAXTrustedCheckOptionPrompt
-        let options: NSDictionary = [key.takeRetainedValue() as NSString: true]
+        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as NSString
+        let options: NSDictionary = [key: true]
         let trusted = AXIsProcessTrustedWithOptions(options)
         refresh()
         return trusted
