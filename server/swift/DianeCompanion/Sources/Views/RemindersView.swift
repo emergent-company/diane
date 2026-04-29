@@ -112,7 +112,7 @@ struct RemindersView: View {
             HStack(spacing: 8) {
                 Image(systemName: "list.bullet")
                     .font(.caption)
-                    .foregroundStyle(Color(cgColor: list.color))
+                    .foregroundStyle(Color(cgColor: list.color.cgColor ?? NSColor.labelColor.cgColor))
                 Text(list.title)
                     .font(.subheadline)
                     .lineLimit(1)
