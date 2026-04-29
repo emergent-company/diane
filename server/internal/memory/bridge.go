@@ -544,6 +544,105 @@ func hasSessionID(meta map[string]any, sessionID string) bool {
 	return false
 }
 
+// ProviderStats holds aggregated metrics grouped by (provider, model).
+type ProviderStats struct {
+	ProviderName    string  `json:"provider_name"`
+	ModelName       string  `json:"model_name"`
+	TotalRuns       int     `json:"total_runs"`
+	SuccessRuns     int     `json:"success_runs"`
+	ErrorRuns       int     `json:"error_runs"`
+	TotalInputTokens int64  `json:"total_input_tokens"`
+	TotalOutputTokens int64 `json:"total_output_tokens"`
+	TotalCostUSD    float64 `json:"total_cost_usd"`
+}
+
+// GetProviderStats aggregates recent project runs by (provider, model).
+func (b *Bridge) GetProviderStats(ctx context.Context, hours int) ([]ProviderStats, error) {
+	if hours <= 0 || hours > 720 {
+		hours = 24
+	}
+	runs, err := b.client.Agents.ListProjectRuns(ctx, b.projectID, &sdkagentrun.ListRunsOptions{
+		Limit: 500,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list project runs: %w", err)
+	}
+
+	since := time.Now().Add(-time.Duration(hours) * time.Hour)
+	type key struct {
+		provider string
+		model    string
+	}
+	type agg struct {
+		total, success, errorRuns int
+		inTokens, outTokens      int64
+		cost                     float64
+	}
+	byKey := make(map[key]*agg)
+
+	for _, r := range runs.Data.Items {
+		if r.StartedAt.Before(since) {
+			continue
+		}
+		prov := ""
+		if r.Provider != nil {
+			prov = *r.Provider
+		}
+		mod := ""
+		if r.Model != nil {
+			mod = *r.Model
+		}
+		// Normalize empty to "unknown"
+		if prov == "" {
+			prov = "unknown"
+		}
+		if mod == "" {
+			mod = "unknown"
+		}
+		k := key{prov, mod}
+		a, ok := byKey[k]
+		if !ok {
+			a = &agg{}
+			byKey[k] = a
+		}
+		a.total++
+		switch r.Status {
+		case "completed", "success":
+			a.success++
+		case "failed", "errored":
+			a.errorRuns++
+		}
+		if r.TokenUsage != nil {
+			a.inTokens += r.TokenUsage.TotalInputTokens
+			a.outTokens += r.TokenUsage.TotalOutputTokens
+			a.cost += r.TokenUsage.EstimatedCostUSD
+		}
+	}
+
+	result := make([]ProviderStats, 0, len(byKey))
+	for k, a := range byKey {
+		result = append(result, ProviderStats{
+			ProviderName:     k.provider,
+			ModelName:        k.model,
+			TotalRuns:        a.total,
+			SuccessRuns:      a.success,
+			ErrorRuns:        a.errorRuns,
+			TotalInputTokens: a.inTokens,
+			TotalOutputTokens: a.outTokens,
+			TotalCostUSD:     a.cost,
+		})
+	}
+	// Sort by total runs descending
+	for i := 0; i < len(result); i++ {
+		for j := i + 1; j < len(result); j++ {
+			if result[j].TotalRuns > result[i].TotalRuns {
+				result[i], result[j] = result[j], result[i]
+			}
+		}
+	}
+	return result, nil
+}
+
 // ============================================================================
 // Internal helpers
 // ============================================================================

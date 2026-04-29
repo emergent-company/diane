@@ -618,6 +618,92 @@ public struct AgentStatsResponse: Codable, Sendable {
     public let hours: Int
 }
 
+// MARK: - Provider Stats (from GET /api/stats/providers)
+
+public struct ProviderStatsSummary: Identifiable, Codable, Sendable {
+    public let providerName: String
+    public let modelName: String
+    public let totalRuns: Int
+    public let successRuns: Int
+    public let errorRuns: Int
+    public let totalInputTokens: UInt64
+    public let totalOutputTokens: UInt64
+    public let totalCostUsd: Double
+
+    public var id: String { "\(providerName)|\(modelName)" }
+
+    enum CodingKeys: String, CodingKey {
+        case providerName     = "provider_name"
+        case modelName        = "model_name"
+        case totalRuns        = "total_runs"
+        case successRuns      = "success_runs"
+        case errorRuns        = "error_runs"
+        case totalInputTokens = "total_input_tokens"
+        case totalOutputTokens = "total_output_tokens"
+        case totalCostUsd     = "total_cost_usd"
+    }
+}
+
+public struct ProviderStatsResponse: Codable, Sendable {
+    public let providers: [ProviderStatsSummary]
+    public let totalRuns: Int
+    public let totalSuccess: Int
+    public let totalErrors: Int
+    public let totalInputTokens: UInt64
+    public let totalOutputTokens: UInt64
+    public let totalCostUsd: Double
+    public let hours: Int
+
+    enum CodingKeys: String, CodingKey {
+        case providers        = "providers"
+        case totalRuns        = "total_runs"
+        case totalSuccess     = "total_success"
+        case totalErrors      = "total_errors"
+        case totalInputTokens = "total_input_tokens"
+        case totalOutputTokens = "total_output_tokens"
+        case totalCostUsd     = "total_cost_usd"
+        case hours            = "hours"
+    }
+}
+
+// MARK: - Session Aggregates (from GET /api/sessions/{id})
+
+public struct SessionRunAggregates: Codable, Sendable {
+    public let totalRuns: Int
+    public let totalInputTokens: Int64
+    public let totalOutputTokens: Int64
+    public let estimatedCostUsd: Double
+
+    enum CodingKeys: String, CodingKey {
+        case totalRuns        = "total_runs"
+        case totalInputTokens = "total_input_tokens"
+        case totalOutputTokens = "total_output_tokens"
+        case estimatedCostUsd = "estimated_cost_usd"
+    }
+}
+
+/// Response from GET /api/sessions/{id} — session metadata + aggregated run stats.
+public struct SessionDetailResponse: Codable, Sendable {
+    public let id: String
+    public let key: String?
+    public let title: String?
+    public let status: String?
+    public let messageCount: Int
+    public let totalTokens: Int
+    public let createdAt: String?
+    public let updatedAt: String?
+    public let aggregates: SessionRunAggregates?
+
+    enum CodingKeys: String, CodingKey {
+        case id, key, title, status
+        case messageCount = "message_count"
+        case totalTokens  = "total_tokens"
+        case createdAt    = "created_at"
+        case updatedAt    = "updated_at"
+        case aggregates
+    }
+}
+
 /// Response from POST /api/graph/search
 /// Returns ranked graph objects with semantic + lexical scores.
 public struct QueryResult: Codable, Sendable {

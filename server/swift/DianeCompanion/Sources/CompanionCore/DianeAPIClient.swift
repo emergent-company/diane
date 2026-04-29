@@ -82,6 +82,12 @@ final class DianeAPIClient: ObservableObject {
         return (try? JSONDecoder().decode([DianeMessage].self, from: data)) ?? []
     }
 
+    func fetchSessionDetail(sessionID: String) async throws -> SessionDetailResponse {
+        let encoded = sessionID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionID
+        let data = try await get("/api/sessions/\(encoded)")
+        return try JSONDecoder().decode(SessionDetailResponse.self, from: data)
+    }
+
     // MARK: - MCP Servers
 
     func fetchMCPServers() async throws -> [MCPServer] {
@@ -160,6 +166,11 @@ final class DianeAPIClient: ObservableObject {
     func fetchAgentStats(hours: Int = 24) async throws -> AgentStatsResponse {
         let data = try await get("/api/stats?hours=\(hours)")
         return try JSONDecoder().decode(AgentStatsResponse.self, from: data)
+    }
+
+    func fetchProviderStats(hours: Int = 24) async throws -> ProviderStatsResponse {
+        let data = try await get("/api/stats/providers?hours=\(hours)")
+        return try JSONDecoder().decode(ProviderStatsResponse.self, from: data)
     }
 
     // MARK: - Agent Definitions

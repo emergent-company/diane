@@ -62,6 +62,7 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	mux.HandleFunc("/api/nodes/", api.handleNodeByID)
 	mux.HandleFunc("/api/status", api.handleStatus)
 	mux.HandleFunc("/api/stats", api.handleStats)
+	mux.HandleFunc("/api/stats/providers", api.handleProviderStats)
 
 	api.server = &http.Server{
 		Addr:    fmt.Sprintf("127.0.0.1:%d", port),
@@ -142,6 +143,7 @@ func (a *localAPIServer) handleSessions(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// GET /api/sessions/{id} — session detail with aggregated run stats
 // GET /api/sessions/{id}/messages — get messages for a session
 func (a *localAPIServer) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -149,19 +151,64 @@ func (a *localAPIServer) handleSessionByID(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Extract session ID from path: /api/sessions/{id}/messages
+	// Extract session ID from path: /api/sessions/{id}[/messages]
 	path := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
 	parts := strings.SplitN(path, "/", 2)
-	if len(parts) < 2 || parts[1] != "messages" {
-		jsonError(w, http.StatusNotFound, "use /api/sessions/{id}/messages")
-		return
-	}
 	sessionID := parts[0]
 	if sessionID == "" {
 		jsonError(w, http.StatusBadRequest, "session ID required")
 		return
 	}
 
+	// If sub-path exists, route to sub-handlers
+	if len(parts) > 1 && parts[1] != "" {
+		switch parts[1] {
+		case "messages":
+			a.handleSessionMessages(w, r, sessionID)
+		default:
+			jsonError(w, http.StatusNotFound, "unknown session sub-path; use /messages")
+		}
+		return
+	}
+
+	// GET /api/sessions/{id} — session detail with aggregated run stats
+	ctx := context.Background()
+
+	// Fetch session metadata
+	session, err := a.bridge.GetSession(ctx, sessionID)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("get session: %v", err))
+		return
+	}
+
+	// Fetch aggregated run stats
+	agg, aggErr := a.bridge.GetSessionRunAggregates(ctx, sessionID)
+	if aggErr != nil {
+		// Non-fatal — still return session metadata
+		log.Printf("[LOCAL-API] get session run aggregates: %v", aggErr)
+		agg = &memory.SessionRunAggregates{}
+	}
+
+	jsonResponse(w, map[string]any{
+		"id":            session.ID,
+		"key":           session.Key,
+		"title":         session.Title,
+		"status":        session.Status,
+		"message_count": session.MessageCount,
+		"total_tokens":  session.TotalTokens,
+		"created_at":    session.CreatedAt.Format(time.RFC3339),
+		"updated_at":    session.UpdatedAt.Format(time.RFC3339),
+		"aggregates": map[string]any{
+			"total_runs":          agg.TotalRuns,
+			"total_input_tokens":  agg.TotalInputTokens,
+			"total_output_tokens": agg.TotalOutputTokens,
+			"estimated_cost_usd":  agg.EstimatedCostUSD,
+		},
+	})
+}
+
+// GET /api/sessions/{id}/messages — get messages for a session
+func (a *localAPIServer) handleSessionMessages(w http.ResponseWriter, r *http.Request, sessionID string) {
 	ctx := context.Background()
 	messages, err := a.bridge.GetMessages(ctx, sessionID)
 	if err != nil {
@@ -759,6 +806,50 @@ func (a *localAPIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 		"agents": items,
 		"totals": totals,
 		"hours":  hours,
+	})
+}
+
+// GET /api/stats/providers — provider/model usage from recent project runs
+func (a *localAPIServer) handleProviderStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	hours, _ := strconv.Atoi(r.URL.Query().Get("hours"))
+	if hours <= 0 || hours > 720 {
+		hours = 24
+	}
+
+	ctx := context.Background()
+	providers, err := a.bridge.GetProviderStats(ctx, hours)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("provider stats: %v", err))
+		return
+	}
+
+	// Compute totals
+	var totalRuns, totalSuccess, totalErrors int
+	var totalInputTokens, totalOutputTokens int64
+	var totalCost float64
+	for _, p := range providers {
+		totalRuns += p.TotalRuns
+		totalSuccess += p.SuccessRuns
+		totalErrors += p.ErrorRuns
+		totalInputTokens += p.TotalInputTokens
+		totalOutputTokens += p.TotalOutputTokens
+		totalCost += p.TotalCostUSD
+	}
+
+	jsonResponse(w, map[string]any{
+		"providers":         providers,
+		"total_runs":        totalRuns,
+		"total_success":     totalSuccess,
+		"total_errors":      totalErrors,
+		"total_input_tokens":  totalInputTokens,
+		"total_output_tokens": totalOutputTokens,
+		"total_cost_usd":    totalCost,
+		"hours":             hours,
 	})
 }
 
