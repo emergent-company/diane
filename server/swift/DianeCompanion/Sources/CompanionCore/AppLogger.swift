@@ -7,7 +7,7 @@ import OSLog
 /// (keeps last 3 logs). Each entry has a timestamp, level, and category.
 ///
 /// Also logs to the unified OSLog system for Console.app visibility.
-final class AppLogger {
+final class AppLogger: @unchecked Sendable {
     static let shared = AppLogger()
 
     private let logQueue = DispatchQueue(label: "com.emergent-company.diane-logger", qos: .utility)

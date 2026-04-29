@@ -8,7 +8,7 @@ import Foundation
 /// - Unparseable strings: falls back to displaying the raw string
 enum DateUtils {
 
-    private static let iso8601Formatter: ISO8601DateFormatter = {
+    private static nonisolated(unsafe) let iso8601Formatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f
