@@ -98,7 +98,6 @@ func cmdProviderList() {
 		ServerURL: pc.ServerURL,
 		APIKey:    pc.Token,
 		ProjectID: pc.ProjectID,
-		OrgID:     pc.OrgID,
 	})
 	if err != nil {
 		fmt.Printf("  ⚠️  Cannot connect: %v\n", err)
@@ -106,38 +105,33 @@ func cmdProviderList() {
 	}
 	defer bridge.Close()
 
-	// Resolve org ID
+	// Try to fetch org ID for display purposes only
 	orgID := pc.OrgID
 	if orgID == "" {
 		proj, err := bridge.Client().Projects.Get(ctx, pc.ProjectID, nil)
-		if err != nil {
-			fmt.Printf("  ⚠️  Cannot fetch org ID: %v\n", err)
-		} else {
+		if err == nil {
 			orgID = proj.OrgID
 		}
+		// Not fatal — project-level providers work without org ID
 	}
 
-	if orgID == "" {
-		fmt.Println("  ⚠️  Cannot determine org ID")
-		return
-	}
-
-	providers, err := bridge.ListOrgProviders(ctx, orgID)
-	if err != nil {
-		fmt.Printf("  ⚠️  %v\n", err)
-		return
-	}
-
-	if len(providers) == 0 {
-		fmt.Println("  No providers configured on Memory Platform")
-	} else {
-		for _, p := range providers {
-			model := p.GenerativeModel
-			if model == "" {
-				model = "(auto)"
+	if orgID != "" {
+		providers, err := bridge.ListOrgProviders(ctx, orgID)
+		if err != nil {
+			fmt.Printf("  ⚠️  %v\n", err)
+		} else if len(providers) == 0 {
+			fmt.Println("  No providers configured on Memory Platform")
+		} else {
+			for _, p := range providers {
+				model := p.GenerativeModel
+				if model == "" {
+					model = "(auto)"
+				}
+				fmt.Printf("  %s → %s\n", p.Provider, model)
 			}
-			fmt.Printf("  %s → %s\n", p.Provider, model)
 		}
+	} else {
+		fmt.Println("  ⚠️  Project-level provider — use 'diane provider sync' to configure")
 	}
 	fmt.Println()
 	fmt.Println("Run 'diane provider set generative' or 'diane provider set embedding' to configure.")
@@ -291,7 +285,6 @@ func doProviderTest(kind string, pc *config.ProjectConfig) {
 		ServerURL: pc.ServerURL,
 		APIKey:    pc.Token,
 		ProjectID: pc.ProjectID,
-		OrgID:     pc.OrgID,
 	})
 	if err != nil {
 		fmt.Printf("❌ Connection failed: %v\n", err)
@@ -299,27 +292,16 @@ func doProviderTest(kind string, pc *config.ProjectConfig) {
 	}
 	defer bridge.Close()
 
-	// Ensure provider is synced before testing
-	orgID := pc.OrgID
-	if orgID == "" {
-		proj, err := bridge.Client().Projects.Get(ctx, pc.ProjectID, nil)
-		if err != nil {
-			fmt.Printf("❌ Cannot fetch org ID: %v\n", err)
-			return
-		}
-		orgID = proj.OrgID
-	}
-
-	// First upsert to ensure credentials are on MP
-	_, err = bridge.UpsertOrgProvider(ctx, orgID, providerCfg.Provider, providerCfg.APIKey, providerCfg.Model, providerCfg.BaseURL)
+	// First upsert to ensure credentials are on MP (project-level)
+	_, err = bridge.UpsertProjectProvider(ctx, pc.ProjectID, providerCfg.Provider, providerCfg.APIKey, providerCfg.Model, providerCfg.BaseURL)
 	if err != nil {
 		fmt.Printf("❌ Sync failed: %v\n", err)
 		fmt.Println("   Ensure API key is valid and Memory Platform can reach the provider.")
 		return
 	}
 
-	// Now test
-	result, err := bridge.TestProvider(ctx, orgID, providerCfg.Provider)
+	// Now test at project level
+	result, err := bridge.TestProvider(ctx, "", providerCfg.Provider)
 	if err != nil {
 		fmt.Printf("❌ Test failed: %v\n", err)
 		return
@@ -356,7 +338,6 @@ func doProviderSync(cfg *config.Config, pc *config.ProjectConfig) {
 		ServerURL: pc.ServerURL,
 		APIKey:    pc.Token,
 		ProjectID: pc.ProjectID,
-		OrgID:     pc.OrgID,
 	})
 	if err != nil {
 		fmt.Printf("❌ Connection failed: %v\n", err)
@@ -364,23 +345,12 @@ func doProviderSync(cfg *config.Config, pc *config.ProjectConfig) {
 	}
 	defer bridge.Close()
 
-	// Resolve org ID
-	orgID := pc.OrgID
-	if orgID == "" {
-		proj, err := bridge.Client().Projects.Get(ctx, pc.ProjectID, nil)
-		if err != nil {
-			fmt.Printf("❌ Cannot fetch org ID: %v\n", err)
-			return
-		}
-		orgID = proj.OrgID
-	}
-
 	synced := 0
 
 	if pc.GenerativeProvider != nil {
 		p := pc.GenerativeProvider
-		fmt.Printf("Syncing generative (%s → %s)... ", p.Provider, p.Model)
-		_, err := bridge.UpsertOrgProvider(ctx, orgID, p.Provider, p.APIKey, p.Model, p.BaseURL)
+		fmt.Printf("Syncing generative (%s → %s) to project %s... ", p.Provider, p.Model, pc.ProjectID)
+		_, err := bridge.UpsertProjectProvider(ctx, pc.ProjectID, p.Provider, p.APIKey, p.Model, p.BaseURL)
 		if err != nil {
 			fmt.Printf("❌ %v\n", err)
 		} else {
@@ -391,8 +361,8 @@ func doProviderSync(cfg *config.Config, pc *config.ProjectConfig) {
 
 	if pc.EmbeddingProvider != nil {
 		p := pc.EmbeddingProvider
-		fmt.Printf("Syncing embedding (%s)... ", p.Provider)
-		_, err := bridge.UpsertOrgProvider(ctx, orgID, p.Provider, p.APIKey, p.Model, p.BaseURL)
+		fmt.Printf("Syncing embedding (%s) to project %s... ", p.Provider, pc.ProjectID)
+		_, err := bridge.UpsertProjectProvider(ctx, pc.ProjectID, p.Provider, p.APIKey, p.Model, p.BaseURL)
 		if err != nil {
 			fmt.Printf("❌ %v\n", err)
 		} else {

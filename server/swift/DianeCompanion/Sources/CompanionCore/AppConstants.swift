@@ -8,9 +8,12 @@ enum AppConstants {
             "/opt/homebrew/bin/diane",
             "/usr/bin/diane",
             "\(NSHomeDirectory())/.local/bin/diane",
+            "\(NSHomeDirectory())/.diane/bin/diane",
         ]
-        static let localBinDir   = "\(NSHomeDirectory())/.local/bin"
-        static let installTarget = "\(NSHomeDirectory())/.local/bin/diane"
+        static let localBinDir    = "\(NSHomeDirectory())/.local/bin"
+        static let installTarget  = "\(NSHomeDirectory())/.local/bin/diane"
+        static let dianeBinDir    = "\(NSHomeDirectory())/.diane/bin"
+        static let dianeTarget    = "\(NSHomeDirectory())/.diane/bin/diane"
     }
     
     // Paths for bundled resources

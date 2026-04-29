@@ -10,18 +10,12 @@ struct MainWindowView: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Group {
-            if statusMonitor.connectionState == .connected || statusMonitor.connectionState == .unknown {
-                mainContent
-            } else {
-                notConnectedView
+        mainContent
+            .onAppear {
+                if serverConfig.serverURL.isEmpty {
+                    openWindow(id: "settings")
+                }
             }
-        }
-        .onAppear {
-            if serverConfig.serverURL.isEmpty {
-                openWindow(id: "settings")
-            }
-        }
     }
 
     // MARK: - Main two-column content
@@ -55,10 +49,16 @@ struct MainWindowView: View {
     @ViewBuilder
     private var contentView: some View {
         switch appState.selectedSidebarItem {
+        case .dashboard:
+            StatsView()
         case .sessions:
             SessionsView()
+        case .agents:
+            AgentsView()
         case .mcpServers:
             MCPServersView()
+        case .nodes:
+            RelayNodesView()
         case .permissions:
             PermissionsView()
         case .none:

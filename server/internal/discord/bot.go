@@ -121,10 +121,11 @@ const dedupTTL = 5 * time.Minute // keep dedup entries for 5 minutes
 // ActiveChannel tracks an in-progress agent run for a channel.
 // Used for concurrency guard, interrupt support, and /stop.
 type ActiveChannel struct {
-	Cancel  context.CancelFunc   // cancels the poll loop in triggerAgentWithContext
-	AgentID string               // runtime agent ID (for CancelRun API)
-	RunID   string               // current run ID (for CancelRun API)
-	Pending []*discordgo.Message // queued messages waiting to be processed
+	Cancel   context.CancelFunc   // cancels the poll loop in triggerAgentWithContext
+	AgentID  string               // runtime agent ID (for CancelRun API)
+	RunID    string               // current run ID (for CancelRun API)
+	Pending  []*discordgo.Message // queued messages waiting to be processed
+	ParentID string               // parent channel ID (for thread-based sessions, empty for inline)
 }
 
 // ChannelSession tracks a Discord channel's conversation in the graph.
@@ -335,6 +336,12 @@ func (b *Bot) handleComponentInteraction(s *discordgo.Session, i *discordgo.Inte
 	// Select menu interactions (aq-sel:<question_id> or aq-msel:<question_id>)
 	if strings.HasPrefix(customID, "aq-sel:") || strings.HasPrefix(customID, "aq-msel:") {
 		b.handleSelectMenu(s, i, customID)
+		return
+	}
+
+	// Stop session button interactions
+	if strings.HasPrefix(customID, "stop-thread:") || strings.HasPrefix(customID, "stop-all:") || customID == "stop-cancel" {
+		b.handleStopSelection(s, i, customID)
 		return
 	}
 
@@ -836,16 +843,36 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) 
 
 	// Quick /stop check — respond fast when nothing is running
 	if strings.TrimSpace(m.Content) == "/stop" {
-		b.activeMu.Lock()
-		_, hasActive := b.activeChans[m.ChannelID]
-		b.activeMu.Unlock()
-		if !hasActive {
-			log.Printf("[STOP] Nothing running for channel %s — replying idle", m.ChannelID)
+		// Check if this is a thread — if so, stop that specific session
+		ch, chErr := b.api.Channel(m.ChannelID)
+		isThread := chErr == nil && ch.IsThread()
+
+		if isThread {
+			b.activeMu.Lock()
+			_, hasActive := b.activeChans[m.ChannelID]
+			b.activeMu.Unlock()
+			if !hasActive {
+				log.Printf("[STOP] Nothing running for thread %s — replying idle", m.ChannelID)
+				b.api.MessageReactionAdd(m.ChannelID, m.ID, "🛑")
+				b.sendMessage(m.ChannelID, "Nothing is currently running.")
+				return
+			}
+			// Active thread — fall through to handleMessage which stops it in the guard
+		} else {
+			// Parent channel — collect all active threads under this channel
+			running := b.listActiveThreads(m.ChannelID)
+			if len(running) == 0 {
+				log.Printf("[STOP] Nothing running for channel %s — replying idle", m.ChannelID)
+				b.api.MessageReactionAdd(m.ChannelID, m.ID, "🛑")
+				b.sendMessage(m.ChannelID, "Nothing is currently running.")
+				return
+			}
+			// Show session selection UI
 			b.api.MessageReactionAdd(m.ChannelID, m.ID, "🛑")
-			b.sendMessage(m.ChannelID, "Nothing is currently running.")
+			b.showStopSelection(m.ChannelID, m.ID, running)
+			log.Printf("[STOP] Showing %d active sessions for channel %s", len(running), m.ChannelID)
 			return
 		}
-		// Active — fall through to handleMessage which handles /stop in the guard
 	}
 
 	// /set_ask_channel — set this channel as the destination for agent questions
@@ -986,6 +1013,15 @@ func (b *Bot) handleMessage(m *discordgo.Message) {
 		b.queueMessage(responseChannel, m)
 		log.Printf("[QUEUE] Channel %s busy, queued msg %s", responseChannel, truncateStr(m.ID, 8))
 		return
+	}
+
+	// Store parent channel ID for thread-based sessions (used by /stop to list active threads)
+	if createdNewThread {
+		b.activeMu.Lock()
+		if ac, ok := b.activeChans[responseChannel]; ok {
+			ac.ParentID = channelID
+		}
+		b.activeMu.Unlock()
 	}
 
 	// ── Process loop: drain messages until queue empty or cancelled ──
@@ -1312,6 +1348,150 @@ func (b *Bot) isTestBot(userID string) bool {
 		}
 	}
 	return false
+}
+
+// listActiveThreads returns the channel IDs of all threads under a parent
+// channel that currently have active agent runs.
+func (b *Bot) listActiveThreads(parentID string) []string {
+	b.activeMu.Lock()
+	defer b.activeMu.Unlock()
+	var out []string
+	for chID, ac := range b.activeChans {
+		if ac.ParentID == parentID {
+			out = append(out, chID)
+		}
+	}
+	return out
+}
+
+// showStopSelection sends an embed with buttons to select which active
+// session to stop, or "Stop All".
+func (b *Bot) showStopSelection(channelID, messageID string, threads []string) {
+	if len(threads) == 0 {
+		return
+	}
+	desc := fmt.Sprintf("There are **%d** active session(s). Choose which one to stop:", len(threads))
+	embed := &discordgo.MessageEmbed{
+		Title:       "🛑 Select Session to Stop",
+		Description: desc,
+		Color:       0xE74C3C, // Red
+		Timestamp:   time.Now().Format(time.RFC3339),
+	}
+
+	// Build buttons: one per thread + Stop All
+	// Discord allows max 5 buttons per row
+	var rows []discordgo.MessageComponent
+	var rowButtons []discordgo.MessageComponent
+	maxPerRow := 5
+	buttonCount := 0
+
+	for i, tid := range threads {
+		label := fmt.Sprintf("#%d", i+1)
+		if len(threads) <= 5 {
+			// Get thread name for labeling
+			if ch, err := b.api.Channel(tid); err == nil {
+				label = ch.Name
+				if len(label) > 80 {
+					label = label[:77] + "..."
+				}
+			}
+		}
+		rowButtons = append(rowButtons, discordgo.Button{
+			Label:    label,
+			Style:    discordgo.DangerButton,
+			CustomID: fmt.Sprintf("stop-thread:%s", tid),
+		})
+		buttonCount++
+		if buttonCount >= maxPerRow || i == len(threads)-1 {
+			rows = append(rows, discordgo.ActionsRow{Components: rowButtons})
+			rowButtons = nil
+			buttonCount = 0
+		}
+	}
+
+	// Always add "Stop All" as the last row
+	rows = append(rows, discordgo.ActionsRow{
+		Components: []discordgo.MessageComponent{
+			discordgo.Button{
+				Label:    "⏹️ Stop All",
+				Style:    discordgo.DangerButton,
+				CustomID: fmt.Sprintf("stop-all:%s", channelID),
+			},
+			discordgo.Button{
+				Label:    "Cancel",
+				Style:    discordgo.SecondaryButton,
+				CustomID: "stop-cancel",
+			},
+		},
+	})
+
+	_, err := b.dg.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+		Embed:      embed,
+		Components: rows,
+	})
+	if err != nil {
+		log.Printf("[STOP] Failed to send stop selection: %v", err)
+	}
+}
+
+// handleStopSelection processes a stop-thread or stop-all button click.
+func (b *Bot) handleStopSelection(s *discordgo.Session, i *discordgo.Interaction, customID string) {
+	// Acknowledge immediately
+	err := b.api.InteractionRespond(i, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredMessageUpdate,
+	})
+	if err != nil {
+		log.Printf("[STOP] Failed to acknowledge stop interaction: %v", err)
+		return
+	}
+
+	parts := strings.SplitN(customID, ":", 2)
+	if len(parts) < 2 {
+		log.Printf("[STOP] Invalid customID format: %s", customID)
+		return
+	}
+
+	action := parts[0]
+	target := parts[1]
+
+	switch action {
+	case "stop-thread":
+		b.stopActiveRun(target)
+		b.editStopResponse(i, fmt.Sprintf("🛑 Session `<#%s>` stopped.", target))
+
+	case "stop-all":
+		var stopped int
+		b.activeMu.Lock()
+		for _, ac := range b.activeChans {
+			if ac.ParentID == target {
+				ac.Cancel()
+				stopped++
+				go func(agentID, runID string) {
+					if agentID != "" && runID != "" {
+						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+						defer cancel()
+						globalBridge.Client().Agents.CancelRun(ctx, agentID, runID)
+					}
+				}(ac.AgentID, ac.RunID)
+			}
+		}
+		b.activeMu.Unlock()
+		b.editStopResponse(i, fmt.Sprintf("⏹️ Stopped **%d** session(s).", stopped))
+
+	case "stop-cancel":
+		b.editStopResponse(i, "Cancelled. No sessions were stopped.")
+	}
+}
+
+// editStopResponse updates the original embed to show the result.
+func (b *Bot) editStopResponse(i *discordgo.Interaction, content string) {
+	_, err := b.api.InteractionResponseEdit(i, &discordgo.WebhookEdit{
+		Content:    &content,
+		Components: &[]discordgo.MessageComponent{}, // remove buttons
+	})
+	if err != nil {
+		log.Printf("[STOP] Failed to edit response: %v", err)
+	}
 }
 
 // resolveQuestionChannel determines where to send an agent question.
@@ -1687,11 +1867,11 @@ pollLoop:
 				}
 			}
 
-			// Combine reasoning + response in Claude-style format
+			// Combine reasoning + response — wrap thinking in spoiler tags for foldable display
 			if reasoningText != "" && responseText == "" {
-				responseText = reasoningText
+				responseText = "||" + reasoningText + "||"
 			} else if reasoningText != "" {
-				responseText = "🤔 *Thinking...*\n" + reasoningText + "\n\n" + responseText
+				responseText = "🤔 ||*Thinking...*\n" + reasoningText + "||\n\n" + responseText
 			}
 
 			if responseText != "" {

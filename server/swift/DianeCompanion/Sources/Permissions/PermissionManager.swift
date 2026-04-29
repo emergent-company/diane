@@ -16,6 +16,23 @@ enum PermissionType: String, CaseIterable, Identifiable, Sendable {
     
     var id: String { rawValue }
     
+    var setupGuide: String {
+        switch self {
+        case .accessibility:
+            return "1. Open System Settings → Privacy & Security → Accessibility\n2. Find \"Diane\" in the app list\n3. Toggle the switch to enable"
+        case .automation:
+            return "1. Open System Settings → Privacy & Security → Automation\n2. Find \"Diane\" in the app list\n3. Toggle the switch to allow control of other apps"
+        case .notifications:
+            return "1. Open System Settings → Notifications\n2. Find \"Diane\" in the app list\n3. Enable \"Allow Notifications\""
+        case .calendar:
+            return "1. Open System Settings → Privacy & Security → Calendar\n2. Find \"Diane\" in the app list\n3. Toggle the switch to enable"
+        case .reminders:
+            return "1. Open System Settings → Privacy & Security → Reminders\n2. Find \"Diane\" in the app list\n3. Toggle the switch to enable"
+        case .contacts:
+            return "1. Open System Settings → Privacy & Security → Contacts\n2. Find \"Diane\" in the app list\n3. Toggle the switch to enable"
+        }
+    }
+    
     var displayName: String {
         switch self {
         case .accessibility: return "Accessibility"
@@ -75,15 +92,18 @@ final class PermissionManager: ObservableObject {
     private let logger = Logger(subsystem: "com.emergent-company.diane-companion", category: "Permissions")
     
     @Published var permissions: [PermissionInfo] = []
+    @Published var isRefreshing = false
     
     init() {
         refresh()
     }
     
     func refresh() {
+        isRefreshing = true
         permissions = PermissionType.allCases.map { type in
             PermissionInfo(type: type, status: checkStatus(type))
         }
+        isRefreshing = false
     }
     
     func checkStatus(_ type: PermissionType) -> PermissionStatus {
@@ -125,13 +145,17 @@ final class PermissionManager: ObservableObject {
     func openSystemSettings(_ type: PermissionType) {
         switch type {
         case .accessibility:
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+            guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") else { return }
+            NSWorkspace.shared.open(url)
         case .automation:
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!)
+            guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") else { return }
+            NSWorkspace.shared.open(url)
         case .notifications:
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.notifications")!)
+            guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") else { return }
+            NSWorkspace.shared.open(url)
         default:
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy")!)
+            guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy") else { return }
+            NSWorkspace.shared.open(url)
         }
     }
     
@@ -219,6 +243,8 @@ final class PermissionManager: ObservableObject {
         case .denied: return .denied
         case .notDetermined: return .notDetermined
         case .restricted: return .restricted
+        case .fullAccess: return .granted
+        case .writeOnly: return .granted
         @unknown default: return .notDetermined
         }
     }

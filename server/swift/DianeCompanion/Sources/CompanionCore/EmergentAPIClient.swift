@@ -8,7 +8,7 @@ import OSLog
 /// graph objects, agents, MCP servers, and user profile.
 @MainActor
 final class EmergentAPIClient: ObservableObject {
-    private let logger = Logger(subsystem: "com.emergent-company.emergent-mac", category: "APIClient")
+    private let logger = Logger(subsystem: "com.emergent-company.diane-companion", category: "APIClient")
 
     private let session: URLSession
     private var baseURL: URL?
@@ -169,6 +169,17 @@ final class EmergentAPIClient: ObservableObject {
             return list
         }
         return (try? JSONDecoder().decode([Agent].self, from: data)) ?? []
+    }
+
+    // MARK: - Agent Definitions (MP Agent Definitions API)
+
+    func fetchAgentDefs(projectID: String) async throws -> [AgentDef] {
+        let data = try await get("/api/agent-definitions", projectID: projectID)
+        struct Response: Decodable { let data: [AgentDef]? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.data {
+            return list
+        }
+        return (try? JSONDecoder().decode([AgentDef].self, from: data)) ?? []
     }
 
     func updateAgent(_ agent: Agent) async throws -> Agent {

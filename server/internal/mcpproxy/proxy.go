@@ -178,7 +178,9 @@ func (p *Proxy) CallTool(toolName string, arguments map[string]interface{}) (jso
 func (p *Proxy) monitorNotifications() {
 	p.mu.RLock()
 	for name, client := range p.clients {
-		go p.monitorClient(name, client)
+		if client.NotificationChan() != nil {
+			go p.monitorClient(name, client)
+		}
 	}
 	p.mu.RUnlock()
 }
@@ -267,8 +269,10 @@ func (p *Proxy) startClientUnlocked(config ServerConfig) error {
 
 	p.clients[config.Name] = client
 
-	// Start monitoring this client's notifications
-	go p.monitorClient(config.Name, client)
+	// Start monitoring this client's notifications (only if it supports them)
+	if client.NotificationChan() != nil {
+		go p.monitorClient(config.Name, client)
+	}
 
 	log.Printf("Started MCP server: %s", config.Name)
 	return nil

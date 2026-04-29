@@ -41,7 +41,7 @@ func cmdNodes() {
 	}
 	req.Header.Set("Authorization", "Bearer "+pc.Token)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to query relay sessions: %v\n", err)
 		os.Exit(1)

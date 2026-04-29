@@ -12,10 +12,14 @@ struct DianeCompanionApp: App {
     @StateObject private var appState       = AppState()
     @StateObject private var dianeAPI       = DianeAPIClient()
     @StateObject private var apiClient      = EmergentAPIClient()
+    @StateObject private var apiServer      = APIServerManager()
     @State private var hasStarted           = false
 
     init() {
-        logger.info("Diane is launching.")
+        AppLogger.shared.info("Diane Companion app launching", category: "App")
+        // Log environment info for crash diagnostics
+        let sysInfo = ProcessInfo.processInfo
+        AppLogger.shared.debug("macOS \(sysInfo.operatingSystemVersionString), \(sysInfo.processName) v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")", category: "App")
     }
 
     private var menuBarIconName: String {
@@ -74,17 +78,32 @@ struct DianeCompanionApp: App {
         guard !hasStarted else { return }
         hasStarted = true
 
+        AppLogger.shared.info("App startup sequence beginning", category: "App")
+
         updateChecker.statusMonitor = statusMonitor
         updateChecker.cliManager = cliManager
         statusMonitor.configure(from: serverConfig)
 
+        // Configuration
+        AppLogger.shared.info("Server URL: \(serverConfig.serverURL)", category: "App")
+        AppLogger.shared.debug("API key set: \(!serverConfig.apiKey.isEmpty)", category: "App")
+
         // Configure the API client from persisted server settings
         apiClient.configure(serverURL: serverConfig.serverURL, apiKey: serverConfig.apiKey)
 
-        // Check if the local Diane API is reachable
+        // Configure the API server manager and ensure local diane serve is running
+        apiServer.configure(apiClient: dianeAPI)
+        AppLogger.shared.info("Ensuring local diane serve is running", category: "App")
+        await apiServer.ensureRunning(dianeAPI: dianeAPI)
+
+        // Check reachability after trying to start
         let reachable = await dianeAPI.checkReachability()
-        logger.info("Local Diane API reachable: \(reachable)")
+        AppLogger.shared.info("Local Diane API reachable: \(reachable)", category: "App")
+        if !reachable {
+            AppLogger.shared.warning("Local API not reachable — will use remote fallback", category: "App")
+        }
 
         await updateChecker.start()
+        AppLogger.shared.info("App startup complete", category: "App")
     }
 }
