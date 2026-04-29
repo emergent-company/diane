@@ -83,3 +83,133 @@ tasks:
     desc: Show version
     cmds:
       - "cd server && {{.GO}} version"
+
+  release:
+    desc: Verify build, commit, push, and create a GitHub release
+    summary: |
+      Build verification → commit → push → bump version → tag → GitHub release.
+
+      Usage:
+        task release              # auto message + patch bump (v1.12.0 → v1.12.1)
+        task release MSG="fix: server crash on startup"
+        task release BUMP=minor   # v1.12.0 → v1.13.0
+        task release DRY_RUN=1    # show what would happen, don't execute
+        task release SKIP_BUILD=1 # skip build verification (quick fix releases)
+
+      Defaults: BUMP=patch, MSG auto-generated from changed file names.
+      The build must pass before anything is committed or pushed.
+    vars:
+      MSG: '{{.MSG | default ""}}'
+      BUMP: '{{.BUMP | default "patch"}}'
+      DRY_RUN: '{{.DRY_RUN | default "0"}}'
+      SKIP_BUILD: '{{.SKIP_BUILD | default "0"}}'
+    cmds:
+      - |
+        set -euo pipefail
+
+        repo="emergent-company/diane"
+        gh_hosts="$HOME/.config/gh/hosts.yml"
+
+        # ── find last tag ──
+        last_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+        echo "Current tag: $last_tag"
+
+        # ── bump version ──
+        IFS='.' read -r -a parts <<< "${last_tag#v}"
+        case "{{.BUMP}}" in
+          major) parts[0]=$((parts[0] + 1)); parts[1]=0; parts[2]=0 ;;
+          minor) parts[1]=$((parts[1] + 1)); parts[2]=0 ;;
+          patch) parts[2]=$((parts[2] + 1)) ;;
+          *) echo "❌ BUMP must be patch|minor|major"; exit 1 ;;
+        esac
+        new_tag="v${parts[0]}.${parts[1]}.${parts[2]}"
+        echo "New tag:  $new_tag"
+
+        # ── check for uncommitted tracked changes ──
+        if [ -z "$(git status --porcelain)" ]; then
+          echo "⚠️  No changes to commit"
+          exit 1
+        fi
+
+        # ── commit message ──
+        msg="{{.MSG}}"
+        if [ -z "$msg" ]; then
+          changed=$(git diff --name-only | sed 's|.*/||' | tr '\n' ' ' | sed 's/ $//')
+          msg="release: $new_tag — $changed"
+        fi
+
+        if [ "{{.DRY_RUN}}" = "1" ]; then
+          echo ""
+          echo "── DRY RUN ──"
+          echo "  1. Build verification (dev-build.sh --no-launch)"
+          echo "  2. diane doctor"
+          echo "  3. git add -u && git commit -m \"$msg\""
+          echo "  4. git push origin main"
+          echo "  5. git tag $new_tag && git push origin $new_tag"
+          echo "  6. gh release create $new_tag --repo $repo --generate-notes --title \"$new_tag\""
+          exit 0
+        fi
+
+        # ── step 1: build verification ──
+        if [ "{{.SKIP_BUILD}}" != "1" ]; then
+          echo ""
+          echo "═══ Build verification ═══"
+          echo "→ Building CLI + Swift app..."
+          bash scripts/dev-build.sh --no-launch --version="$new_tag"
+          echo "✅ Build passed"
+          echo ""
+          echo "→ Running doctor..."
+          doctor_out=$(mktemp)
+          diane_bin=""
+          if command -v diane &>/dev/null; then
+            diane_bin="diane"
+          elif [ -x "/Applications/Diane.app/Contents/Resources/diane" ]; then
+            diane_bin="/Applications/Diane.app/Contents/Resources/diane"
+          fi
+          if [ -n "$diane_bin" ]; then
+            set +e
+            $diane_bin doctor > "$doctor_out" 2>&1
+            doctor_rc=$?
+            set -e
+            if [ "$doctor_rc" -eq 0 ]; then
+              echo "   ✅ All checks passed"
+            else
+              echo "   ⚠️  Doctor reported issues (exit $doctor_rc):"
+              sed -n '1,5p' "$doctor_out"
+            fi
+          fi
+          rm -f "$doctor_out"
+          echo "✅ Build verified"
+        else
+          echo "⏭️  Build verification skipped (SKIP_BUILD=1)"
+        fi
+
+        # ── step 2: commit ──
+        echo ""
+        echo "═══ Releasing $new_tag ═══"
+        git add -u
+        git commit -m "$msg"
+        echo "✅ Committed: $msg"
+
+        # ── step 3: push ──
+        git push origin main
+        echo "✅ Pushed to main"
+
+        # ── step 4: tag ──
+        git tag "$new_tag"
+        git push origin "$new_tag"
+        echo "✅ Tagged: $new_tag"
+
+        # ── step 5: GitHub release ──
+        if [ -f "$gh_hosts" ]; then
+          export GH_TOKEN=$(grep -A3 'oauth_token' "$gh_hosts" | head -1 | awk '{print $2}')
+        fi
+        if [ -n "${GH_TOKEN:-}" ]; then
+          gh release create "$new_tag" --repo "$repo" --generate-notes --title "$new_tag"
+          echo "✅ GitHub release: https://github.com/$repo/releases/tag/$new_tag"
+        else
+          echo "⚠️  No GH_TOKEN found — tag pushed but release not created. Run:"
+          echo "   gh release create $new_tag --repo $repo --generate-notes --title \"$new_tag\""
+        fi
+        echo ""
+        echo "🎉 Release $new_tag complete"
