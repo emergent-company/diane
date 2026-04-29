@@ -153,8 +153,9 @@ struct SessionsView: View {
             Image(systemName: "exclamationmark.circle.fill")
                 .foregroundStyle(.red)
         default:
-            Image(systemName: "circle.dashed")
-                .foregroundStyle(.tertiary)
+            // nil/empty status = active session (not yet closed)
+            Image(systemName: "circle.fill")
+                .foregroundStyle(.green)
         }
     }
 
