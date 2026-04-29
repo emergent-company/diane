@@ -108,7 +108,7 @@ tasks:
         set -euo pipefail
 
         repo="emergent-company/diane"
-        gh_hosts="$HOME/.config/gh/hosts.yml"
+        gh_hosts="/Users/mcj/.config/gh/hosts.yml"
 
         # ── find last tag ──
         last_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
