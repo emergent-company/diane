@@ -39,6 +39,7 @@ type ProjectConfig struct {
 	DiscordBotToken         string   `yaml:"discord_bot_token,omitempty"`
 	DiscordChannelIDs       []string `yaml:"discord_channel_ids,omitempty"`
 	DiscordThreadChannelIDs []string `yaml:"discord_thread_channel_ids,omitempty"`
+	DiscordTestBotIDs       []string `yaml:"discord_test_bot_ids,omitempty"`
 
 	// LLM Providers (optional, synced to Memory Platform)
 	GenerativeProvider *ProviderConfig `yaml:"generative_provider,omitempty"`
