@@ -22,13 +22,16 @@ projects:
       - '1497517847377743973'
     brave_api_key: REDACTED_BRAVE_API_KEY
     generative_provider:
-      provider: deepseek
-      api_key: sk-9fe...2138
-      base_url: https://api.deepseek.com
+      provider: openai-compatible
+      api_key: "none"
+      base_url: http://10.10.10.61:8001/v1
+      model: Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf
     embedding_provider:
       provider: google
       api_key: AIzaSy...4EAw
 ```
+
+Both test and production now use **Kvasir** (on-prem Qwen 35B via openai-compatible). See [`/root/infrastructure/docs/diane-provider-setup.md`](../../infrastructure/docs/diane-provider-setup.md) for details.
 
 ## Build
 
