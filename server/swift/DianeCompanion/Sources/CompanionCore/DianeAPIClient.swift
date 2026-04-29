@@ -82,6 +82,12 @@ final class DianeAPIClient: ObservableObject {
         return (try? JSONDecoder().decode([DianeMessage].self, from: data)) ?? []
     }
 
+    func fetchSessionDetail(sessionID: String) async throws -> SessionDetailResponse {
+        let encoded = sessionID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionID
+        let data = try await get("/api/sessions/\(encoded)")
+        return try JSONDecoder().decode(SessionDetailResponse.self, from: data)
+    }
+
     // MARK: - MCP Servers
 
     func fetchMCPServers() async throws -> [MCPServer] {
@@ -160,6 +166,20 @@ final class DianeAPIClient: ObservableObject {
     func fetchAgentStats(hours: Int = 24) async throws -> AgentStatsResponse {
         let data = try await get("/api/stats?hours=\(hours)")
         return try JSONDecoder().decode(AgentStatsResponse.self, from: data)
+    }
+
+    func fetchProviderStats(hours: Int = 24) async throws -> ProviderStatsResponse {
+        let data = try await get("/api/stats/providers?hours=\(hours)")
+        return try JSONDecoder().decode(ProviderStatsResponse.self, from: data)
+    }
+
+    func fetchProjectProviders() async throws -> [ProjectProviderInfo] {
+        let data = try await get("/api/providers")
+        struct Response: Decodable { let providers: [ProjectProviderInfo]? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.providers {
+            return list
+        }
+        return []
     }
 
     // MARK: - Agent Definitions
@@ -270,18 +290,20 @@ enum DianeAPIError: Error, LocalizedError {
 struct RelayNode: Identifiable, Codable, Hashable, Sendable {
     let instanceID: String
     let hostname: String?
-    let role: String?
+    let mode: String?          // "master" or "slave" (from graph config)
     let version: String?
     let toolCount: Int?
     let connectedAt: String?
+    let online: Bool           // whether node has an active relay connection
 
     var id: String { instanceID }
 
     enum CodingKeys: String, CodingKey {
         case instanceID = "instance_id"
-        case hostname, role, version
+        case hostname, mode, version
         case toolCount = "tool_count"
         case connectedAt = "connected_at"
+        case online
     }
 
     func hash(into hasher: inout Hasher) { hasher.combine(instanceID) }

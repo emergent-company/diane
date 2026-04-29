@@ -88,15 +88,9 @@ struct MenuBarView: View {
             Circle()
                 .fill(statusColor)
                 .frame(width: 8, height: 8)
-            if statusMonitor.connectionState == .connected || statusMonitor.connectionState == .unknown {
-                Text("Connected")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-            } else {
-                Text(statusMonitor.statusLabel)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
+            Text(statusMonitor.statusLabel)
+                .font(.subheadline)
+                .fontWeight(.medium)
             Spacer()
             if statusMonitor.isChecking {
                 ProgressView().controlSize(.mini)

@@ -10,28 +10,31 @@ struct SessionsView: View {
     @State private var sessions: [DianeSession] = []
     @State private var selectedSession: DianeSession? = nil
     @State private var messages: [DianeMessage] = []
+    @State private var sessionDetail: SessionDetailResponse? = nil
     @State private var isLoading = false
     @State private var isLoadingMessages = false
+    @State private var isLoadingDetail = false
     @State private var error: String? = nil
     @State private var messagesError: String? = nil
 
     var body: some View {
-        HSplitView {
-            sessionsList
-                .frame(minWidth: 220, idealWidth: 350)
-
-            if let session = selectedSession {
-                sessionDetailPanel(session)
-                    .frame(minWidth: 220, idealWidth: 350)
-            } else {
-                EmptyStateView(
-                    title: "Select a Session",
-                    icon: "message",
-                    description: "Select a conversation session to view its transcript."
-                )
-                .frame(minWidth: 220, idealWidth: 350)
+        SplitListDetailView(
+            emptyTitle: "Select a Session",
+            emptyIcon: "message",
+            emptyDescription: "Select a conversation session to view its transcript.",
+            listContent: { sessionsList },
+            detailContent: {
+                if let session = selectedSession {
+                    sessionDetailPanel(session)
+                } else {
+                    EmptyStateView(
+                        title: "Select a Session",
+                        icon: "message",
+                        description: "Select a conversation session to view its transcript."
+                    )
+                }
             }
-        }
+        )
         .navigationTitle("Sessions")
         .task { await load() }
     }
@@ -80,6 +83,9 @@ struct SessionsView: View {
         .onChange(of: selectedSession) { session in
             if let s = session {
                 Task { await loadMessages(session: s) }
+                Task { await loadSessionDetail(session: s) }
+            } else {
+                sessionDetail = nil
             }
         }
     }
@@ -224,33 +230,96 @@ struct SessionsView: View {
     }
 
     private func sessionHeader(_ session: DianeSession) -> some View {
-        HStack(spacing: 10) {
-            statusIcon(session.status)
-                .font(.system(size: 14))
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                statusIcon(session.status)
+                    .font(.system(size: 14))
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text(session.title ?? "Untitled")
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                HStack(spacing: 8) {
-                    statusBadge(session.status)
-                    if let dateStr = session.updatedAt ?? session.createdAt {
-                        Text(relativeTimestamp(dateStr))
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    }
-                    if let count = session.messageCount {
-                        Text("\(count) messages")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(session.title ?? "Untitled")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                    HStack(spacing: 8) {
+                        statusBadge(session.status)
+                        if let dateStr = session.updatedAt ?? session.createdAt {
+                            Text(relativeTimestamp(dateStr))
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                        if let count = session.messageCount {
+                            Text("\(count) messages")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
                     }
                 }
-            }
 
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+
+            // Stats bar
+            if let detail = sessionDetail {
+                statsBar(detail)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 12)
+            } else if isLoadingDetail {
+                HStack {
+                    ProgressView()
+                        .scaleEffect(0.6)
+                    Text("Loading stats…")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 12)
+            }
+        }
+        .background(Color.primary.opacity(0.04))
+    }
+
+    @ViewBuilder
+    private func statsBar(_ detail: SessionDetailResponse) -> some View {
+        let agg = detail.aggregates
+        HStack(spacing: 16) {
+            if let agg = agg {
+                if detail.totalTokens > 0 {
+                    statsBadge(icon: "number", value: formatTokenCount(detail.totalTokens), label: "tokens")
+                }
+                if agg.totalRuns > 0 {
+                    statsBadge(icon: "arrow.triangle.branch", value: "\(agg.totalRuns)", label: "runs")
+                }
+                if agg.estimatedCostUsd > 0 {
+                    statsBadge(icon: "dollarsign.circle.fill", value: formatCost(agg.estimatedCostUsd), label: "cost")
+                }
+                if agg.totalInputTokens > 0 || agg.totalOutputTokens > 0 {
+                    statsBadge(icon: "textformat.size", value: "\(formatTokenCount(Int(agg.totalInputTokens)))→\(formatTokenCount(Int(agg.totalOutputTokens)))", label: "in→out")
+                }
+            }
             Spacer()
         }
-        .padding(12)
-        .background(Color.primary.opacity(0.04))
+    }
+
+    private func statsBadge(icon: String, value: String, label: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.caption2)
+                .fontWeight(.medium)
+                .monospacedDigit()
+                .foregroundStyle(.primary)
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.primary.opacity(0.05))
+        .cornerRadius(5)
     }
 
     // MARK: - Message Bubble
@@ -473,24 +542,10 @@ struct SessionsView: View {
 
     // MARK: - Helpers
 
-    /// Convert ISO8601 or RFC3339 timestamp to a relative string like "2m ago", "3h ago", "yesterday".
+    /// Convert ISO8601 or RFC3339 timestamp to a human-friendly string.
+    /// Recent (< 7d) → relative; older → absolute date.
     private func relativeTimestamp(_ dateStr: String) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        guard let date = formatter.date(from: dateStr)
-            ?? ISO8601DateFormatter().date(from: dateStr) else {
-            return dateStr
-        }
-        let interval = -date.timeIntervalSinceNow
-        switch interval {
-        case ..<60:      return "just now"
-        case ..<3600:    return "\(Int(interval / 60))m ago"
-        case ..<86400:   return "\(Int(interval / 3600))h ago"
-        case ..<172800:  return "yesterday"
-        case ..<604800:  return "\(Int(interval / 86400))d ago"
-        case ..<2592000: return "\(Int(interval / 604800))w ago"
-        default:         return "\(Int(interval / 2592000))mo ago"
-        }
+        DateUtils.formatTimestamp(dateStr)
     }
 
     /// Format large token counts: "1.5K", "12K", "1.2M".
@@ -531,6 +586,29 @@ struct SessionsView: View {
             messagesError = error.localizedDescription
         }
         isLoadingMessages = false
+    }
+
+    @MainActor
+    private func loadSessionDetail(session: DianeSession) async {
+        isLoadingDetail = true
+        do {
+            sessionDetail = try await dianeAPI.fetchSessionDetail(sessionID: session.id)
+        } catch {
+            sessionDetail = nil
+        }
+        isLoadingDetail = false
+    }
+
+    private func formatCost(_ usd: Double) -> String {
+        if usd >= 100 {
+            return String(format: "$%.2f", usd)
+        } else if usd >= 1 {
+            return String(format: "$%.3f", usd)
+        } else if usd >= 0.001 {
+            return String(format: "%.1f¢", usd * 100)
+        } else {
+            return String(format: "%.2f¢", usd * 100)
+        }
     }
 }
 
@@ -581,4 +659,14 @@ private struct PlainDisclosureGroupStyle: DisclosureGroupStyle {
             }
         }
     }
+}
+
+// MARK: - Previews
+
+#Preview {
+    SessionsView()
+        .environmentObject(AppState())
+        .environmentObject(ServerConfiguration())
+        .environmentObject(DianeAPIClient())
+        .frame(width: 800, height: 600)
 }

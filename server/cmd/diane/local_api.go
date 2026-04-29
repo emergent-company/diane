@@ -9,14 +9,17 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Emergent-Comapny/diane/internal/config"
-	"github.com/Emergent-Comapny/diane/internal/db"
 	"github.com/Emergent-Comapny/diane/internal/mcpproxy"
 	"github.com/Emergent-Comapny/diane/internal/memory"
+
+	sdkagentrun "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agents"
+	sdkagents "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agentdefinitions"
 )
 
 // localAPIServer manages the local HTTP API for the companion app.
@@ -59,9 +62,10 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	mux.HandleFunc("/api/agents", api.handleAgents)
 	mux.HandleFunc("/api/nodes", api.handleNodes)
 	mux.HandleFunc("/api/nodes/", api.handleNodeByID)
+	mux.HandleFunc("/api/providers", api.handleProjectProviders)
 	mux.HandleFunc("/api/status", api.handleStatus)
 	mux.HandleFunc("/api/stats", api.handleStats)
-	mux.HandleFunc("/api/agents", api.handleAgents)
+	mux.HandleFunc("/api/stats/providers", api.handleProviderStats)
 
 	api.server = &http.Server{
 		Addr:    fmt.Sprintf("127.0.0.1:%d", port),
@@ -142,6 +146,7 @@ func (a *localAPIServer) handleSessions(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// GET /api/sessions/{id} — session detail with aggregated run stats
 // GET /api/sessions/{id}/messages — get messages for a session
 func (a *localAPIServer) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -149,19 +154,64 @@ func (a *localAPIServer) handleSessionByID(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Extract session ID from path: /api/sessions/{id}/messages
+	// Extract session ID from path: /api/sessions/{id}[/messages]
 	path := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
 	parts := strings.SplitN(path, "/", 2)
-	if len(parts) < 2 || parts[1] != "messages" {
-		jsonError(w, http.StatusNotFound, "use /api/sessions/{id}/messages")
-		return
-	}
 	sessionID := parts[0]
 	if sessionID == "" {
 		jsonError(w, http.StatusBadRequest, "session ID required")
 		return
 	}
 
+	// If sub-path exists, route to sub-handlers
+	if len(parts) > 1 && parts[1] != "" {
+		switch parts[1] {
+		case "messages":
+			a.handleSessionMessages(w, r, sessionID)
+		default:
+			jsonError(w, http.StatusNotFound, "unknown session sub-path; use /messages")
+		}
+		return
+	}
+
+	// GET /api/sessions/{id} — session detail with aggregated run stats
+	ctx := context.Background()
+
+	// Fetch session metadata
+	session, err := a.bridge.GetSession(ctx, sessionID)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("get session: %v", err))
+		return
+	}
+
+	// Fetch aggregated run stats
+	agg, aggErr := a.bridge.GetSessionRunAggregates(ctx, sessionID)
+	if aggErr != nil {
+		// Non-fatal — still return session metadata
+		log.Printf("[LOCAL-API] get session run aggregates: %v", aggErr)
+		agg = &memory.SessionRunAggregates{}
+	}
+
+	jsonResponse(w, map[string]any{
+		"id":            session.ID,
+		"key":           session.Key,
+		"title":         session.Title,
+		"status":        session.Status,
+		"message_count": session.MessageCount,
+		"total_tokens":  session.TotalTokens,
+		"created_at":    session.CreatedAt.Format(time.RFC3339),
+		"updated_at":    session.UpdatedAt.Format(time.RFC3339),
+		"aggregates": map[string]any{
+			"total_runs":          agg.TotalRuns,
+			"total_input_tokens":  agg.TotalInputTokens,
+			"total_output_tokens": agg.TotalOutputTokens,
+			"estimated_cost_usd":  agg.EstimatedCostUSD,
+		},
+	})
+}
+
+// GET /api/sessions/{id}/messages — get messages for a session
+func (a *localAPIServer) handleSessionMessages(w http.ResponseWriter, r *http.Request, sessionID string) {
 	ctx := context.Background()
 	messages, err := a.bridge.GetMessages(ctx, sessionID)
 	if err != nil {
@@ -448,107 +498,134 @@ type relaySessionData struct {
 	InstanceID  string `json:"instance_id"`
 	Hostname    string `json:"hostname,omitempty"`
 	Version     string `json:"version,omitempty"`
+	ToolCount   int    `json:"tool_count,omitempty"`
 	Tools       any    `json:"tools,omitempty"`
 	ConnectedAt string `json:"connected_at,omitempty"`
 }
 
-// GET /api/nodes — list connected MCP relay nodes with role info
+// GET /api/nodes — list registered nodes, supplemented with online status from relay sessions
 func (a *localAPIServer) handleNodes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
+	// ── 1. Query registered nodes from the graph (DianeNodeConfig) ──
+	ctx := r.Context()
+	registeredNodes, graphErr := a.bridge.ListNodeConfigs(ctx)
+
+	// ── 2. Query active MCP relay sessions (for online status) ──
 	relayURL := strings.TrimSuffix(a.config.ServerURL, "/") + "/api/mcp-relay/sessions"
 	req, err := http.NewRequest("GET", relayURL, nil)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("create request: %v", err))
-		return
-	}
-	req.Header.Set("Authorization", "Bearer "+a.config.Token)
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("query nodes: %v", err))
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		jsonError(w, resp.StatusCode, fmt.Sprintf("relay API returned %d", resp.StatusCode))
-		return
+		req = nil // proceed without relay data
+	} else {
+		req.Header.Set("Authorization", "Bearer "+a.config.Token)
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("read response: %v", err))
-		return
-	}
-
-	// Parse response — could be array, {"items":[...]}, {"data":[...]}, or {"sessions":[...]}
-	var sessions []relaySessionData
-	if err := json.Unmarshal(body, &sessions); err != nil {
-		// Try wrapped response formats
-		var wrapped struct {
-			Items    []relaySessionData `json:"items"`
-			Data     []relaySessionData `json:"data"`
-			Sessions []relaySessionData `json:"sessions"`
-		}
-		if err2 := json.Unmarshal(body, &wrapped); err2 == nil {
-			switch {
-			case wrapped.Sessions != nil:
-				sessions = wrapped.Sessions
-			case wrapped.Items != nil:
-				sessions = wrapped.Items
-			case wrapped.Data != nil:
-				sessions = wrapped.Data
+	var onlineSessions []relaySessionData
+	if req != nil {
+		resp, err2 := httpClient.Do(req)
+		if err2 == nil && resp.StatusCode == 200 {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			// Parse response formats
+			if err := json.Unmarshal(body, &onlineSessions); err != nil {
+				var wrapped struct {
+					Items    []relaySessionData `json:"items"`
+					Data     []relaySessionData `json:"data"`
+					Sessions []relaySessionData `json:"sessions"`
+				}
+				if err2 := json.Unmarshal(body, &wrapped); err2 == nil {
+					switch {
+					case wrapped.Sessions != nil:
+						onlineSessions = wrapped.Sessions
+					case wrapped.Items != nil:
+						onlineSessions = wrapped.Items
+					case wrapped.Data != nil:
+						onlineSessions = wrapped.Data
+					}
+				}
 			}
 		}
-		if sessions == nil {
-			jsonError(w, http.StatusInternalServerError, fmt.Sprintf("failed to parse relay sessions: %s", string(body)))
-			return
+	}
+
+	// Build online lookup: instance_id -> relay session data
+	online := make(map[string]relaySessionData)
+	for _, s := range onlineSessions {
+		online[s.InstanceID] = s
+	}
+
+	// Build registered lookup: instance_id -> node config
+	registered := make(map[string]memory.NodeConfig)
+	if graphErr == nil {
+		for _, nc := range registeredNodes {
+			registered[nc.InstanceID] = nc
 		}
 	}
 
-	// Get local hostname and instance ID for role determination
-	localHostname, _ := os.Hostname()
-	localInstanceID := a.config.InstanceID
-
+	// ── 3. Merge: use registered nodes as base, add online-only as fallback ──
 	type nodeJSON struct {
 		InstanceID  string `json:"instance_id"`
 		Hostname    string `json:"hostname,omitempty"`
-		Role        string `json:"role,omitempty"`
+		Mode        string `json:"mode,omitempty"` // from graph config
 		Version     string `json:"version,omitempty"`
 		ToolCount   int    `json:"tool_count,omitempty"`
 		ConnectedAt string `json:"connected_at,omitempty"`
+		Online      bool   `json:"online"`
 	}
 
-	nodes := make([]nodeJSON, 0, len(sessions))
-	for _, s := range sessions {
-		toolCount := 0
-		if s.Tools != nil {
+	seen := make(map[string]bool)
+	nodes := make([]nodeJSON, 0)
+
+	// First: all registered nodes from graph (with online status from relay)
+	for _, nc := range registeredNodes {
+		seen[nc.InstanceID] = true
+		n := nodeJSON{
+			InstanceID: nc.InstanceID,
+			Hostname:   nc.Hostname,
+			Mode:       nc.Mode,
+			Version:    nc.Version,
+		}
+		if s, ok := online[nc.InstanceID]; ok {
+			n.Online = true
+			n.ToolCount = s.ToolCount
+			if s.ToolCount == 0 && s.Tools != nil {
+				if toolsMap, ok := s.Tools.(map[string]interface{}); ok {
+					if tl, ok := toolsMap["tools"].([]interface{}); ok {
+						n.ToolCount = len(tl)
+					}
+				}
+			}
+			n.ConnectedAt = s.ConnectedAt
+			// Prefer relay version if more specific
+			if s.Version != "" {
+				n.Version = s.Version
+			}
+		}
+		nodes = append(nodes, n)
+	}
+
+	// Second: online-only nodes (registered in relay but not yet in graph — older nodes)
+	for _, s := range onlineSessions {
+		if seen[s.InstanceID] {
+			continue
+		}
+		toolCount := s.ToolCount
+		if toolCount == 0 && s.Tools != nil {
 			if toolsMap, ok := s.Tools.(map[string]interface{}); ok {
 				if tl, ok := toolsMap["tools"].([]interface{}); ok {
 					toolCount = len(tl)
 				}
 			}
 		}
-
-		// Determine role: master if it matches the local instance, slave otherwise
-		role := "slave"
-		if localInstanceID != "" && s.InstanceID == localInstanceID {
-			role = "master"
-		} else if localHostname != "" && s.Hostname == localHostname {
-			role = "master"
-		}
-
 		nodes = append(nodes, nodeJSON{
 			InstanceID:  s.InstanceID,
 			Hostname:    s.Hostname,
-			Role:        role,
 			Version:     s.Version,
 			ToolCount:   toolCount,
 			ConnectedAt: s.ConnectedAt,
+			Online:      true,
 		})
 	}
 
@@ -654,7 +731,7 @@ func (a *localAPIServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GET /api/stats — agent run statistics (mirrors `diane stats`)
+// GET /api/stats — agent run statistics from the Memory Platform
 func (a *localAPIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -666,21 +743,128 @@ func (a *localAPIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 		hours = 24
 	}
 
-	database, err := db.New("")
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("open db: %v", err))
-		return
+	ctx := context.Background()
+	since := time.Now().Add(-time.Duration(hours) * time.Hour)
+	opts := &sdkagentrun.RunStatsOptions{
+		Since: &since,
 	}
-	defer database.Close()
 
-	summaries, err := database.GetAgentStatsSummary(hours)
+	resp, err := a.bridge.GetProjectRunStats(ctx, opts)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("query stats: %v", err))
 		return
 	}
 
+	stats := resp.Data
+
+	// Fetch agent definitions to enrich stats with real agent names/descriptions
+	defs, defsErr := a.bridge.ListAgentDefs(ctx)
+	defLookup := make(map[string]sdkagents.AgentDefinitionSummary)
+	if defsErr == nil && defs != nil && defs.Data != nil {
+		for _, d := range defs.Data {
+			defLookup[d.Name] = d
+		}
+	}
+
+	// Match a run stats agent name to an agent definition.
+	matchAgent := func(runName string) *sdkagents.AgentDefinitionSummary {
+		if d, ok := defLookup[runName]; ok {
+			return &d
+		}
+		candidates := []string{runName}
+		if after, ok := strings.CutPrefix(runName, "discord-"); ok {
+			candidates = append(candidates, after)
+		}
+		for _, c := range candidates {
+			var best *sdkagents.AgentDefinitionSummary
+			bestLen := 0
+			for name, d := range defLookup {
+				if len(name) > bestLen && len(c) >= len(name) && c[:len(name)] == name {
+					cp := d
+					best = &cp
+					bestLen = len(name)
+				}
+			}
+			if best != nil {
+				return best
+			}
+		}
+		return nil
+	}
+
+	// Aggregate stats keyed by agent definition ID (or raw name if unmatched).
+	type mergedStat struct {
+		agentName       string
+		agentID         string
+		agentDesc       string
+		agentFlowType   string
+		totalRuns       int
+		successRuns     int
+		errorRuns       int
+		totalDurationMs float64
+		totalInput      float64
+		totalOutput     float64
+		totalCostUSD    float64
+	}
+
+	merged := make(map[string]*mergedStat) // key = defID or raw run name
+
+	for runName, as := range stats.ByAgent {
+		totalRuns := int(as.Total)
+		successRuns := int(as.Success)
+		errorRuns := int(as.Failed) + int(as.Errored)
+
+		def := matchAgent(runName)
+		key := runName
+		if def != nil {
+			key = def.ID
+		}
+
+		existing, exists := merged[key]
+		if !exists {
+			existing = &mergedStat{agentName: runName}
+			if def != nil {
+				existing.agentName = def.Name
+				existing.agentID = def.ID
+				if def.Description != nil {
+					existing.agentDesc = *def.Description
+				}
+				existing.agentFlowType = def.FlowType
+			}
+			merged[key] = existing
+		}
+
+		existing.totalRuns += totalRuns
+		existing.successRuns += successRuns
+		existing.errorRuns += errorRuns
+		existing.totalDurationMs += float64(totalRuns) * as.AvgDurationMs
+		existing.totalInput += as.AvgInputTokens * float64(totalRuns)
+		existing.totalOutput += as.AvgOutputTokens * float64(totalRuns)
+		existing.totalCostUSD += as.TotalCostUSD
+	}
+
+	// Add zeroed entries for agent definitions with no runs
+	if defsErr == nil && defs != nil && defs.Data != nil {
+		for _, d := range defs.Data {
+			if _, ok := merged[d.ID]; !ok {
+				merged[d.ID] = &mergedStat{
+					agentName:     d.Name,
+					agentID:       d.ID,
+					agentFlowType: d.FlowType,
+				}
+				if d.Description != nil {
+					merged[d.ID].agentDesc = *d.Description
+				}
+			}
+		}
+	}
+
+	// Build response
 	type summaryJSON struct {
 		AgentName         string  `json:"agent_name"`
+		AgentID           string  `json:"agent_id,omitempty"`
+		AgentDescription  string  `json:"agent_description,omitempty"`
+		AgentFlowType     string  `json:"agent_flow_type,omitempty"`
 		TotalRuns         int     `json:"total_runs"`
 		SuccessRuns       int     `json:"success_runs"`
 		ErrorRuns         int     `json:"error_runs"`
@@ -692,6 +876,8 @@ func (a *localAPIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 		TotalDurationMs   int     `json:"total_duration_ms"`
 		TotalInputTokens  int     `json:"total_input_tokens"`
 		TotalOutputTokens int     `json:"total_output_tokens"`
+		TotalCostUSD      float64 `json:"total_cost_usd"`
+		AvgCostUSD        float64 `json:"avg_cost_usd"`
 		SuccessRate       float64 `json:"success_rate"`
 	}
 
@@ -702,48 +888,139 @@ func (a *localAPIServer) handleStats(w http.ResponseWriter, r *http.Request) {
 		TotalDurationMs int     `json:"total_duration_ms"`
 		TotalInput      int     `json:"total_input_tokens"`
 		TotalOutput     int     `json:"total_output_tokens"`
+		TotalCostUSD    float64 `json:"total_cost_usd"`
 		OverallAvgDurMs float64 `json:"overall_avg_duration_ms"`
 		OverallSuccess  float64 `json:"overall_success_rate"`
 	}
 
-	items := make([]summaryJSON, 0, len(summaries))
+	items := make([]summaryJSON, 0, len(merged))
 	var totals totalsJSON
-	for _, s := range summaries {
+
+	for _, m := range merged {
 		successRate := float64(0)
-		if s.TotalRuns > 0 {
-			successRate = float64(s.SuccessRuns) / float64(s.TotalRuns) * 100
+		if m.totalRuns > 0 {
+			successRate = float64(m.successRuns) / float64(m.totalRuns) * 100
 		}
+		avgCost := float64(0)
+		if m.totalRuns > 0 {
+			avgCost = m.totalCostUSD / float64(m.totalRuns)
+		}
+
 		items = append(items, summaryJSON{
-			AgentName:         s.AgentName,
-			TotalRuns:         s.TotalRuns,
-			SuccessRuns:       s.SuccessRuns,
-			ErrorRuns:         s.ErrorRuns,
-			AvgDurationMs:     s.AvgDurationMs,
-			AvgStepCount:      s.AvgStepCount,
-			AvgToolCalls:      s.AvgToolCalls,
-			AvgInputTokens:    s.AvgInputTokens,
-			AvgOutputTokens:   s.AvgOutputTokens,
-			TotalDurationMs:   s.TotalDurationMs,
-			TotalInputTokens:  s.TotalInputTokens,
-			TotalOutputTokens: s.TotalOutputTokens,
+			AgentName:         m.agentName,
+			AgentID:           m.agentID,
+			AgentDescription:  m.agentDesc,
+			AgentFlowType:     m.agentFlowType,
+			TotalRuns:         m.totalRuns,
+			SuccessRuns:       m.successRuns,
+			ErrorRuns:         m.errorRuns,
+			AvgDurationMs:     safeAvg(m.totalDurationMs, m.totalRuns),
+			AvgInputTokens:    safeAvg(m.totalInput, m.totalRuns),
+			AvgOutputTokens:   safeAvg(m.totalOutput, m.totalRuns),
+			TotalDurationMs:   int(m.totalDurationMs),
+			TotalInputTokens:  int(m.totalInput),
+			TotalOutputTokens: int(m.totalOutput),
+			TotalCostUSD:      m.totalCostUSD,
+			AvgCostUSD:        avgCost,
 			SuccessRate:       successRate,
 		})
-		totals.TotalRuns += s.TotalRuns
-		totals.TotalSuccess += s.SuccessRuns
-		totals.TotalErrors += s.ErrorRuns
-		totals.TotalDurationMs += s.TotalDurationMs
-		totals.TotalInput += s.TotalInputTokens
-		totals.TotalOutput += s.TotalOutputTokens
+		totals.TotalRuns += m.totalRuns
+		totals.TotalSuccess += m.successRuns
+		totals.TotalErrors += m.errorRuns
+		totals.TotalDurationMs += int(m.totalDurationMs)
+		totals.TotalInput += int(m.totalInput)
+		totals.TotalOutput += int(m.totalOutput)
+		totals.TotalCostUSD += m.totalCostUSD
 	}
+
 	if totals.TotalRuns > 0 {
 		totals.OverallAvgDurMs = float64(totals.TotalDurationMs) / float64(totals.TotalRuns)
 		totals.OverallSuccess = float64(totals.TotalSuccess) / float64(totals.TotalRuns) * 100
 	}
 
+	// Sort: agents with runs first, then alphabetically
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].TotalRuns != items[j].TotalRuns {
+			return items[i].TotalRuns > items[j].TotalRuns // runs descending
+		}
+		return items[i].AgentName < items[j].AgentName
+	})
+
 	jsonResponse(w, map[string]any{
 		"agents": items,
 		"totals": totals,
 		"hours":  hours,
+	})
+}
+
+// safeAvg returns avg = total / count, or 0 if count is 0.
+func safeAvg(total float64, count int) float64 {
+	if count == 0 {
+		return 0
+	}
+	return total / float64(count)
+}
+
+// GET /api/stats/providers — provider/model usage from recent project runs
+func (a *localAPIServer) handleProviderStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	hours, _ := strconv.Atoi(r.URL.Query().Get("hours"))
+	if hours <= 0 || hours > 720 {
+		hours = 24
+	}
+
+	ctx := context.Background()
+	providers, err := a.bridge.GetProviderStats(ctx, hours)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("provider stats: %v", err))
+		return
+	}
+
+	// Compute totals
+	var totalRuns, totalSuccess, totalErrors int
+	var totalInputTokens, totalOutputTokens int64
+	var totalCost float64
+	for _, p := range providers {
+		totalRuns += p.TotalRuns
+		totalSuccess += p.SuccessRuns
+		totalErrors += p.ErrorRuns
+		totalInputTokens += p.TotalInputTokens
+		totalOutputTokens += p.TotalOutputTokens
+		totalCost += p.TotalCostUSD
+	}
+
+	jsonResponse(w, map[string]any{
+		"providers":         providers,
+		"total_runs":        totalRuns,
+		"total_success":     totalSuccess,
+		"total_errors":      totalErrors,
+		"total_input_tokens":  totalInputTokens,
+		"total_output_tokens": totalOutputTokens,
+		"total_cost_usd":    totalCost,
+		"hours":             hours,
+	})
+}
+
+// GET /api/providers — list project-level configured providers
+func (a *localAPIServer) handleProjectProviders(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	ctx := context.Background()
+	providers, err := a.bridge.ListProjectProviders(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("list providers: %v", err))
+		return
+	}
+
+	jsonResponse(w, map[string]any{
+		"providers": providers,
 	})
 }
 

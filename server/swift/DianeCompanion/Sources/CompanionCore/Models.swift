@@ -299,10 +299,12 @@ public struct MCPPrompt: Identifiable, Codable, Sendable {
     }
 }
 
-public struct MCPPromptArgument: Codable, Sendable {
+public struct MCPPromptArgument: Identifiable, Codable, Sendable {
     public let name: String
     public let description: String?
     public let required: Bool?
+
+    public var id: String { name }
 }
 
 // MARK: - User Profile
@@ -550,6 +552,9 @@ public struct ProjectPolicy: Identifiable, Codable, Hashable, Sendable {
 
 public struct AgentStatsSummary: Identifiable, Codable, Sendable {
     public let agentName: String
+    public let agentId: String?
+    public let agentDescription: String?
+    public let agentFlowType: String?
     public let totalRuns: Int
     public let successRuns: Int
     public let errorRuns: Int
@@ -561,12 +566,28 @@ public struct AgentStatsSummary: Identifiable, Codable, Sendable {
     public let totalDurationMs: Int
     public let totalInputTokens: Int
     public let totalOutputTokens: Int
+    public let totalCostUsd: Double
+    public let avgCostUsd: Double
     public let successRate: Double
+
+    /// The display name: uses the matched agent definition name (set by the
+    /// API when a definition is found), falls back to the raw run name.
+    public var displayName: String {
+        if agentId != nil { return agentName }
+        // Remove trailing timestamp-like suffix: -<digits>
+        if let range = agentName.range(of: "-\\d+$", options: .regularExpression) {
+            return String(agentName[..<range.lowerBound])
+        }
+        return agentName
+    }
 
     public var id: String { agentName }
 
     enum CodingKeys: String, CodingKey {
         case agentName        = "agent_name"
+        case agentId          = "agent_id"
+        case agentDescription = "agent_description"
+        case agentFlowType    = "agent_flow_type"
         case totalRuns        = "total_runs"
         case successRuns      = "success_runs"
         case errorRuns        = "error_runs"
@@ -578,6 +599,8 @@ public struct AgentStatsSummary: Identifiable, Codable, Sendable {
         case totalDurationMs  = "total_duration_ms"
         case totalInputTokens = "total_input_tokens"
         case totalOutputTokens = "total_output_tokens"
+        case totalCostUsd     = "total_cost_usd"
+        case avgCostUsd       = "avg_cost_usd"
         case successRate      = "success_rate"
     }
 }
@@ -589,6 +612,7 @@ public struct AgentStatsTotals: Codable, Sendable {
     public let totalDurationMs: Int
     public let totalInputTokens: Int
     public let totalOutputTokens: Int
+    public let totalCostUsd: Double
     public let overallAvgDurationMs: Double
     public let overallSuccessRate: Double
 
@@ -599,6 +623,7 @@ public struct AgentStatsTotals: Codable, Sendable {
         case totalDurationMs     = "total_duration_ms"
         case totalInputTokens    = "total_input_tokens"
         case totalOutputTokens   = "total_output_tokens"
+        case totalCostUsd        = "total_cost_usd"
         case overallAvgDurationMs = "overall_avg_duration_ms"
         case overallSuccessRate  = "overall_success_rate"
     }
@@ -608,6 +633,110 @@ public struct AgentStatsResponse: Codable, Sendable {
     public let agents: [AgentStatsSummary]
     public let totals: AgentStatsTotals
     public let hours: Int
+}
+
+// MARK: - Provider Stats (from GET /api/stats/providers)
+
+public struct ProviderStatsSummary: Identifiable, Codable, Sendable {
+    public let providerName: String
+    public let modelName: String
+    public let totalRuns: Int
+    public let successRuns: Int
+    public let errorRuns: Int
+    public let totalInputTokens: UInt64
+    public let totalOutputTokens: UInt64
+    public let totalCostUsd: Double
+
+    public var id: String { "\(providerName)|\(modelName)" }
+
+    enum CodingKeys: String, CodingKey {
+        case providerName     = "provider_name"
+        case modelName        = "model_name"
+        case totalRuns        = "total_runs"
+        case successRuns      = "success_runs"
+        case errorRuns        = "error_runs"
+        case totalInputTokens = "total_input_tokens"
+        case totalOutputTokens = "total_output_tokens"
+        case totalCostUsd     = "total_cost_usd"
+    }
+}
+
+public struct ProviderStatsResponse: Codable, Sendable {
+    public let providers: [ProviderStatsSummary]
+    public let totalRuns: Int
+    public let totalSuccess: Int
+    public let totalErrors: Int
+    public let totalInputTokens: UInt64
+    public let totalOutputTokens: UInt64
+    public let totalCostUsd: Double
+    public let hours: Int
+
+    enum CodingKeys: String, CodingKey {
+        case providers        = "providers"
+        case totalRuns        = "total_runs"
+        case totalSuccess     = "total_success"
+        case totalErrors      = "total_errors"
+        case totalInputTokens = "total_input_tokens"
+        case totalOutputTokens = "total_output_tokens"
+        case totalCostUsd     = "total_cost_usd"
+        case hours            = "hours"
+    }
+}
+
+// MARK: - Project-Level Providers (from GET /api/providers)
+
+public struct ProjectProviderInfo: Codable, Sendable, Identifiable {
+    public let provider: String
+    public let baseUrl: String?
+    public let generativeModel: String?
+    public let embeddingModel: String?
+
+    public var id: String { provider }
+
+    enum CodingKeys: String, CodingKey {
+        case provider        = "provider"
+        case baseUrl         = "base_url"
+        case generativeModel = "generative_model"
+        case embeddingModel  = "embedding_model"
+    }
+}
+
+// MARK: - Session Aggregates (from GET /api/sessions/{id})
+
+public struct SessionRunAggregates: Codable, Sendable {
+    public let totalRuns: Int
+    public let totalInputTokens: Int64
+    public let totalOutputTokens: Int64
+    public let estimatedCostUsd: Double
+
+    enum CodingKeys: String, CodingKey {
+        case totalRuns        = "total_runs"
+        case totalInputTokens = "total_input_tokens"
+        case totalOutputTokens = "total_output_tokens"
+        case estimatedCostUsd = "estimated_cost_usd"
+    }
+}
+
+/// Response from GET /api/sessions/{id} — session metadata + aggregated run stats.
+public struct SessionDetailResponse: Codable, Sendable {
+    public let id: String
+    public let key: String?
+    public let title: String?
+    public let status: String?
+    public let messageCount: Int
+    public let totalTokens: Int
+    public let createdAt: String?
+    public let updatedAt: String?
+    public let aggregates: SessionRunAggregates?
+
+    enum CodingKeys: String, CodingKey {
+        case id, key, title, status
+        case messageCount = "message_count"
+        case totalTokens  = "total_tokens"
+        case createdAt    = "created_at"
+        case updatedAt    = "updated_at"
+        case aggregates
+    }
 }
 
 /// Response from POST /api/graph/search

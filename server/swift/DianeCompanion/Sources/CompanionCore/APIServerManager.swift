@@ -13,6 +13,8 @@ final class APIServerManager: ObservableObject {
 
     private var process: Process?
     private var apiClient: DianeAPIClient?
+    private var healthCheckTimer: Timer?
+    private weak var healthCheckClient: DianeAPIClient?
 
     // Circuit breaker state
     private var restartCount = 0
@@ -30,6 +32,10 @@ final class APIServerManager: ObservableObject {
         if await dianeAPI.checkReachability() {
             AppLogger.shared.info("Local Diane API already running", category: "APIServer")
             isRunning = true
+            lastError = nil
+            // Even if already running, start periodic health checks
+            // so we detect crashes and restart
+            scheduleHealthCheck(dianeAPI: dianeAPI)
             return
         }
 
@@ -144,6 +150,8 @@ final class APIServerManager: ObservableObject {
             if !reachable {
                 AppLogger.shared.warning("diane serve started but API not yet responding", category: "APIServer")
             }
+            // Start periodic health checks to detect crashes
+            scheduleHealthCheck(dianeAPI: dianeAPI)
         } catch {
             let msg = "Failed to start diane serve: \(error.localizedDescription)"
             AppLogger.shared.error(msg, category: "APIServer")
@@ -152,8 +160,29 @@ final class APIServerManager: ObservableObject {
         }
     }
 
+    /// Periodically check if diane serve is still reachable.
+    /// Restarts if unresponsive — handles orphaned processes that die.
+    private func scheduleHealthCheck(dianeAPI: DianeAPIClient) {
+        healthCheckTimer?.invalidate()
+        healthCheckClient = dianeAPI
+        healthCheckTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            Task { @MainActor in
+                guard let client = self.healthCheckClient else { return }
+                if !(await client.checkReachability()) {
+                    AppLogger.shared.warning("Health check: local API unreachable — restarting", category: "APIServer")
+                    self.isRunning = false
+                    self.process = nil
+                    await self.ensureRunning(dianeAPI: client)
+                }
+            }
+        }
+    }
+
     /// Stop the diane serve process
     func stop() {
+        healthCheckTimer?.invalidate()
+        healthCheckTimer = nil
         guard let proc = process, proc.isRunning else { return }
         logger.info("Stopping diane serve process")
         proc.terminate()
@@ -162,6 +191,7 @@ final class APIServerManager: ObservableObject {
     }
 
     deinit {
+        healthCheckTimer?.invalidate()
         process?.terminate()
     }
 }

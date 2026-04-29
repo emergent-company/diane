@@ -25,11 +25,61 @@ func cmdMCPList(args []string) {
 	cfg, err := mcpproxy.LoadConfig(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			fmt.Printf("📋 MCP Servers  (%s)\n", path)
-			fmt.Println("  (no config file — create one to configure MCP servers)")
+			if jsonOutput {
+				emitJSON("ok", map[string]interface{}{"config_path": path, "servers": []interface{}{}})
+			} else {
+				fmt.Printf("📋 MCP Servers  (%s)\n", path)
+				fmt.Println("  (no config file — create one to configure MCP servers)")
+			}
 			return
 		}
-		fmt.Fprintf(os.Stderr, "❌ Failed to load config: %v\n", err)
+		if jsonOutput {
+			emitJSON("error", map[string]string{"message": "Failed to load config: " + err.Error()})
+		} else {
+			fmt.Fprintf(os.Stderr, "❌ Failed to load config: %v\n", err)
+		}
+		return
+	}
+
+	if jsonOutput {
+		// Use human output to collect tools if --tools is set
+		type serverEntry struct {
+			Name    string   `json:"name"`
+			URL     string   `json:"url,omitempty"`
+			Status  string   `json:"status"`
+			Tools   []string `json:"tools,omitempty"`
+			Type    string   `json:"type"`
+			Enabled bool     `json:"enabled"`
+		}
+		var toolsPerServer map[string][]string
+		if *showTools {
+			toolsPerServer = collectTools(path, cfg)
+		}
+		servers := make([]serverEntry, 0, len(cfg.Servers))
+		for _, s := range cfg.Servers {
+			entry := serverEntry{
+				Name:    s.Name,
+				Status:  "enabled",
+				Type:    s.Type,
+				Enabled: s.Enabled,
+			}
+			if !s.Enabled {
+				entry.Status = "disabled"
+			}
+			if s.Type == "http" || s.Type == "remote" || s.Type == "ws" {
+				entry.URL = s.Command
+			}
+			if *showTools && s.Enabled {
+				if tools, ok := toolsPerServer[s.Name]; ok {
+					entry.Tools = tools
+				}
+			}
+			servers = append(servers, entry)
+		}
+		emitJSON("ok", map[string]interface{}{
+			"config_path": path,
+			"servers":     servers,
+		})
 		return
 	}
 

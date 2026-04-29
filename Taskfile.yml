@@ -69,6 +69,11 @@ tasks:
       - task: install
       - task: doctor
 
+  dev:
+    desc: Full dev build cycle (CLI + Swift app + install + launch)
+    cmds:
+      - "bash scripts/dev-build.sh"
+
   clean:
     desc: Remove build artifacts
     cmds:

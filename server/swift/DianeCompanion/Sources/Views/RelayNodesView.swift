@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Relay Nodes view — shows connected MCP relay instances with role, version, tools.
+/// Relay Nodes view — shows registered Diane nodes with online status, mode, version, tools.
 struct RelayNodesView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var dianeAPI: DianeAPIClient
@@ -57,11 +57,12 @@ struct RelayNodesView: View {
     // MARK: - Summary Header
 
     private var summaryHeader: some View {
-        let masterCount = nodes.filter { $0.role == "master" }.count
-        let slaveCount = nodes.filter { $0.role == "slave" }.count
+        let masterCount = nodes.filter { $0.mode == "master" }.count
+        let slaveCount = nodes.filter { $0.mode == "slave" }.count
+        let onlineCount = nodes.filter { $0.online }.count
 
         return HStack(spacing: 12) {
-            Label("\(nodes.count) Connected", systemImage: "server.rack")
+            Label("\(onlineCount)/\(nodes.count) nodes", systemImage: "server.rack")
                 .font(.subheadline)
                 .fontWeight(.medium)
 
@@ -111,14 +112,27 @@ struct RelayNodesView: View {
                 }
             }) {
                 HStack(spacing: 10) {
-                    // Role indicator
-                    roleBadge(node.role)
+                    // Mode badge
+                    if let mode = node.mode {
+                        Text(mode.capitalized)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(Color.secondary.opacity(0.12))
+                            .cornerRadius(4)
+                    }
 
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(node.hostname ?? node.instanceID)
-                            .font(.subheadline)
-                            .fontWeight(.semibold)
-                            .lineLimit(1)
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(node.online ? Color.green : Color.gray.opacity(0.4))
+                                .frame(width: 7, height: 7)
+                            Text(node.hostname ?? node.instanceID)
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                                .lineLimit(1)
+                        }
 
                         HStack(spacing: 8) {
                             if let ver = node.version {
@@ -214,10 +228,11 @@ struct RelayNodesView: View {
         )
     }
 
-    // MARK: - Role Badge
+    // MARK: - Mode Badge
 
-    private func roleBadge(_ role: String?) -> some View {
-        switch role {
+    /// Shows master/slave mode badge from graph config.
+    private func modeBadge(_ mode: String?) -> some View {
+        switch mode {
         case "master":
             return AnyView(
                 HStack(spacing: 4) {
@@ -270,24 +285,8 @@ struct RelayNodesView: View {
 
     // MARK: - Helpers
 
-    /// Shared ISO8601 formatter — creating it is expensive, so reuse a single instance.
-    private static let isoFormatter: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
-    }()
-
     private func formatTime(_ iso: String) -> String {
-        // Show relative time from ISO string
-        guard let date = Self.isoFormatter.date(from: iso)
-                ?? ISO8601DateFormatter().date(from: iso) else {
-            return iso
-        }
-        let interval = Date().timeIntervalSince(date)
-        if interval < 60 { return "just now" }
-        if interval < 3600 { return "\(Int(interval / 60))m ago" }
-        if interval < 86400 { return "\(Int(interval / 3600))h ago" }
-        return "\(Int(interval / 86400))d ago"
+        DateUtils.formatTimestamp(iso)
     }
 
     // MARK: - Data Loading
@@ -315,4 +314,14 @@ struct RelayNodesView: View {
         }
         loadingTools.remove(node.instanceID)
     }
+}
+
+// MARK: - Previews
+
+#Preview {
+    RelayNodesView()
+        .environmentObject(AppState())
+        .environmentObject(DianeAPIClient())
+        .environmentObject(ServerConfiguration())
+        .frame(width: 800, height: 600)
 }

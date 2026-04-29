@@ -27,7 +27,7 @@ func cmdAgent(args []string) {
 		fmt.Println("  seed            Seed all built-in agents to Memory Platform")
 		fmt.Println("  seed-db         Seed all built-in agents to local SQLite database")
 		fmt.Println("  list-db         List agents from local SQLite database")
-		fmt.Println("  stats [name]    Show run stats for agents (from local DB)")
+		fmt.Println("  stats [name]    Show run stats for agents (from Memory Platform)")
 		fmt.Println("  trace <runID>    Fetch full trace of an agent run (messages, tools, parent)")
 		fmt.Println("  runs [name] [--since <duration>]  List recent agent runs from Memory Platform")
 		fmt.Println("  define <name>   Create or update a user-defined agent  [master only]")
@@ -157,63 +157,61 @@ func cmdAgentList() {
 		return
 	}
 
-	fmt.Println("═══ Agent Definitions ═══")
-	fmt.Println()
-
-	// Local agents
-	fmt.Println("📋 Local config:")
-	if len(pc.Agents) == 0 {
-		fmt.Println("   No agents configured")
-	} else {
-		for name, a := range pc.Agents {
-			toolCount := len(a.Tools)
-			skillCount := len(a.Skills)
-			fmt.Printf("   %s\n", name)
-			if a.Description != "" {
-				fmt.Printf("       %s\n", a.Description)
-			}
-			fmt.Printf("       Tools: %d | Skills: %d | Flow: %s\n", toolCount, skillCount, orDefault(a.FlowType, ""))
-			if a.Sandbox != nil && a.Sandbox.Enabled {
-				fmt.Printf("       Sandbox: %s\n", orDefault(a.Sandbox.BaseImage, "default"))
-			}
-		}
-	}
-
-	fmt.Println()
-
-	// Remote agents
-	fmt.Println("🌐 Memory Platform (synced):")
+	// Fetch remote agents for display
+	var remoteAgents *sdkagents.APIResponse[[]sdkagents.AgentDefinitionSummary]
 	bridge, err := memory.New(memory.Config{
 		ServerURL: pc.ServerURL,
 		APIKey:    pc.Token,
 		ProjectID: pc.ProjectID,
 		OrgID:     pc.OrgID,
 	})
-	if err != nil {
-		fmt.Printf("   ⚠️  Cannot connect: %v\n", err)
-		return
+	if err == nil {
+		defer bridge.Close()
+		remoteAgents, _ = bridge.ListAgentDefs(context.Background())
 	}
-	defer bridge.Close()
 
-	remoteAgents, err := bridge.ListAgentDefs(context.Background())
-	if err != nil {
-		fmt.Printf("   ⚠️  %v\n", err)
-		return
-	}
-	if remoteAgents == nil || len(remoteAgents.Data) == 0 {
-		fmt.Println("   No agents synced yet")
-		fmt.Println("   Run 'diane agent sync' to push local agents")
-	} else {
-		for _, a := range remoteAgents.Data {
-			def := ""
-			if a.IsDefault {
-				def = " [default]"
+	if !jsonOutput {
+		fmt.Println("═══ Agent Definitions ═══")
+		fmt.Println()
+
+		// Local agents
+		fmt.Println("📋 Local config:")
+		if len(pc.Agents) == 0 {
+			fmt.Println("   No agents configured")
+		} else {
+			for name, a := range pc.Agents {
+				toolCount := len(a.Tools)
+				skillCount := len(a.Skills)
+				fmt.Printf("   %s\n", name)
+				if a.Description != "" {
+					fmt.Printf("       %s\n", a.Description)
+				}
+				fmt.Printf("       Tools: %d | Skills: %d | Flow: %s\n", toolCount, skillCount, orDefault(a.FlowType, ""))
+				if a.Sandbox != nil && a.Sandbox.Enabled {
+					fmt.Printf("       Sandbox: %s\n", orDefault(a.Sandbox.BaseImage, "default"))
+				}
 			}
-			fmt.Printf("   %s — %s%s\n", a.Name, a.FlowType, def)
-			if a.Description != nil {
-				fmt.Printf("       %s\n", *a.Description)
+		}
+
+		fmt.Println()
+
+		// Remote agents
+		fmt.Println("🌐 Memory Platform (synced):")
+		if remoteAgents == nil || len(remoteAgents.Data) == 0 {
+			fmt.Println("   No agents synced yet")
+			fmt.Println("   Run 'diane agent sync' to push local agents")
+		} else {
+			for _, a := range remoteAgents.Data {
+				def := ""
+				if a.IsDefault {
+					def = " [default]"
+				}
+				fmt.Printf("   %s — %s%s\n", a.Name, a.FlowType, def)
+				if a.Description != nil {
+					fmt.Printf("       %s\n", *a.Description)
+				}
+				fmt.Printf("       Tools: %d | Visibility: %s\n", a.ToolCount, a.Visibility)
 			}
-			fmt.Printf("       Tools: %d | Visibility: %s\n", a.ToolCount, a.Visibility)
 		}
 	}
 }
@@ -473,16 +471,42 @@ func cmdAgentDefine(name string) {
 func cmdAgentShow(name string) {
 	cfg, err := config.Load()
 	if err != nil {
+		if jsonOutput {
+			emitJSON("error", map[string]string{"message": fmt.Sprintf("Failed to load config: %v", err)})
+		}
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
 		os.Exit(1)
 	}
 	pc := cfg.Active()
 	if pc == nil || pc.Agents == nil || pc.Agents[name] == nil {
+		if jsonOutput {
+			emitJSON("error", map[string]string{"message": fmt.Sprintf("Agent '%s' not found in local config.", name)})
+		}
 		fmt.Printf("Agent '%s' not found in local config.\n", name)
 		return
 	}
 
 	ac := pc.Agents[name]
+
+	if jsonOutput {
+		emitJSON("ok", map[string]interface{}{
+			"name":           name,
+			"description":    ac.Description,
+			"system_prompt":  ac.SystemPrompt,
+			"flow_type":      orDefault(ac.FlowType, "standard"),
+			"visibility":     orDefault(ac.Visibility, "project"),
+			"dispatch_mode":  orDefault(ac.DispatchMode, "auto"),
+			"max_steps":      orDefaultInt(ac.MaxSteps, 50),
+			"default_timeout": orDefaultInt(ac.DefaultTimeout, 300),
+			"tools":          ac.Tools,
+			"skills":         ac.Skills,
+			"model":          ac.Model,
+			"sandbox":        ac.Sandbox,
+			"acp":            ac.ACP,
+		})
+		return
+	}
+
 	fmt.Printf("═══ Agent: %s ═══\n", name)
 	fmt.Printf("  Description:     %s\n", ac.Description)
 	if ac.SystemPrompt != "" {
@@ -1191,66 +1215,80 @@ func cmdAgentListDB() {
 	}
 }
 
-// cmdAgentStats shows run statistics for agents from the local DB.
+// cmdAgentStats shows run statistics for agents from the Memory Platform.
 func cmdAgentStats(name string) {
-	d, err := db.New("")
+	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Database: %v\n", err)
+		fmt.Fprintf(os.Stderr, "❌ Config: %v\n", err)
 		return
 	}
-	defer d.Close()
+	pc := cfg.Active()
+	if pc == nil {
+		fmt.Fprintln(os.Stderr, "❌ No active project. Run 'diane init' or configure ~/.config/diane.yml")
+		return
+	}
+
+	ctx := context.Background()
+	since := time.Now().Add(-24 * time.Hour)
+	opts := &sdkagentrun.RunStatsOptions{
+		Since: &since,
+	}
+
+	if name != "" {
+		opts.AgentID = name
+	}
+
+	bridge, err := memory.New(memory.Config{
+		ServerURL: pc.ServerURL,
+		APIKey:    pc.Token,
+		ProjectID: pc.ProjectID,
+		OrgID:     pc.OrgID,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Memory Platform: %v\n", err)
+		return
+	}
+	defer bridge.Close()
+
+	resp, err := bridge.GetProjectRunStats(ctx, opts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Stats: %v\n", err)
+		return
+	}
+
+	stats := resp.Data
 
 	if name != "" {
 		// Show individual agent stats
-		stats, err := d.GetAgentRunStats(name, 24)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "❌ Stats: %v\n", err)
+		as, ok := stats.ByAgent[name]
+		if !ok {
+			fmt.Printf("No runs recorded for %q in the last 24 hours.\n", name)
 			return
 		}
-		a, _ := d.GetAgentDefinition(name)
-		if a != nil {
-			tags, _ := db.TagsFromJSON(a.TagsJSON)
-			fmt.Printf("═══ Stats for %s ═══\n", name)
-			fmt.Printf("  Status: %s | Tags: %v | Weight: %.2f\n\n", a.Status, tags, a.RoutingWeight)
+		successRate := float64(0)
+		if as.Total > 0 {
+			successRate = float64(as.Success) / float64(as.Total) * 100
 		}
-		if len(stats) == 0 {
-			fmt.Println("  No runs recorded in the last 24 hours.")
-			return
-		}
-		var totalDur, totalInput, totalOutput, success int
-		for _, s := range stats {
-			totalDur += s.DurationMs
-			totalInput += s.InputTokens
-			totalOutput += s.OutputTokens
-			if s.Status == "success" || s.Status == "completed" {
-				success++
-			}
-		}
-		n := len(stats)
-		fmt.Printf("  Runs: %d | Success: %d | Failures: %d\n", n, success, n-success)
-		fmt.Printf("  Avg duration: %dms | Avg input: %d | Avg output: %d\n",
-			totalDur/n, totalInput/n, totalOutput/n)
+		fmt.Printf("═══ Stats for %s ═══\n", name)
+		fmt.Printf("  Runs: %d | Success: %d | Failures: %d\n", as.Total, as.Success, as.Failed+as.Errored)
+		fmt.Printf("  Success rate: %.0f%% | Avg duration: %.0fms\n", successRate, as.AvgDurationMs)
+		fmt.Printf("  Avg input: %.0f | Avg output: %.0f\n", as.AvgInputTokens, as.AvgOutputTokens)
 	} else {
 		// Show summary for all agents
-		summaries, err := d.GetAgentStatsSummary(24)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "❌ Stats summary: %v\n", err)
-			return
-		}
-		if len(summaries) == 0 {
+		if len(stats.ByAgent) == 0 {
 			fmt.Println("No runs recorded in the last 24 hours.")
 			return
 		}
 		fmt.Println("═══ Agent Stats (last 24h) ═══")
-		for _, s := range summaries {
+		for name, as := range stats.ByAgent {
 			successRate := float64(0)
-			if s.TotalRuns > 0 {
-				successRate = float64(s.SuccessRuns) / float64(s.TotalRuns) * 100
+			if as.Total > 0 {
+				successRate = float64(as.Success) / float64(as.Total) * 100
 			}
-			fmt.Printf("  %s\n", s.AgentName)
-			fmt.Printf("    Runs: %d | Success: %.0f%% | Avg: %dms | Avg tokens: %d in / %d out\n",
-				s.TotalRuns, successRate, int(s.AvgDurationMs),
-				int(s.AvgInputTokens), int(s.AvgOutputTokens))
+			fmt.Printf("  %s\n", name)
+			fmt.Printf("    Runs: %d | Success: %.0f%% | Avg: %.0fms | Avg tokens: %.0f in / %.0f out\n",
+				as.Total, successRate, as.AvgDurationMs,
+				as.AvgInputTokens, as.AvgOutputTokens)
 		}
 	}
 }

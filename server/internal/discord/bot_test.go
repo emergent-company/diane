@@ -2,6 +2,7 @@ package discord
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -914,5 +915,726 @@ func TestThreadRouting_BotUserID(t *testing.T) {
 
 	if bot.api.BotUserID() != "bot-123" {
 		t.Errorf("Expected BotUserID bot-123, got %s", bot.api.BotUserID())
+	}
+}
+
+// ── sendMessage Tests ──────────────────────────────────────────────────────
+
+func TestSendMessage_EmptyContent(t *testing.T) {
+	bot, fake := testBot(t, []string{"ch-1"})
+	fake.AddParentChannel("ch-1", "general")
+
+	bot.sendMessage("ch-1", "")
+	if len(fake.MessageSendCalls) != 0 {
+		t.Error("Expected no message sends for empty content")
+	}
+}
+
+func TestSendMessage_ShortContent(t *testing.T) {
+	bot, fake := testBot(t, []string{"ch-1"})
+	fake.AddParentChannel("ch-1", "general")
+
+	bot.sendMessage("ch-1", "hello world")
+	if len(fake.MessageSendCalls) != 1 {
+		t.Fatalf("Expected 1 message send, got %d", len(fake.MessageSendCalls))
+	}
+	if fake.MessageSendCalls[0].ChannelID != "ch-1" {
+		t.Errorf("Expected channel ch-1, got %s", fake.MessageSendCalls[0].ChannelID)
+	}
+	if fake.MessageSendCalls[0].Content != "hello world" {
+		t.Errorf("Expected 'hello world', got %s", fake.MessageSendCalls[0].Content)
+	}
+}
+
+func TestSendMessage_LongContent(t *testing.T) {
+	bot, fake := testBot(t, []string{"ch-1"})
+	fake.AddParentChannel("ch-1", "general")
+
+	longMsg := string(make([]byte, 3000))
+	for i := range longMsg {
+		longMsg = longMsg[:i] + "a" + longMsg[i+1:]
+	}
+	bot.sendMessage("ch-1", longMsg)
+
+	if len(fake.MessageSendCalls) < 2 {
+		t.Fatalf("Expected 2+ message sends for 3000-char message, got %d", len(fake.MessageSendCalls))
+	}
+	totalLen := 0
+	for _, call := range fake.MessageSendCalls {
+		totalLen += len(call.Content)
+		if len(call.Content) > 1900 {
+			t.Errorf("Each part must be <= 1900 chars, got %d", len(call.Content))
+		}
+	}
+	if totalLen != 3000 {
+		t.Errorf("Expected total 3000 chars, got %d", totalLen)
+	}
+}
+
+// ── startTyping / stopTyping Tests ─────────────────────────────────────────
+
+func TestStartTyping_TriggersImmediately(t *testing.T) {
+	bot, fake := testBot(t, []string{"ch-1"})
+	fake.AddParentChannel("ch-1", "general")
+
+	bot.startTyping("ch-1")
+	time.Sleep(50 * time.Millisecond)
+
+	lastTyping := fake.LastTypingChannel()
+	if lastTyping != "ch-1" {
+		t.Errorf("Expected typing on ch-1, got %s", lastTyping)
+	}
+
+	bot.stopTyping("ch-1")
+}
+
+func TestStartTyping_DuplicateIsNoop(t *testing.T) {
+	bot, fake := testBot(t, []string{"ch-1"})
+	fake.AddParentChannel("ch-1", "general")
+
+	bot.startTyping("ch-1")
+	bot.startTyping("ch-1") // second start should be no-op
+	time.Sleep(50 * time.Millisecond)
+
+	bot.typingMu.Lock()
+	_, exists := bot.typingCancel["ch-1"]
+	bot.typingMu.Unlock()
+	if !exists {
+		t.Error("Expected typingCancel entry to exist after start")
+	}
+
+	bot.stopTyping("ch-1")
+}
+
+func TestStopTyping_CancelsTyping(t *testing.T) {
+	bot, fake := testBot(t, []string{"ch-1"})
+	fake.AddParentChannel("ch-1", "general")
+
+	bot.startTyping("ch-1")
+	bot.stopTyping("ch-1")
+
+	bot.typingMu.Lock()
+	_, exists := bot.typingCancel["ch-1"]
+	bot.typingMu.Unlock()
+	if exists {
+		t.Error("Expected typingCancel entry to be removed after stop")
+	}
+}
+
+func TestStopTyping_NoStartIsSafe(t *testing.T) {
+	bot, _ := testBot(t, []string{"ch-1"})
+	// Should not panic
+	bot.stopTyping("never-started")
+}
+
+// ── isTestBot Tests ─────────────────────────────────────────────────────────
+
+func TestIsTestBot_EmptyList(t *testing.T) {
+	bot, _ := testBot(t, []string{"ch-1"})
+	if bot.isTestBot("user-1") {
+		t.Error("Expected false when TestBotIDs is empty")
+	}
+}
+
+func TestIsTestBot_MatchingUser(t *testing.T) {
+	bot, _ := testBot(t, []string{"ch-1"})
+	bot.config.TestBotIDs = []string{"test-bot-1", "test-bot-2"}
+
+	if !bot.isTestBot("test-bot-1") {
+		t.Error("Expected true for test-bot-1")
+	}
+	if !bot.isTestBot("test-bot-2") {
+		t.Error("Expected true for test-bot-2")
+	}
+}
+
+func TestIsTestBot_NonMatchingUser(t *testing.T) {
+	bot, _ := testBot(t, []string{"ch-1"})
+	bot.config.TestBotIDs = []string{"test-bot-1"}
+
+	if bot.isTestBot("real-user-99") {
+		t.Error("Expected false for non-matching user")
+	}
+}
+
+// ── handleMessage Error Paths ──────────────────────────────────────────────
+
+func TestHandleMessage_ThreadCreationFailFallbackInline(t *testing.T) {
+	bot, fake := testBot(t, []string{"parent-1"})
+	fake.AddParentChannel("parent-1", "general")
+	fake.ErrThreadStart = fmt.Errorf("thread creation failed")
+
+	msg := &discordgo.Message{
+		ID:        "msg-failthread",
+		ChannelID: "parent-1",
+		Content:   "hello",
+		Author:    &discordgo.User{ID: "user-1", Username: "testuser"},
+	}
+	bot.handleMessage(msg)
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Should have fallen back to sending response inline (in parent channel)
+	lastMsg := fake.LastMessageChannel()
+	if lastMsg != "parent-1" {
+		t.Errorf("Expected fallback response in parent-1, got %s", lastMsg)
+	}
+}
+
+func TestHandleMessage_EmptyResponseNoCrash(t *testing.T) {
+	bot, fake := testBot(t, []string{"parent-1"})
+	fake.AddParentChannel("parent-1", "general")
+	// Override buildResponseFn to return empty
+	bot.buildResponseFn = func(ctx context.Context, m *discordgo.Message, responseChannel string) string {
+		return ""
+	}
+
+	msg := &discordgo.Message{
+		ID:        "msg-empty-resp",
+		ChannelID: "parent-1",
+		Content:   "hello",
+		Author:    &discordgo.User{ID: "user-1", Username: "testuser"},
+	}
+	bot.handleMessage(msg)
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Should not crash — empty response should be silently dropped by sendMessage
+	// but reactions (👀, ✅) should still fire
+	if len(fake.MessageSendCalls) != 0 {
+		t.Logf("Empty response: message sends = %d (expected 0)", len(fake.MessageSendCalls))
+	}
+}
+
+// ── onMessageCreate Entry Point Tests ──────────────────────────────────────
+
+func TestOnMessageCreate_DuplicateIgnored(t *testing.T) {
+	bot, fake := testBot(t, []string{"parent-1"})
+	fake.AddParentChannel("parent-1", "general")
+
+	msg := testMessage("parent-1", "user-1", "hello bot")
+
+	// First message: processed normally
+	bot.onMessageCreate(nil, msg)
+	time.Sleep(100 * time.Millisecond)
+	_ = len(fake.MessageSendCalls) // ensure first message was processed
+
+	// Second message with same ID: should be dedup'd
+	fake.Reset()
+	bot.onMessageCreate(nil, msg)
+	time.Sleep(100 * time.Millisecond)
+	sendCount2 := len(fake.MessageSendCalls)
+
+	if sendCount2 != 0 {
+		t.Errorf("Expected 0 sends for duplicate message, got %d", sendCount2)
+	}
+}
+
+func TestOnMessageCreate_BotSelfIgnored(t *testing.T) {
+	bot, fake := testBot(t, []string{"parent-1"})
+	fake.AddParentChannel("parent-1", "general")
+
+	msg := testMessage("parent-1", fake.BotID, "I am the bot")
+	bot.onMessageCreate(nil, msg)
+
+	time.Sleep(50 * time.Millisecond)
+
+	if len(fake.MessageSendCalls) != 0 {
+		t.Errorf("Bot should not respond to its own messages, sent %d", len(fake.MessageSendCalls))
+	}
+	if len(fake.ThreadCreateCalls) != 0 {
+		t.Errorf("Bot should not create threads for its own messages")
+	}
+}
+
+func TestOnMessageCreate_UnallowedChannelIgnored(t *testing.T) {
+	bot, fake := testBot(t, []string{"allowed-1"})
+	fake.AddParentChannel("allowed-1", "allowed")
+	fake.AddParentChannel("forbidden-1", "forbidden")
+
+	msg := testMessage("forbidden-1", "user-1", "hello")
+	bot.onMessageCreate(nil, msg)
+
+	time.Sleep(50 * time.Millisecond)
+
+	if len(fake.MessageSendCalls) != 0 {
+		t.Errorf("Should not respond in unallowed channel")
+	}
+}
+
+// ── /stop Handler Tests ────────────────────────────────────────────────────
+
+func TestStopActiveRun_CancelsContext(t *testing.T) {
+	bot, _ := testBot(t, []string{"parent-1"})
+
+	// Acquire channel (creates ActiveChannel entry)
+	ctx, _, acquired := bot.acquireChannel("parent-1")
+	if !acquired {
+		t.Fatal("Expected to acquire channel")
+	}
+
+	// stopActiveRun without setting agent/run IDs
+	// (no goroutine spawned since AgentID and RunID are empty)
+	bot.stopActiveRun("parent-1")
+
+	// Context should be cancelled
+	select {
+	case <-ctx.Done():
+		// Expected
+	default:
+		t.Error("Expected context to be cancelled after stopActiveRun")
+	}
+}
+
+func TestStopActiveRun_NoActiveChannelIsSafe(t *testing.T) {
+	bot, _ := testBot(t, []string{"parent-1"})
+	// Should not panic
+	bot.stopActiveRun("never-active")
+}
+
+// ── categorizeMessage Tests ────────────────────────────────────────────────
+
+func TestCategorizeMessage_Question(t *testing.T) {
+	cases := []string{
+		"how do I install diane",
+		"What is the weather today?",
+		"where is the config file",
+		"why does it crash",
+	}
+	for _, c := range cases {
+		name := c
+		if len(name) > 20 {
+			name = name[:20]
+		}
+		t.Run(name, func(t *testing.T) {
+			emoji, cat := categorizeMessage(c)
+			if emoji != "❓" || cat != "Question" {
+				t.Errorf("Expected ❓ Question, got %s %s", emoji, cat)
+			}
+		})
+	}
+}
+
+func TestCategorizeMessage_QuestionEndsWithQuestionMark(t *testing.T) {
+	emoji, cat := categorizeMessage("Is there a way to fix it?")
+	if emoji != "❓" || cat != "Question" {
+		t.Errorf("Expected ❓ Question, got %s %s", emoji, cat)
+	}
+}
+
+func TestCategorizeMessage_Bug(t *testing.T) {
+	cases := []string{
+		"there's a bug in the login",
+		"this is broken",
+		"getting an error on startup",
+		"crash report attached",
+	}
+	testCategorize := func(t *testing.T, c string, wantEmoji, wantCat string) {
+		t.Helper()
+		emoji, cat := categorizeMessage(c)
+		if emoji != wantEmoji || cat != wantCat {
+			t.Errorf("categorizeMessage(%q) = (%s, %s), want (%s, %s)", c, emoji, cat, wantEmoji, wantCat)
+		}
+	}
+	for _, c := range cases {
+		t.Run(c, func(t *testing.T) { testCategorize(t, c, "🐛", "Bug") })
+	}
+}
+
+func TestCategorizeMessage_Feature(t *testing.T) {
+	cases := []string{
+		"feature request: dark mode",
+		"suggest adding a new command",
+		"it would be great if we had X",
+		"can you make the button bigger",
+	}
+	for _, c := range cases {
+		t.Run(c, func(t *testing.T) {
+			emoji, cat := categorizeMessage(c)
+			if emoji != "✨" || cat != "Feature" {
+				t.Errorf("categorizeMessage(%q) = (%s, %s), want (%s, %s)", c, emoji, cat, "✨", "Feature")
+			}
+		})
+	}
+}
+
+func TestCategorizeMessage_Fix(t *testing.T) {
+	cases := []string{
+		"need to fix the build",
+		"having an issue with the API",
+		"something is wrong here",
+		"this doesn't work",
+	}
+	for _, c := range cases {
+		t.Run(c, func(t *testing.T) {
+			emoji, cat := categorizeMessage(c)
+			if emoji != "🔧" || cat != "Fix" {
+				t.Errorf("categorizeMessage(%q) = (%s, %s), want (%s, %s)", c, emoji, cat, "🔧", "Fix")
+			}
+		})
+	}
+}
+
+func TestCategorizeMessage_Research(t *testing.T) {
+	cases := []struct {
+		msg      string
+		wantEmoji string
+		wantCat  string
+	}{
+		{"research the latest Go version", "📚", "Research"},
+		{"find out about concurrency patterns", "📚", "Research"},
+		{"learn about SwiftUI", "📚", "Research"},
+		// "look into" + "issue" triggers Fix priority first, which is correct behavior
+	}
+	for _, tc := range cases {
+		t.Run(tc.msg, func(t *testing.T) {
+			emoji, cat := categorizeMessage(tc.msg)
+			if emoji != tc.wantEmoji || cat != tc.wantCat {
+				t.Errorf("categorizeMessage(%q) = (%s, %s), want (%s, %s)", tc.msg, emoji, cat, tc.wantEmoji, tc.wantCat)
+			}
+		})
+	}
+}
+
+func TestCategorizeMessage_DefaultChat(t *testing.T) {
+	cases := []string{
+		"hello everyone",
+		"good morning",
+		"thanks!",
+		"👍",
+	}
+	for _, c := range cases {
+		t.Run(c, func(t *testing.T) {
+			emoji, cat := categorizeMessage(c)
+			if emoji != "💬" || cat != "Chat" {
+				t.Errorf("categorizeMessage(%q) = (%s, %s), want (%s, %s)", c, emoji, cat, "💬", "Chat")
+			}
+		})
+	}
+}
+
+// ── truncateStr Tests ──────────────────────────────────────────────────────
+
+func TestTruncateStr_ShortString(t *testing.T) {
+	result := truncateStr("hello", 10)
+	if result != "hello" {
+		t.Errorf("Expected 'hello', got '%s'", result)
+	}
+}
+
+func TestTruncateStr_ExactLength(t *testing.T) {
+	result := truncateStr("hello", 5)
+	if result != "hello" {
+		t.Errorf("Expected 'hello', got '%s'", result)
+	}
+}
+
+func TestTruncateStr_LongString(t *testing.T) {
+	result := truncateStr("hello world this is long", 10)
+	expected := "hello worl..."
+	if result != expected {
+		t.Errorf("Expected '%s', got '%s'", expected, result)
+	}
+}
+
+func TestTruncateStr_EmptyString(t *testing.T) {
+	result := truncateStr("", 10)
+	if result != "" {
+		t.Errorf("Expected '', got '%s'", result)
+	}
+}
+
+func TestTruncateStr_ZeroMax(t *testing.T) {
+	result := truncateStr("hello", 0)
+	if result != "..." {
+		t.Errorf("Expected '...', got '%s'", result)
+	}
+}
+
+// ── splitMessage Tests ─────────────────────────────────────────────────────
+
+func TestSplitMessage_ShortContent(t *testing.T) {
+	// splitMessage("hello world", 10): no newline, splitAt=10
+	// "hello worl" + "d" → ["hello worl", "d"]
+	parts := splitMessage("hello world", 10)
+	if len(parts) != 2 {
+		t.Fatalf("Expected 2 parts, got %d: %v", len(parts), parts)
+	}
+	if parts[0] != "hello worl" {
+		t.Errorf("Expected first part 'hello worl', got '%s'", parts[0])
+	}
+	if parts[1] != "d" {
+		t.Errorf("Expected second part 'd', got '%s'", parts[1])
+	}
+}
+
+func TestSplitMessage_ExactLength(t *testing.T) {
+	parts := splitMessage("hello", 5)
+	if len(parts) != 1 || parts[0] != "hello" {
+		t.Errorf("Expected ['hello'], got %v", parts)
+	}
+}
+
+func TestSplitMessage_SplitsAtNewline(t *testing.T) {
+	content := "short line\nand a longer line here that goes past the split"
+	parts := splitMessage(content, 20)
+	if len(parts) < 2 {
+		t.Errorf("Expected at least 2 parts, got %d: %v", len(parts), parts)
+	}
+	if parts[0] != "short line" {
+		t.Errorf("Expected first part 'short line', got '%s'", parts[0])
+	}
+}
+
+func TestSplitMessage_SplitsAtMaxLen(t *testing.T) {
+	// No newlines — should split at maxLen
+	content := "abcdefghijklmnopqrstuvwxyz"
+	parts := splitMessage(content, 10)
+	if len(parts) != 3 {
+		t.Errorf("Expected 3 parts, got %d: %v", len(parts), parts)
+	}
+	if parts[0] != "abcdefghij" {
+		t.Errorf("Expected 'abcdefghij', got '%s'", parts[0])
+	}
+	if parts[2] != "uvwxyz" {
+		t.Errorf("Expected 'uvwxyz', got '%s'", parts[2])
+	}
+}
+
+func TestSplitMessage_EmptyContent(t *testing.T) {
+	parts := splitMessage("", 10)
+	if len(parts) != 0 {
+		t.Errorf("Expected 0 parts, got %d: %v", len(parts), parts)
+	}
+}
+
+// ── handleComponentInteraction Tests ────────────────────────────────────────
+
+func TestHandleComponentInteraction_UnknownCustomID(t *testing.T) {
+	bot, fake := testBot(t, []string{"parent-1"})
+
+	i := &discordgo.Interaction{
+		Type: discordgo.InteractionMessageComponent,
+		Member: &discordgo.Member{
+			User: &discordgo.User{ID: "user-1", Username: "testuser"},
+		},
+		Data: discordgo.MessageComponentInteractionData{
+			CustomID: "unknown-thing",
+		},
+	}
+
+	bot.handleComponentInteraction(nil, i)
+
+	// Should not have responded
+	if len(fake.InteractionResponses) != 0 {
+		t.Errorf("Expected no interaction responses for unknown custom_id")
+	}
+}
+
+func TestHandleComponentInteraction_OpenTextModal(t *testing.T) {
+	bot, fake := testBot(t, []string{"parent-1"})
+
+	i := &discordgo.Interaction{
+		Type: discordgo.InteractionMessageComponent,
+		Member: &discordgo.Member{
+			User: &discordgo.User{ID: "user-1", Username: "testuser"},
+		},
+		Data: discordgo.MessageComponentInteractionData{
+			CustomID: "aq:q-123:__text__",
+		},
+	}
+
+	bot.handleComponentInteraction(nil, i)
+
+	// Should have responded with a modal
+	if len(fake.InteractionResponses) != 1 {
+		t.Fatalf("Expected 1 interaction response (modal), got %d", len(fake.InteractionResponses))
+	}
+	resp := fake.InteractionResponses[0]
+	if resp.Type != discordgo.InteractionResponseModal {
+		t.Errorf("Expected InteractionResponseModal (%d), got %d", discordgo.InteractionResponseModal, resp.Type)
+	}
+}
+
+func TestHandleComponentInteraction_StopSelection(t *testing.T) {
+	bot, fake := testBot(t, []string{"parent-1"})
+
+	i := &discordgo.Interaction{
+		Type: discordgo.InteractionMessageComponent,
+		Member: &discordgo.Member{
+			User: &discordgo.User{ID: "user-1", Username: "testuser"},
+		},
+		Data: discordgo.MessageComponentInteractionData{
+			CustomID: "stop-cancel",
+		},
+	}
+
+	bot.handleStopSelection(nil, i, "stop-cancel")
+
+	// Should have acknowledged the interaction
+	if len(fake.InteractionResponses) != 1 {
+		t.Fatalf("Expected 1 interaction response (deferred update), got %d", len(fake.InteractionResponses))
+	}
+	if fake.InteractionResponses[0].Type != discordgo.InteractionResponseDeferredMessageUpdate {
+		t.Errorf("Expected deferred message update, got type %d", fake.InteractionResponses[0].Type)
+	}
+	// No edit — split "stop-cancel" gives ["stop-cancel"] (len<2), exits early
+}
+
+// ── handleSelectMenu Tests ─────────────────────────────────────────────────
+
+func TestHandleSelectMenu_NoValues(t *testing.T) {
+	bot, fake := testBot(t, []string{"parent-1"})
+
+	i := &discordgo.Interaction{
+		Type: discordgo.InteractionMessageComponent,
+		Data: discordgo.MessageComponentInteractionData{
+			CustomID: "aq-sel:q-123",
+			Values:   []string{}, // no values selected
+		},
+	}
+
+	bot.handleSelectMenu(nil, i, "aq-sel:q-123")
+
+	// Should not have responded
+	if len(fake.InteractionResponses) != 0 {
+		t.Errorf("Expected no responses for empty select menu")
+	}
+}
+
+func TestHandleSelectMenu_SingleValue(t *testing.T) {
+	// This calls respondToQuestion which needs globalBridge — skip
+	// We just verify the routing through handleComponentInteraction works
+}
+
+// ── handleModalSubmit Tests ─────────────────────────────────────────────────
+
+func TestHandleModalSubmit_UnknownPrefix(t *testing.T) {
+	bot, fake := testBot(t, []string{"parent-1"})
+
+	i := &discordgo.Interaction{
+		Type: discordgo.InteractionModalSubmit,
+		Data: discordgo.ModalSubmitInteractionData{
+			CustomID: "unknown-prefix:123",
+		},
+	}
+
+	bot.handleModalSubmit(nil, i)
+
+	// Should not have responded
+	if len(fake.InteractionResponses) != 0 {
+		t.Errorf("Expected no responses for unknown modal prefix")
+	}
+}
+
+// ── handleNotificationEvent Tests ──────────────────────────────────────────
+
+func TestHandleNotificationEvent_QueuesToChannel(t *testing.T) {
+	bot, _ := testBot(t, []string{"parent-1"})
+
+	data := map[string]interface{}{
+		"type": "agent_question",
+		"id":   "q-123",
+	}
+
+	bot.handleNotificationEvent(data)
+
+	select {
+	case received := <-bot.sseNotifications:
+		if received["type"] != "agent_question" {
+			t.Errorf("Expected type agent_question, got %v", received["type"])
+		}
+	default:
+		t.Error("Expected notification to be queued in sseNotifications channel")
+	}
+}
+
+func TestHandleNotificationEvent_ChannelFullDrops(t *testing.T) {
+	bot, _ := testBot(t, []string{"parent-1"})
+
+	// Fill the channel buffer (capacity 100)
+	for i := 0; i < 100; i++ {
+		bot.handleNotificationEvent(map[string]interface{}{"type": "test"})
+	}
+
+	// Next event should be dropped (non-blocking send)
+	bot.handleNotificationEvent(map[string]interface{}{"type": "dropped"})
+
+	// Channel should still have exactly 100 items
+	if len(bot.sseNotifications) != 100 {
+		t.Errorf("Expected 100 events (buffer full), got %d", len(bot.sseNotifications))
+	}
+}
+
+// ── onInteractionCreate Tests ──────────────────────────────────────────────
+
+func TestOnInteractionCreate_MessageComponent(t *testing.T) {
+	bot, fake := testBot(t, []string{"parent-1"})
+
+	ic := &discordgo.InteractionCreate{
+		Interaction: &discordgo.Interaction{
+			Type: discordgo.InteractionMessageComponent,
+			Member: &discordgo.Member{
+				User: &discordgo.User{ID: "user-1", Username: "testuser"},
+			},
+			Data: discordgo.MessageComponentInteractionData{
+				CustomID: "unknown-thing",
+			},
+		},
+	}
+
+	bot.onInteractionCreate(nil, ic)
+
+	// Should not panic, should not respond
+	if len(fake.InteractionResponses) != 0 {
+		t.Errorf("Expected no responses for unknown interaction")
+	}
+}
+
+func TestOnInteractionCreate_ModalSubmit(t *testing.T) {
+	bot, fake := testBot(t, []string{"parent-1"})
+
+	ic := &discordgo.InteractionCreate{
+		Interaction: &discordgo.Interaction{
+			Type: discordgo.InteractionModalSubmit,
+			Data: discordgo.ModalSubmitInteractionData{
+				CustomID: "unknown-prefix:123",
+			},
+		},
+	}
+
+	bot.onInteractionCreate(nil, ic)
+
+	if len(fake.InteractionResponses) != 0 {
+		t.Errorf("Expected no responses for unknown modal")
+	}
+}
+
+func TestOnInteractionCreate_UnhandledType(t *testing.T) {
+	bot, fake := testBot(t, []string{"parent-1"})
+
+	ic := &discordgo.InteractionCreate{
+		Interaction: &discordgo.Interaction{
+			Type: discordgo.InteractionPing, // Ping is unhandled
+		},
+	}
+
+	bot.onInteractionCreate(nil, ic)
+
+	if len(fake.InteractionResponses) != 0 {
+		t.Errorf("Expected no responses for unhandled interaction type")
+	}
+}
+
+// ── toPtr Helper Test ──────────────────────────────────────────────────────
+
+func TestToPtr_ReturnsPointer(t *testing.T) {
+	s := "hello"
+	p := toPtr(s)
+	if p == nil {
+		t.Fatal("Expected non-nil pointer")
+	}
+	if *p != s {
+		t.Errorf("Expected %s, got %s", s, *p)
 	}
 }

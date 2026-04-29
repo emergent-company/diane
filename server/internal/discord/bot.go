@@ -2063,7 +2063,7 @@ func shortToolInput(input map[string]any) string {
 		return ""
 	}
 	// Try common keys
-	for _, key := range []string{"query", "url", "name", "text", "message", "id", "question"} {
+	for _, key := range []string{"query", "url", "name", "text", "message", "id", "question", "title"} {
 		if v, ok := input[key]; ok {
 			s := fmt.Sprintf("%v", v)
 			if len(s) > 60 {
