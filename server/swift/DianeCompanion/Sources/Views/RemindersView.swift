@@ -77,6 +77,14 @@ struct RemindersView: View {
 
     @ViewBuilder
     private var listSidebar: some View {
+        listSidebarContent
+            .onChange(of: selectedList) { _ in
+                Task { await loadReminders() }
+            }
+    }
+
+    @ViewBuilder
+    private var listSidebarContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Lists (\(manager.lists.count))")
                 .font(.caption)
@@ -91,26 +99,28 @@ struct RemindersView: View {
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, 12)
             } else {
-                List(manager.lists, id: \.self, selection: $selectedList) { list in
-                    HStack(spacing: 8) {
-                        Image(systemName: "list.bullet")
-                            .font(.caption)
-                            .foregroundStyle(Color(cgColor: list.color))
-                        Text(list.title)
-                            .font(.subheadline)
-                            .lineLimit(1)
-                    }
-                    .tag(list as EKCalendar?)
-                }
-                .listStyle(.plain)
+                remindersListPicker
             }
             Spacer()
         }
-        .onChange(of: selectedList) { _ in
-            Task { await loadReminders() }
-        }
+        .frame(minWidth: 200)
     }
 
+    @ViewBuilder
+    private var remindersListPicker: some View {
+        List(manager.lists, id: \.self, selection: $selectedList) { list in
+            HStack(spacing: 8) {
+                Image(systemName: "list.bullet")
+                    .font(.caption)
+                    .foregroundStyle(Color(cgColor: list.color))
+                Text(list.title)
+                    .font(.subheadline)
+                    .lineLimit(1)
+            }
+            .tag(list as EKCalendar?)
+        }
+        .listStyle(.plain)
+    }
     @ViewBuilder
     private var remindersPanel: some View {
         VStack(spacing: 0) {

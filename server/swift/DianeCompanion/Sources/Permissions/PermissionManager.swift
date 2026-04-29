@@ -16,6 +16,19 @@ enum PermissionType: String, CaseIterable, Identifiable, Sendable {
     
     var id: String { rawValue }
     
+    var settingsURL: URL? {
+        switch self {
+        case .accessibility:
+            return URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        case .automation:
+            return URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")
+        case .notifications:
+            return URL(string: "x-apple.systempreferences:com.apple.preference.notifications")
+        default:
+            return URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy")
+        }
+    }
+    
     var setupGuide: String {
         switch self {
         case .accessibility:
