@@ -247,26 +247,6 @@ public struct Agent: Identifiable, Codable, Hashable, Sendable {
     public static func == (lhs: Agent, rhs: Agent) -> Bool { lhs.id == rhs.id }
 }
 
-struct AgentDef: Identifiable, Codable, Hashable, Sendable {
-    let id: String
-    let name: String
-    let triggerType: String?
-    let schedule: String?
-    let strategyType: String?
-    let isActive: Bool
-    public let capabilities: [String]?
-
-    enum CodingKeys: String, CodingKey {
-        case id, name, schedule, prompt
-        case triggerType = "trigger_type"
-        case isActive    = "is_active"
-        case capabilities
-    }
-
-    public func hash(into hasher: inout Hasher) { hasher.combine(id) }
-    public static func == (lhs: AgentDef, rhs: AgentDef) -> Bool { lhs.id == rhs.id }
-}
-
 // MARK: - MCP Server (local API format from diane serve)
 
 public struct MCPServer: Identifiable, Codable, Hashable, Sendable {
