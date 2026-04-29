@@ -12,6 +12,7 @@ func DefaultTestSuite() map[string]TestFunc {
 		"stop-when-idle":              TestStopWhenIdle,
 		"thread-stop-active":          TestThreadStopActive,
 		"picker-display":              TestPickerDisplay,
+		"btw-todo":                    TestBTWTodo,
 		"unconfigured-channel-silent": TestUnconfiguredChannelSilent,
 	}
 }
@@ -299,6 +300,117 @@ func TestPickerDisplay(h *TestHarness) Result {
 		}
 		if !hh.ExpectFinalReaction(msgID2, 20*time.Second) {
 			return Fail("thread 2 didn't get ✅ after stop")
+		}
+
+		return Pass()
+	})
+}
+
+// TestBTWTodo tests the /btw todo management commands end-to-end.
+// 1. /btw <text> — creates a todo, expects ✅ + confirmation
+// 2. /btw list — lists todos, expects to see the created one
+// 3. /btw done <id> — marks as completed
+// 4. /btw list — verifies the completed state
+func TestBTWTodo(h *TestHarness) Result {
+	return h.RunTest("btw-todo", func(hh *H) Result {
+		// Step 1: Create a todo
+		msgID := hh.Send("/btw fix the login bug --test-btw-1")
+		if msgID == "" {
+			return Fail("failed to send /btw")
+		}
+
+		if !hh.ExpectReaction(msgID, "✅", DefaultReactionTimeout) {
+			return Fail("no ✅ reaction on /btw create")
+		}
+
+		// Expect "✅ Added todo #1"
+		resp, ok := hh.ExpectResponse(hh.harness.channelID, DefaultReactionTimeout)
+		if !ok {
+			return Fail("no response to /btw create")
+		}
+		if !hh.AssertContains(resp, "Added todo") {
+			return Fail("unexpected /btw create response: " + resp)
+		}
+
+		// Step 2: Create a second todo
+		msgID2 := hh.Send("/btw add more error handling --test-btw-2")
+		if msgID2 == "" {
+			return Fail("failed to send second /btw")
+		}
+
+		if !hh.ExpectReaction(msgID2, "✅", DefaultReactionTimeout) {
+			return Fail("no ✅ reaction on second /btw")
+		}
+
+		resp2, ok := hh.ExpectResponse(hh.harness.channelID, DefaultReactionTimeout)
+		if !ok {
+			return Fail("no response to second /btw")
+		}
+		if !hh.AssertContains(resp2, "Added todo") {
+			return Fail("unexpected second /btw response: " + resp2)
+		}
+
+		// Step 3: List todos
+		listMsg := hh.Send("/btw list --test-btw-list")
+		if listMsg == "" {
+			return Fail("failed to send /btw list")
+		}
+
+		if !hh.ExpectReaction(listMsg, "✅", DefaultReactionTimeout) {
+			return Fail("no ✅ reaction on /btw list")
+		}
+
+		listResp, ok := hh.ExpectResponse(hh.harness.channelID, DefaultReactionTimeout)
+		if !ok {
+			return Fail("no response to /btw list")
+		}
+		if !hh.AssertContains(listResp, "fix the login bug") {
+			return Fail("list should contain 'fix the login bug': " + listResp)
+		}
+		if !hh.AssertContains(listResp, "add more error handling") {
+			return Fail("list should contain 'add more error handling': " + listResp)
+		}
+
+		// Step 4: Mark first todo as done
+		doneMsg := hh.Send("/btw done 1 --test-btw-done")
+		if doneMsg == "" {
+			return Fail("failed to send /btw done")
+		}
+
+		if !hh.ExpectReaction(doneMsg, "✅", DefaultReactionTimeout) {
+			return Fail("no ✅ reaction on /btw done")
+		}
+
+		doneResp, ok := hh.ExpectResponse(hh.harness.channelID, DefaultReactionTimeout)
+		if !ok {
+			return Fail("no response to /btw done")
+		}
+		if !hh.AssertContains(doneResp, "completed") {
+			return Fail("expected 'completed' in response: " + doneResp)
+		}
+
+		// Step 5: Verify the list shows completed state
+		listMsg2 := hh.Send("/btw list --test-btw-list-2")
+		if listMsg2 == "" {
+			return Fail("failed to send second /btw list")
+		}
+
+		if !hh.ExpectReaction(listMsg2, "✅", DefaultReactionTimeout) {
+			return Fail("no ✅ reaction on second /btw list")
+		}
+
+		listResp2, ok := hh.ExpectResponse(hh.harness.channelID, DefaultReactionTimeout)
+		if !ok {
+			return Fail("no response to second /btw list")
+		}
+		if !hh.AssertContains(listResp2, "Completed") {
+			return Fail("expected 'Completed' in list: " + listResp2)
+		}
+		if !hh.AssertContains(listResp2, "Pending") {
+			return Fail("expected 'Pending' in list: " + listResp2)
+		}
+		if !hh.AssertContains(listResp2, "add more error handling") {
+			return Fail("expected second todo in list: " + listResp2)
 		}
 
 		return Pass()

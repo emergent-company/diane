@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -894,6 +895,12 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) 
 		return
 	}
 
+	// /btw — todo management
+	if strings.HasPrefix(strings.TrimSpace(m.Content), "/btw") {
+		b.handleBTW(m.Message)
+		return
+	}
+
 	// React with 👀 to show we've seen it
 	if err := b.api.MessageReactionAdd(m.ChannelID, m.ID, "👀"); err != nil {
 		log.Printf("Reaction add error: %v", err)
@@ -1498,6 +1505,159 @@ func (b *Bot) editStopResponse(i *discordgo.Interaction, content string) {
 	if err != nil {
 		log.Printf("[STOP] Failed to edit response: %v", err)
 	}
+}
+
+// handleBTW processes /btw commands for todo management.
+// Supported subcommands:
+//
+//	/btw <text>           — create a new todo
+//	/btw list             — list pending todos
+//	/btw done <id|num>    — mark todo as completed
+//	/btw cancel <id|num>  — cancel a todo
+func (b *Bot) handleBTW(m *discordgo.Message) {
+	if b.sqliteDB == nil {
+		b.sendMessage(m.ChannelID, "❌ Todo database is not available.")
+		log.Printf("[BTW] SQLite not available, skipping")
+		return
+	}
+
+	content := strings.TrimSpace(m.Content)
+	rest := strings.TrimSpace(strings.TrimPrefix(content, "/btw"))
+
+	// Extract the subcommand (first word)
+	parts := strings.Fields(rest)
+	subcmd := ""
+	if len(parts) > 0 {
+		subcmd = parts[0]
+	}
+
+	switch subcmd {
+	case "list":
+		b.listTodos(m)
+	case "done":
+		if len(parts) >= 2 {
+			b.updateTodoStatus(m, parts[1], "completed")
+		} else {
+			b.sendMessage(m.ChannelID, "❌ Usage: `/btw done <id>`")
+		}
+	case "cancel":
+		if len(parts) >= 2 {
+			b.updateTodoStatus(m, parts[1], "cancelled")
+		} else {
+			b.sendMessage(m.ChannelID, "❌ Usage: `/btw cancel <id>`")
+		}
+	default:
+		if rest != "" {
+			b.createTodo(m, rest)
+		} else {
+			b.sendMessage(m.ChannelID, "📝 **/btw usage:**\n`/btw <text>` — add todo\n`/btw list` — list todos\n`/btw done <id>` — mark done\n`/btw cancel <id>` — cancel")
+		}
+	}
+}
+
+func (b *Bot) createTodo(m *discordgo.Message, text string) {
+	author := m.Author.Username
+	ch := m.ChannelID
+
+	// Get session ID if we have one
+	var sessionID string
+	b.mu.RLock()
+	if cs, exists := b.sessions[ch]; exists {
+		sessionID = cs.SessionID
+	}
+	b.mu.RUnlock()
+
+	todo, err := b.sqliteDB.CreateTodo(ch, sessionID, text, author)
+	if err != nil {
+		log.Printf("[BTW] Create error: %v", err)
+		b.sendMessage(ch, "❌ Failed to create todo: "+err.Error())
+		return
+	}
+
+	b.api.MessageReactionAdd(ch, m.ID, "✅")
+	b.sendMessage(ch, fmt.Sprintf("✅ Added todo #%d: **%s**", todo.ID, text))
+	log.Printf("[BTW] Created todo #%d: %q (channel=%s)", todo.ID, text, ch)
+}
+
+func (b *Bot) listTodos(m *discordgo.Message) {
+	ch := m.ChannelID
+	todos, err := b.sqliteDB.ListTodos(ch, "")
+	if err != nil {
+		log.Printf("[BTW] List error: %v", err)
+		b.sendMessage(ch, "❌ Failed to list todos: "+err.Error())
+		return
+	}
+
+	if len(todos) == 0 {
+		b.api.MessageReactionAdd(ch, m.ID, "✅")
+		b.sendMessage(ch, "📝 No todos for this channel.")
+		return
+	}
+
+	// Group by status
+	var pending, completed, cancelled []string
+	for _, t := range todos {
+		line := fmt.Sprintf("`#%d` %s — %s", t.ID, t.Content, t.Author)
+		switch t.Status {
+		case "draft", "pending":
+			pending = append(pending, line)
+		case "completed":
+			completed = append(completed, line)
+		case "cancelled":
+			cancelled = append(cancelled, line)
+		}
+	}
+
+	var msg string
+	msg += fmt.Sprintf("📝 **Todos for this channel** (%d total)\n", len(todos))
+	if len(pending) > 0 {
+		msg += "\n⏳ **Pending:**\n" + strings.Join(pending, "\n")
+	}
+	if len(completed) > 0 {
+		msg += "\n✅ **Completed:**\n" + strings.Join(completed, "\n")
+	}
+	if len(cancelled) > 0 {
+		msg += "\n❌ **Cancelled:**\n" + strings.Join(cancelled, "\n")
+	}
+
+	b.api.MessageReactionAdd(ch, m.ID, "✅")
+	b.sendMessage(ch, msg)
+}
+
+func (b *Bot) updateTodoStatus(m *discordgo.Message, idStr, newStatus string) {
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		b.sendMessage(m.ChannelID, "❌ Invalid todo ID: \""+idStr+"\" — use a number like `/btw done 1`")
+		return
+	}
+
+	todo, err := b.sqliteDB.GetTodo(id)
+	if err != nil {
+		log.Printf("[BTW] Get error: %v", err)
+		b.sendMessage(m.ChannelID, "❌ Error looking up todo #%d: "+err.Error())
+		return
+	}
+	if todo == nil {
+		b.sendMessage(m.ChannelID, fmt.Sprintf("❌ Todo #%d not found.", id))
+		return
+	}
+
+	if err := b.sqliteDB.UpdateTodoStatus(id, newStatus); err != nil {
+		log.Printf("[BTW] Update error: %v", err)
+		b.sendMessage(m.ChannelID, "❌ Failed to update todo: "+err.Error())
+		return
+	}
+
+	emoji := "✅"
+	label := "completed"
+	if newStatus == "cancelled" {
+		emoji = "❌"
+		label = "cancelled"
+	}
+
+	b.api.MessageReactionAdd(m.ChannelID, m.ID, "✅")
+	b.sendMessage(m.ChannelID, fmt.Sprintf("%s Todo #%d marked as **%s**: %s", emoji, id, label, todo.Content))
+	log.Printf("[BTW] Todo #%d → %s: %q", id, newStatus, todo.Content)
 }
 
 // resolveQuestionChannel determines where to send an agent question.

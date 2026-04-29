@@ -2,10 +2,13 @@ package discord
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/Emergent-Comapny/diane/internal/db"
 	"github.com/bwmarrin/discordgo"
 )
 
@@ -1241,5 +1244,234 @@ func TestHandleStopSelection_InvalidCustomID(t *testing.T) {
 	// Should NOT have edited (no valid target)
 	if len(fake.InteractionResponseEdits) != 0 {
 		t.Errorf("Expected 0 edits for invalid customID, got %d", len(fake.InteractionResponseEdits))
+	}
+}
+
+// ── handleBTW Tests ─────────────────────────────────────────────────
+
+func TestHandleBTW_CreateTodo(t *testing.T) {
+	sqliteDB, err := db.New(":memory:")
+	if err != nil {
+		t.Fatalf("db.New: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	fake := NewFakeDiscordAPI()
+	fake.BotID = "bot-id"
+	bot := &Bot{
+		api:      fake,
+		sqliteDB: sqliteDB,
+		sessions: make(map[string]*ChannelSession),
+	}
+
+	msg := &discordgo.Message{
+		ID:        "msg-1",
+		ChannelID: "channel-1",
+		Content:   "/btw fix the login bug",
+		Author:    &discordgo.User{ID: "user-1", Username: "testuser"},
+	}
+
+	bot.handleBTW(msg)
+
+	// Should have sent a reaction
+	if len(fake.ReactionCalls) < 1 {
+		t.Fatal("Expected at least 1 reaction call")
+	}
+	if fake.ReactionCalls[0].Emoji != "✅" {
+		t.Errorf("Reaction emoji = %q, want ✅", fake.ReactionCalls[0].Emoji)
+	}
+
+	// Should have sent a message
+	if len(fake.MessageSendCalls) != 1 {
+		t.Fatalf("Expected 1 message, got %d", len(fake.MessageSendCalls))
+	}
+	if !strings.Contains(fake.MessageSendCalls[0].Content, "✅ Added todo #1") {
+		t.Errorf("Message = %q, want '✅ Added todo #1'", fake.MessageSendCalls[0].Content)
+	}
+
+	// Verify it's in the DB
+	todos, _ := sqliteDB.ListTodos("channel-1", "")
+	if len(todos) != 1 {
+		t.Fatalf("Expected 1 todo in DB, got %d", len(todos))
+	}
+	if todos[0].Content != "fix the login bug" {
+		t.Errorf("Todo content = %q", todos[0].Content)
+	}
+}
+
+func TestHandleBTW_ListTodos(t *testing.T) {
+	sqliteDB, err := db.New(":memory:")
+	if err != nil {
+		t.Fatalf("db.New: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	// Create some todos
+	sqliteDB.CreateTodo("list-channel", "", "first todo", "alice")
+	sqliteDB.CreateTodo("list-channel", "", "second todo", "bob")
+
+	fake := NewFakeDiscordAPI()
+	fake.BotID = "bot-id"
+	bot := &Bot{
+		api:      fake,
+		sqliteDB: sqliteDB,
+		sessions: make(map[string]*ChannelSession),
+	}
+
+	msg := &discordgo.Message{
+		ID:        "list-msg",
+		ChannelID: "list-channel",
+		Content:   "/btw list",
+		Author:    &discordgo.User{ID: "user-1", Username: "testuser"},
+	}
+
+	bot.handleBTW(msg)
+
+	// Should have sent a message
+	if len(fake.MessageSendCalls) != 1 {
+		t.Fatalf("Expected 1 message, got %d", len(fake.MessageSendCalls))
+	}
+	msgText := fake.MessageSendCalls[0].Content
+	if !strings.Contains(msgText, "2 total") {
+		t.Errorf("Expected '2 total' in message, got: %s", msgText)
+	}
+	if !strings.Contains(msgText, "first todo") {
+		t.Errorf("Expected 'first todo' in message")
+	}
+	if !strings.Contains(msgText, "second todo") {
+		t.Errorf("Expected 'second todo' in message")
+	}
+}
+
+func TestHandleBTW_EmptyList(t *testing.T) {
+	sqliteDB, err := db.New(":memory:")
+	if err != nil {
+		t.Fatalf("db.New: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	fake := NewFakeDiscordAPI()
+	fake.BotID = "bot-id"
+	bot := &Bot{
+		api:      fake,
+		sqliteDB: sqliteDB,
+		sessions: make(map[string]*ChannelSession),
+	}
+
+	msg := &discordgo.Message{
+		ID:        "empty-msg",
+		ChannelID: "empty-channel",
+		Content:   "/btw list",
+		Author:    &discordgo.User{ID: "user-1", Username: "testuser"},
+	}
+
+	bot.handleBTW(msg)
+
+	// Should say "No todos"
+	if len(fake.MessageSendCalls) != 1 {
+		t.Fatalf("Expected 1 message, got %d", len(fake.MessageSendCalls))
+	}
+	if !strings.Contains(fake.MessageSendCalls[0].Content, "No todos") {
+		t.Errorf("Expected 'No todos', got: %s", fake.MessageSendCalls[0].Content)
+	}
+}
+
+func TestHandleBTW_MarkDone(t *testing.T) {
+	sqliteDB, err := db.New(":memory:")
+	if err != nil {
+		t.Fatalf("db.New: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	todo, _ := sqliteDB.CreateTodo("done-channel", "", "fix stuff", "testuser")
+
+	fake := NewFakeDiscordAPI()
+	fake.BotID = "bot-id"
+	bot := &Bot{
+		api:      fake,
+		sqliteDB: sqliteDB,
+		sessions: make(map[string]*ChannelSession),
+	}
+
+	msg := &discordgo.Message{
+		ID:        "done-msg",
+		ChannelID: "done-channel",
+		Content:   fmt.Sprintf("/btw done %d", todo.ID),
+		Author:    &discordgo.User{ID: "user-1", Username: "testuser"},
+	}
+
+	bot.handleBTW(msg)
+
+	// Should confirm it's completed
+	if len(fake.MessageSendCalls) != 1 {
+		t.Fatalf("Expected 1 message, got %d", len(fake.MessageSendCalls))
+	}
+	if !strings.Contains(fake.MessageSendCalls[0].Content, "completed") {
+		t.Errorf("Expected 'completed', got: %s", fake.MessageSendCalls[0].Content)
+	}
+
+	// Verify in DB
+	updated, _ := sqliteDB.GetTodo(todo.ID)
+	if updated.Status != "completed" {
+		t.Errorf("Status = %q, want 'completed'", updated.Status)
+	}
+}
+
+func TestHandleBTW_MarkDone_NotFound(t *testing.T) {
+	sqliteDB, err := db.New(":memory:")
+	if err != nil {
+		t.Fatalf("db.New: %v", err)
+	}
+	defer sqliteDB.Close()
+
+	fake := NewFakeDiscordAPI()
+	fake.BotID = "bot-id"
+	bot := &Bot{
+		api:      fake,
+		sqliteDB: sqliteDB,
+		sessions: make(map[string]*ChannelSession),
+	}
+
+	msg := &discordgo.Message{
+		ID:        "notfound-msg",
+		ChannelID: "nf-channel",
+		Content:   "/btw done 99999",
+		Author:    &discordgo.User{ID: "user-1", Username: "testuser"},
+	}
+
+	bot.handleBTW(msg)
+
+	// Should say not found
+	if len(fake.MessageSendCalls) != 1 {
+		t.Fatalf("Expected 1 message, got %d", len(fake.MessageSendCalls))
+	}
+	if !strings.Contains(fake.MessageSendCalls[0].Content, "not found") {
+		t.Errorf("Expected 'not found', got: %s", fake.MessageSendCalls[0].Content)
+	}
+}
+
+func TestHandleBTW_NoDB(t *testing.T) {
+	fake := NewFakeDiscordAPI()
+	fake.BotID = "bot-id"
+	bot := &Bot{
+		api:      fake,
+		sqliteDB: nil,
+		sessions: make(map[string]*ChannelSession),
+	}
+
+	msg := &discordgo.Message{
+		ID:        "nodb-msg",
+		ChannelID: "nodb-channel",
+		Content:   "/btw something",
+		Author:    &discordgo.User{ID: "user-1", Username: "testuser"},
+	}
+
+	bot.handleBTW(msg)
+
+	if len(fake.MessageSendCalls) != 1 {
+		t.Fatalf("Expected 1 message, got %d", len(fake.MessageSendCalls))
+	}
+	if !strings.Contains(fake.MessageSendCalls[0].Content, "not available") {
+		t.Errorf("Expected 'not available', got: %s", fake.MessageSendCalls[0].Content)
 	}
 }
