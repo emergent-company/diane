@@ -62,4 +62,8 @@ final class RemindersManager: ObservableObject {
         logger.info("Created reminder: \(title)")
         return reminder
     }
+
+    func saveReminder(_ reminder: EKReminder) throws {
+        try store.save(reminder, commit: true)
+    }
 }

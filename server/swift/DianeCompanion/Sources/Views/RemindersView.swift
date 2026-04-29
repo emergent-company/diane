@@ -30,10 +30,7 @@ struct RemindersView: View {
         }
         .navigationTitle("Reminders")
         .task {
-            if manager.authorizationStatus == .authorized || manager.authorizationStatus == .fullAccess {
-                manager.refreshLists()
-                await loadReminders()
-            }
+            await loadIfAuthorized()
         }
     }
 
@@ -58,93 +55,119 @@ struct RemindersView: View {
         .background(manager.isAuthorized ? Color.green.opacity(0.05) : Color.orange.opacity(0.05))
     }
 
+    @MainActor
+    private func loadIfAuthorized() async {
+        if #available(macOS 14.0, *) {
+            guard manager.authorizationStatus == .authorized || manager.authorizationStatus == .fullAccess else { return }
+        } else {
+            guard manager.authorizationStatus == .authorized else { return }
+        }
+        manager.refreshLists()
+        await loadReminders()
+    }
+
     @ViewBuilder
     private var remindersContent: some View {
         HSplitView {
-            // Lists sidebar
-            VStack(alignment: .leading, spacing: 0) {
-                Text("Lists (\(manager.lists.count))")
+            listSidebar
+                .frame(minWidth: 200)
+            remindersPanel
+        }
+    }
+
+    @ViewBuilder
+    private var listSidebar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Lists (\(manager.lists.count))")
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+                .padding(12)
+
+            if manager.lists.isEmpty {
+                Text("No reminder lists found")
                     .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(.secondary)
-                    .textCase(.uppercase)
-                    .padding(12)
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 12)
+            } else {
+                List(manager.lists, id: \.self, selection: $selectedList) { list in
+                    HStack(spacing: 8) {
+                        Image(systemName: "list.bullet")
+                            .font(.caption)
+                            .foregroundStyle(Color(cgColor: list.color))
+                        Text(list.title)
+                            .font(.subheadline)
+                            .lineLimit(1)
+                    }
+                    .tag(list as EKCalendar?)
+                }
+                .listStyle(.plain)
+            }
+            Spacer()
+        }
+        .onChange(of: selectedList) { _ in
+            Task { await loadReminders() }
+        }
+    }
 
-                if manager.lists.isEmpty {
-                    Text("No reminder lists found")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 12)
-                } else {
-                    List(manager.lists, id: \.self, selection: $selectedList) { list in
-                        HStack(spacing: 8) {
-                            Image(systemName: "list.bullet")
-                                .font(.caption)
-                                .foregroundStyle(Color(cgColor: list.color))
-                            Text(list.title)
-                                .font(.subheadline)
-                                .lineLimit(1)
+    @ViewBuilder
+    private var remindersPanel: some View {
+        VStack(spacing: 0) {
+            quickAddBar
+            remindersList
+        }
+    }
+
+    @ViewBuilder
+    private var quickAddBar: some View {
+        HStack {
+            TextField("New reminder…", text: $newReminderTitle)
+                .textFieldStyle(.roundedBorder)
+                .font(.caption)
+            Button("Add") {
+                addReminder()
+            }
+            .font(.caption)
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(newReminderTitle.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+        .padding(8)
+    }
+
+    @ViewBuilder
+    private var remindersList: some View {
+        if reminders.isEmpty {
+            EmptyStateView(
+                title: "No Reminders",
+                icon: "checklist",
+                description: selectedList != nil
+                    ? "This list is empty. Add a reminder above."
+                    : "Select a list or add a reminder above."
+            )
+        } else {
+            List(reminders, id: \.self) { reminder in
+                HStack(spacing: 8) {
+                    Image(systemName: reminder.isCompleted ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(reminder.isCompleted ? .green : .secondary)
+                        .onTapGesture {
+                            toggleReminder(reminder)
                         }
-                        .tag(list as EKCalendar?)
+                    Text(reminder.title)
+                        .font(.subheadline)
+                        .strikethrough(reminder.isCompleted)
+                        .foregroundStyle(reminder.isCompleted ? .secondary : .primary)
+                    Spacer()
+                    if let due = reminder.dueDateComponents?.date {
+                        Text(due, style: .date)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
-                    .listStyle(.plain)
                 }
-                Spacer()
+                .padding(.vertical, 2)
             }
-            .frame(minWidth: 200)
-            .onChange(of: selectedList) { _ in
-                Task { await loadReminders() }
-            }
-
-            // Reminders list
-            VStack(spacing: 0) {
-                // Quick add bar
-                HStack {
-                    TextField("New reminder…", text: $newReminderTitle)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.caption)
-                    Button("Add") {
-                        addReminder()
-                    }
-                    .font(.caption)
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(newReminderTitle.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
-                .padding(8)
-
-                if reminders.isEmpty {
-                    EmptyStateView(
-                        title: "No Reminders",
-                        icon: "checklist",
-                        description: selectedList != nil
-                            ? "This list is empty. Add a reminder above."
-                            : "Select a list or add a reminder above."
-                    )
-                } else {
-                    List(reminders, id: \.self) { reminder in
-                        HStack(spacing: 8) {
-                            Image(systemName: reminder.isCompleted ? "checkmark.circle.fill" : "circle")
-                                .foregroundStyle(reminder.isCompleted ? .green : .secondary)
-                                .onTapGesture {
-                                    toggleReminder(reminder)
-                                }
-                            Text(reminder.title)
-                                .font(.subheadline)
-                                .strikethrough(reminder.isCompleted)
-                                .foregroundStyle(reminder.isCompleted ? .secondary : .primary)
-                            Spacer()
-                            if let due = reminder.dueDateComponents?.date {
-                                Text(due, style: .date)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .padding(.vertical, 2)
-                    }
-                    .listStyle(.plain)
-                }
-            }
+            .listStyle(.plain)
         }
     }
 
@@ -174,7 +197,7 @@ struct RemindersView: View {
     private func toggleReminder(_ reminder: EKReminder) {
         reminder.isCompleted = !reminder.isCompleted
         do {
-            try reminder.eventStore?.save(reminder, commit: true)
+            try manager.saveReminder(reminder)
             Task { await loadReminders() }
         } catch {
             print("Failed to toggle reminder: \(error)")

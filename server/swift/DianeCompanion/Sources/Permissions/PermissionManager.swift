@@ -16,6 +16,23 @@ enum PermissionType: String, CaseIterable, Identifiable, Sendable {
     
     var id: String { rawValue }
     
+    var setupGuide: String {
+        switch self {
+        case .accessibility:
+            return "1. Open System Settings → Privacy & Security → Accessibility\n2. Find \"Diane\" in the app list\n3. Toggle the switch to enable"
+        case .automation:
+            return "1. Open System Settings → Privacy & Security → Automation\n2. Find \"Diane\" in the app list\n3. Toggle the switch to allow control of other apps"
+        case .notifications:
+            return "1. Open System Settings → Notifications\n2. Find \"Diane\" in the app list\n3. Enable \"Allow Notifications\""
+        case .calendar:
+            return "1. Open System Settings → Privacy & Security → Calendar\n2. Find \"Diane\" in the app list\n3. Toggle the switch to enable"
+        case .reminders:
+            return "1. Open System Settings → Privacy & Security → Reminders\n2. Find \"Diane\" in the app list\n3. Toggle the switch to enable"
+        case .contacts:
+            return "1. Open System Settings → Privacy & Security → Contacts\n2. Find \"Diane\" in the app list\n3. Toggle the switch to enable"
+        }
+    }
+    
     var displayName: String {
         switch self {
         case .accessibility: return "Accessibility"
@@ -75,15 +92,18 @@ final class PermissionManager: ObservableObject {
     private let logger = Logger(subsystem: "com.emergent-company.diane-companion", category: "Permissions")
     
     @Published var permissions: [PermissionInfo] = []
+    @Published var isRefreshing = false
     
     init() {
         refresh()
     }
     
     func refresh() {
+        isRefreshing = true
         permissions = PermissionType.allCases.map { type in
             PermissionInfo(type: type, status: checkStatus(type))
         }
+        isRefreshing = false
     }
     
     func checkStatus(_ type: PermissionType) -> PermissionStatus {

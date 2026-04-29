@@ -193,25 +193,34 @@ public struct AnyCodable: Codable, @unchecked Sendable {
     }
 
     public func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
         switch value {
-        case let b as Bool:   try container.encode(b)
-        case let i as Int:    try container.encode(i)
-        case let d as Double: try container.encode(d)
-        case let s as String: try container.encode(s)
+        case let b as Bool:
+            var container = encoder.singleValueContainer()
+            try container.encode(b)
+        case let i as Int:
+            var container = encoder.singleValueContainer()
+            try container.encode(i)
+        case let d as Double:
+            var container = encoder.singleValueContainer()
+            try container.encode(d)
+        case let s as String:
+            var container = encoder.singleValueContainer()
+            try container.encode(s)
         case let arr as [Any]:
-            var nested = container.unkeyedContainer()
+            var container = encoder.unkeyedContainer()
             for item in arr {
-                try nested.encode(AnyCodable(item))
+                try container.encode(AnyCodable(item))
             }
         case let dict as [String: Any]:
-            var nested = container.nestedContainer(keyedBy: AnyCodingKey.self)
+            var container = encoder.container(keyedBy: AnyCodingKey.self)
             for (key, val) in dict {
                 if let k = AnyCodingKey(stringValue: key) {
-                    try nested.encode(AnyCodable(val), forKey: k)
+                    try container.encode(AnyCodable(val), forKey: k)
                 }
             }
-        default: try container.encodeNil()
+        default:
+            var container = encoder.singleValueContainer()
+            try container.encodeNil()
         }
     }
 }
@@ -911,7 +920,7 @@ private extension Array {
 
 // MARK: - Agent Definition
 
-struct AgentDef: Identifiable, Codable, Sendable {
+struct AgentDef: Identifiable, Codable, Hashable, Sendable {
     let id: String
     let name: String
     let description: String?
