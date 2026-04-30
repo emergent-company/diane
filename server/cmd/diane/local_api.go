@@ -73,7 +73,6 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	mux.HandleFunc("/api/status", api.handleStatus)
 	mux.HandleFunc("/api/stats", api.handleStats)
 	mux.HandleFunc("/api/stats/providers", api.handleProviderStats)
-	mux.HandleFunc("/api/schema", api.handleSchema)
 	mux.HandleFunc("/api/stats/objects", api.handleGraphObjectStats)
 
 	api.server = &http.Server{
