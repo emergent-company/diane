@@ -128,12 +128,14 @@ echo "   ✅ Installed: $INSTALL_PATH ($APP_SIZE)"
 # ── Step 6: Install launchd plist ──
 echo "==> [6/7] Installing launchd plist..."
 PLIST_SRC="$ROOT/server/deploy/com.emergent-company.diane-serve.plist"
-PLIST_DST="$HOME/Library/LaunchAgents/com.emergent-company.diane-serve.plist"
+# Use the real user home — not $HOME which may be an agent profile in CI/Hermes
+REAL_HOME=$(eval echo "~${SUDO_USER:-$USER}")
+PLIST_DST="$REAL_HOME/Library/LaunchAgents/com.emergent-company.diane-serve.plist"
 BINARY_PATH="/Applications/$APP_NAME.app/Contents/Resources/diane"
-mkdir -p "$HOME/Library/LaunchAgents"
+mkdir -p "$REAL_HOME/Library/LaunchAgents"
 if [ -f "$PLIST_SRC" ]; then
   sed -e "s|__BINARY_PATH__|$BINARY_PATH|g" \
-      -e "s|__HOME__|$HOME|g" \
+      -e "s|__HOME__|$REAL_HOME|g" \
       "$PLIST_SRC" > "$PLIST_DST"
   echo "   ✅ Plist installed: $PLIST_DST"
   # Bootstrap with launchd (ignore error if already loaded)
