@@ -288,6 +288,31 @@ private struct GitHubAsset: Decodable {
     }
 }
 
+// MARK: - Previews
+
+#if DEBUG
+extension UpdateChecker {
+    /// Create an instance pre-configured for preview canvases.
+    /// Can only live in this file because `@Published private(set)` properties
+    /// are file-private for writes.
+    static func forPreviews(
+        updateAvailable: Bool = false,
+        currentVersion: String? = nil,
+        latestVersion: String? = nil,
+        isUpdating: Bool = false,
+        updateOutput: String = ""
+    ) -> UpdateChecker {
+        let checker = UpdateChecker()
+        checker.updateAvailable = updateAvailable
+        if let cv = currentVersion { checker.currentVersion = cv }
+        if let lv = latestVersion { checker.latestVersion = lv }
+        checker.isUpdating = isUpdating
+        checker.updateOutput = updateOutput
+        return checker
+    }
+}
+#endif
+
 // MARK: - Error
 
 private struct UpdateError: Error, LocalizedError {

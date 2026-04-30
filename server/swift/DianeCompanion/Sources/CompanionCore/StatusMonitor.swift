@@ -128,3 +128,20 @@ final class StatusMonitor: ObservableObject {
 }
 
 import SwiftUI
+
+#if DEBUG
+extension StatusMonitor {
+    /// Create an instance pre-configured for preview canvases.
+    /// Can only live in this file because `@Published private(set)` properties
+    /// are file-private for writes.
+    static func forPreviews(
+        connectionState: ConnectionState = .connected,
+        isLocalReachable: Bool = true
+    ) -> StatusMonitor {
+        let monitor = StatusMonitor()
+        monitor.connectionState = connectionState
+        monitor.isLocalAPIReachable = isLocalReachable
+        return monitor
+    }
+}
+#endif

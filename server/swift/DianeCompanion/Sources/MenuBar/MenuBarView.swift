@@ -147,17 +147,17 @@ struct MenuBarView: View {
                         .font(.caption)
                         .fontWeight(.semibold)
                         .foregroundStyle(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(Color.orange)
-                        .cornerRadius(5)
+                        .padding(.horizontal, Design.Padding.badgeH + 4)
+                        .padding(.vertical, Design.Spacing.xs)
+                        .background(Design.Semantic.warning)
+                        .cornerRadius(Design.CornerRadius.medium)
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(Color.orange.opacity(0.08))
+        .padding(.horizontal, Design.Padding.card)
+        .padding(.vertical, Design.Padding.banner)
+        .background(Design.Semantic.warning.opacity(0.08))
     }
 
     // MARK: - Footer (task 4.4: Open App button)
@@ -200,4 +200,97 @@ struct MenuBarView: View {
         openWindow(id: "main")
         NSApp.activate(ignoringOtherApps: true)
     }
+}
+
+// MARK: - Previews
+
+#Preview("Connected") {
+    MenuBarView()
+        .environmentObject(AppState())
+        .environmentObject(StatusMonitor.forPreviews(connectionState: .connected, isLocalReachable: true))
+        .environmentObject(ServerConfiguration())
+        .environmentObject(EmergentAPIClient())
+        .environmentObject(UpdateChecker.forPreviews())
+        .environmentObject(CLIManager())
+        .frame(width: 320, height: 200)
+}
+
+#Preview("Disconnected") {
+    MenuBarView()
+        .environmentObject(AppState())
+        .environmentObject(StatusMonitor.forPreviews(connectionState: .disconnected, isLocalReachable: false))
+        .environmentObject(ServerConfiguration())
+        .environmentObject(EmergentAPIClient())
+        .environmentObject(UpdateChecker.forPreviews())
+        .environmentObject(CLIManager())
+        .frame(width: 320, height: 200)
+}
+
+#Preview("Update Available") {
+    MenuBarView()
+        .environmentObject(AppState())
+        .environmentObject(StatusMonitor.forPreviews())
+        .environmentObject(ServerConfiguration())
+        .environmentObject(EmergentAPIClient())
+        .environmentObject(UpdateChecker.forPreviews(
+            updateAvailable: true,
+            currentVersion: "v1.12.3",
+            latestVersion: "v1.13.0"
+        ))
+        .environmentObject(CLIManager())
+        .frame(width: 320, height: 260)
+}
+
+#Preview("Update In Progress") {
+    MenuBarView()
+        .environmentObject(AppState())
+        .environmentObject(StatusMonitor.forPreviews())
+        .environmentObject(ServerConfiguration())
+        .environmentObject(EmergentAPIClient())
+        .environmentObject(UpdateChecker.forPreviews(
+            updateAvailable: true,
+            currentVersion: "v1.12.3",
+            latestVersion: "v1.13.0",
+            isUpdating: true,
+            updateOutput: "Downloading v1.13.0… 45%"
+        ))
+        .environmentObject(CLIManager())
+        .frame(width: 320, height: 260)
+}
+
+#Preview("Gallery") {
+    VStack(spacing: 0) {
+        MenuBarView()
+            .environmentObject(AppState())
+            .environmentObject(StatusMonitor.forPreviews(connectionState: .connected, isLocalReachable: true))
+            .environmentObject(ServerConfiguration())
+            .environmentObject(EmergentAPIClient())
+            .environmentObject(UpdateChecker.forPreviews())
+            .environmentObject(CLIManager())
+
+        Divider()
+
+        MenuBarView()
+            .environmentObject(AppState())
+            .environmentObject(StatusMonitor.forPreviews(connectionState: .disconnected, isLocalReachable: false))
+            .environmentObject(ServerConfiguration())
+            .environmentObject(EmergentAPIClient())
+            .environmentObject(UpdateChecker.forPreviews())
+            .environmentObject(CLIManager())
+
+        Divider()
+
+        MenuBarView()
+            .environmentObject(AppState())
+            .environmentObject(StatusMonitor.forPreviews())
+            .environmentObject(ServerConfiguration())
+            .environmentObject(EmergentAPIClient())
+            .environmentObject(UpdateChecker.forPreviews(
+                updateAvailable: true,
+                currentVersion: "v1.12.3",
+                latestVersion: "v1.13.0"
+            ))
+            .environmentObject(CLIManager())
+    }
+    .frame(width: 320, height: 700)
 }
