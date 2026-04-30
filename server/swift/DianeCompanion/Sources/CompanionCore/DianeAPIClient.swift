@@ -242,6 +242,11 @@ final class DianeAPIClient: ObservableObject {
         return []
     }
 
+    func fetchGraphObjectStats() async throws -> GraphObjectStatsResponse {
+        let data = try await get("/api/stats/objects")
+        return try JSONDecoder().decode(GraphObjectStatsResponse.self, from: data)
+    }
+
     // MARK: - Agent Definitions
 
     func fetchAgentDefs() async throws -> [AgentDef] {

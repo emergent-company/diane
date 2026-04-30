@@ -683,6 +683,30 @@ public struct ProviderStatsResponse: Codable, Sendable {
     }
 }
 
+// MARK: - Graph Object Stats (from GET /api/stats/objects)
+
+public struct TypeCountInfo: Codable, Sendable, Identifiable {
+    public let typeName: String
+    public let count: Int
+
+    public var id: String { typeName }
+
+    enum CodingKeys: String, CodingKey {
+        case typeName = "type_name"
+        case count    = "count"
+    }
+}
+
+public struct GraphObjectStatsResponse: Codable, Sendable {
+    public let total: Int
+    public let byType: [TypeCountInfo]
+
+    enum CodingKeys: String, CodingKey {
+        case total  = "total"
+        case byType = "by_type"
+    }
+}
+
 // MARK: - Project-Level Providers (from GET /api/providers)
 
 public struct ProjectProviderInfo: Codable, Sendable, Identifiable {
@@ -708,12 +732,14 @@ public struct SessionRunAggregates: Codable, Sendable {
     public let totalInputTokens: Int64
     public let totalOutputTokens: Int64
     public let estimatedCostUsd: Double
+    public let agentNames: [String]?
 
     enum CodingKeys: String, CodingKey {
         case totalRuns        = "total_runs"
         case totalInputTokens = "total_input_tokens"
         case totalOutputTokens = "total_output_tokens"
         case estimatedCostUsd = "estimated_cost_usd"
+        case agentNames       = "agent_names"
     }
 }
 
@@ -739,8 +765,24 @@ public struct SessionDetailResponse: Codable, Sendable {
     }
 }
 
-/// Response from POST /api/graph/search
-/// Returns ranked graph objects with semantic + lexical scores.
+// MARK: - Chat Send Response
+
+/// Response from POST /api/chat/send — session metadata + run messages.
+struct ChatSendResponse: Codable, Sendable {
+    let sessionID: String
+    let runID: String
+    let messages: [DianeMessage]
+    let success: Bool
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case sessionID = "session_id"
+        case runID     = "run_id"
+        case messages, success, error
+    }
+}
+
+// MARK: - GraphObject JSON Helpers
 public struct QueryResult: Codable, Sendable {
     public let data: [QueryResultItem]?
     public let total: Int?
@@ -906,16 +948,16 @@ struct DianeSession: Identifiable, Codable, Hashable, Sendable {
 
 // MARK: - Tool Call
 
-struct ToolCall: Identifiable, Codable, Sendable {
-    let id: String
-    let name: String
-    let arguments: String?
+public struct ToolCall: Identifiable, Codable, Sendable {
+    public let id: String
+    public let name: String
+    public let arguments: String?
     
-    enum CodingKeys: String, CodingKey {
+    public enum CodingKeys: String, CodingKey {
         case id, name, arguments
     }
     
-    init(id: String, name: String, arguments: String? = nil) {
+    public init(id: String, name: String, arguments: String? = nil) {
         self.id = id
         self.name = name
         self.arguments = arguments
@@ -924,15 +966,15 @@ struct ToolCall: Identifiable, Codable, Sendable {
 
 // MARK: - Diane Message
 
-struct DianeMessage: Identifiable, Codable, Sendable {
-    let id: String
-    let role: String
-    let content: String
-    let sequenceNumber: Int?
-    let tokenCount: Int?
-    let toolCalls: [ToolCall]?
-    let reasoningContent: String?
-    let createdAt: String?
+public struct DianeMessage: Identifiable, Codable, Sendable {
+    public let id: String
+    public let role: String
+    public let content: String
+    public let sequenceNumber: Int?
+    public let tokenCount: Int?
+    public let toolCalls: [ToolCall]?
+    public let reasoningContent: String?
+    public let createdAt: String?
     
     enum CodingKeys: String, CodingKey {
         case id, role, content
@@ -945,7 +987,7 @@ struct DianeMessage: Identifiable, Codable, Sendable {
         case properties
     }
     
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         // Support both flat (id) and graph (entity_id) formats
         if let flatID = try? container.decode(String.self, forKey: .id) {
@@ -982,7 +1024,7 @@ struct DianeMessage: Identifiable, Codable, Sendable {
         }
     }
     
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(role, forKey: .role)

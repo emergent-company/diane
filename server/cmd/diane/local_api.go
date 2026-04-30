@@ -18,6 +18,7 @@ import (
 	"github.com/Emergent-Comapny/diane/internal/config"
 	"github.com/Emergent-Comapny/diane/internal/mcpproxy"
 	"github.com/Emergent-Comapny/diane/internal/memory"
+	"github.com/Emergent-Comapny/diane/internal/schema"
 
 	sdkagents "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agentdefinitions"
 	sdkagentrun "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agents"
@@ -67,10 +68,12 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	mux.HandleFunc("/api/agents", api.handleAgents)
 	mux.HandleFunc("/api/nodes", api.handleNodes)
 	mux.HandleFunc("/api/nodes/", api.handleNodeByID)
+	mux.HandleFunc("/api/schema", api.handleSchema)
 	mux.HandleFunc("/api/providers", api.handleProjectProviders)
 	mux.HandleFunc("/api/status", api.handleStatus)
 	mux.HandleFunc("/api/stats", api.handleStats)
 	mux.HandleFunc("/api/stats/providers", api.handleProviderStats)
+	mux.HandleFunc("/api/stats/objects", api.handleGraphObjectStats)
 
 	api.server = &http.Server{
 		Addr:    fmt.Sprintf("127.0.0.1:%d", port),
@@ -1573,6 +1576,26 @@ func (a *localAPIServer) handleProjectProviders(w http.ResponseWriter, r *http.R
 	})
 }
 
+// GET /api/stats/objects — graph object counts from the Memory Platform
+func (a *localAPIServer) handleGraphObjectStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	ctx := context.Background()
+	stats, err := a.bridge.GetGraphObjectStats(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("query graph objects: %v", err))
+		return
+	}
+
+	jsonResponse(w, map[string]any{
+		"total":   stats.Total,
+		"by_type": stats.ByType,
+	})
+}
+
 // GET /api/agents — list agent definitions from the Memory Platform
 func (a *localAPIServer) handleAgents(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -1863,6 +1886,30 @@ func safeBoolAny(m map[string]any, key string) bool {
 	}
 	b, _ := v.(bool)
 	return b
+}
+
+// SchemaAPIResponse is the JSON response for GET /api/schema.
+type SchemaAPIResponse struct {
+	NodeTypes     []schema.EnrichedSchemaType  `json:"node_types"`
+	Relationships []schema.EnrichedRelationship `json:"relationships"`
+}
+
+// GET /api/schema — returns embedded graph schema definitions (object types + relationships).
+func (a *localAPIServer) handleSchema(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	nodeTypes, rels, err := schema.LoadDefinitions()
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp := SchemaAPIResponse{
+		NodeTypes:     nodeTypes,
+		Relationships: rels,
+	}
+	jsonResponse(w, resp)
 }
 
 // GetDefaultLocalAPIPort returns the default port for the local API.
