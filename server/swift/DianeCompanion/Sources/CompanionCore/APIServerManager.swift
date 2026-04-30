@@ -31,6 +31,17 @@ final class APIServerManager: ObservableObject {
 
     private static let plistLabel = "com.emergent-company.diane-serve"
 
+    /// Old plist labels from previous versions that used a separate relay process.
+    /// These conflict with the current in-process relay architecture.
+    private static let oldRelayPlists = [
+        "com.emergent.diane.slave",
+        "com.diane.relay",
+        "ai.diane.relay",
+    ]
+
+    /// Whether old-plist cleanup has been performed this session
+    private static var hasCleanedUpOldPlists = false
+
     func configure(apiClient: DianeAPIClient) {
         self.apiClient = apiClient
     }
@@ -39,6 +50,9 @@ final class APIServerManager: ObservableObject {
 
     /// Ensure the local API is running. Starts it if not already reachable.
     func ensureRunning(dianeAPI: DianeAPIClient) async {
+        // Clean up orphaned launchd plists from previous Diane versions
+        Self.cleanupOldLaunchdPlists()
+
         // Fast path: already reachable
         if await dianeAPI.checkReachability() {
             AppLogger.shared.info("Local Diane API already running", category: "APIServer")
@@ -246,6 +260,50 @@ final class APIServerManager: ObservableObject {
             logInfo("launchd service booted out", category: "APIServer")
         } catch {
             logWarning("Failed to bootout launchd service: \(error.localizedDescription)", category: "APIServer")
+        }
+    }
+
+    // MARK: - Old Plist Cleanup
+
+    /// Boot out and delete old relay plists from prior Diane versions.
+    /// Runs once per app launch to prevent duplicate relay processes.
+    private static func cleanupOldLaunchdPlists() {
+        guard !hasCleanedUpOldPlists else { return }
+        hasCleanedUpOldPlists = true
+
+        let uid = getuid()
+        let fileManager = FileManager.default
+        let launchAgentsDir = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents")
+
+        for label in oldRelayPlists {
+            // Boot out from launchd (ignore errors — service may not be loaded)
+            let bootout = Process()
+            bootout.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+            bootout.arguments = ["bootout", "gui/\(uid)/\(label)"]
+            let nullPipe = Pipe()
+            bootout.standardOutput = nullPipe
+            bootout.standardError = nullPipe
+            do {
+                try bootout.run()
+                bootout.waitUntilExit()
+                if bootout.terminationStatus == 0 {
+                    AppLogger.shared.info("Booted out old launchd service: \(label)", category: "APIServer")
+                }
+            } catch {
+                AppLogger.shared.debug("launchctl bootout for \(label) failed (expected if not loaded): \(error.localizedDescription)", category: "APIServer")
+            }
+
+            // Delete the plist file if it still exists
+            let plistURL = launchAgentsDir.appendingPathComponent("\(label).plist")
+            if fileManager.fileExists(atPath: plistURL.path) {
+                do {
+                    try fileManager.removeItem(at: plistURL)
+                    AppLogger.shared.info("Deleted old launchd plist: \(plistURL.lastPathComponent)", category: "APIServer")
+                } catch {
+                    AppLogger.shared.warning("Failed to delete old plist \(plistURL.lastPathComponent): \(error.localizedDescription)", category: "APIServer")
+                }
+            }
         }
     }
 
