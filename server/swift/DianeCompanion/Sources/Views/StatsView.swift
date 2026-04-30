@@ -8,6 +8,7 @@ struct StatsView: View {
     @State private var stats: AgentStatsResponse? = nil
     @State private var providerStats: ProviderStatsResponse? = nil
     @State private var projectProviders: [ProjectProviderInfo]? = nil
+    @State private var serverStatus: DianeAPIClient.ServerStatus? = nil
     @State private var isLoading = false
     @State private var error: String? = nil
     @State private var selectedHours: Int = 168
@@ -18,6 +19,10 @@ struct StatsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Design.Spacing.lg) {
                 timeRangePicker
+
+                if let status = serverStatus {
+                    serverStatusBar(status)
+                }
 
                 if let err = error {
                     ErrorBannerView(message: err) {
@@ -81,6 +86,57 @@ struct StatsView: View {
         .onChange(of: selectedHours) { _, _ in
             Task { await load() }
         }
+    }
+
+    // MARK: - Server Status Bar
+
+    private func serverStatusBar(_ status: DianeAPIClient.ServerStatus) -> some View {
+        HStack(spacing: Design.Spacing.sm) {
+            Image(systemName: "server.rack")
+                .foregroundStyle(.secondary)
+                .font(.caption)
+
+            if let ver = status.version {
+                HStack(spacing: 3) {
+                    Text("Version:")
+                        .foregroundStyle(.secondary)
+                    Text(ver)
+                        .fontWeight(.medium)
+                }
+                .font(.caption)
+            }
+
+            if let started = status.startedAt {
+                HStack(spacing: 3) {
+                    Text("Up:")
+                        .foregroundStyle(.secondary)
+                    Text(uptimeString(from: started))
+                        .fontWeight(.medium)
+                }
+                .font(.caption)
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, Design.Spacing.sm)
+        .padding(.vertical, 6)
+        .background(Design.Surface.cardBackground)
+        .cornerRadius(Design.CornerRadius.medium)
+    }
+
+    private func uptimeString(from isoDate: String) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let date = formatter.date(from: isoDate) ?? ISO8601DateFormatter().date(from: isoDate) else {
+            return "—"
+        }
+        let interval = Date().timeIntervalSince(date)
+        let days = Int(interval) / 86400
+        let hours = (Int(interval) % 86400) / 3600
+        let minutes = (Int(interval) % 3600) / 60
+        if days > 0 { return "\(days)d \(hours)h \(minutes)m" }
+        if hours > 0 { return "\(hours)h \(minutes)m" }
+        return "\(minutes)m"
     }
 
     // MARK: - Summary Cards
@@ -306,10 +362,12 @@ struct StatsView: View {
         isLoading = true
         error = nil
         do {
+            async let statusTask = dianeAPI.fetchServerStatus()
             async let statsTask = dianeAPI.fetchAgentStats(hours: selectedHours)
             async let providersTask = dianeAPI.fetchProviderStats(hours: selectedHours)
             async let projectTask = dianeAPI.fetchProjectProviders()
-            let (s, p, pp) = try await (statsTask, providersTask, projectTask)
+            let (st, s, p, pp) = try await (statusTask, statsTask, providersTask, projectTask)
+            serverStatus = st
             stats = s
             providerStats = p
             projectProviders = pp

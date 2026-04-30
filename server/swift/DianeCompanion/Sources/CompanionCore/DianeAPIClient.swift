@@ -20,7 +20,28 @@ final class DianeAPIClient: ObservableObject {
         session = URLSession(configuration: config)
     }
 
-    // MARK: - Health / Reachability
+    // MARK: - Health / Server Status
+
+    struct ServerStatus: Codable, Sendable {
+        let ok: Bool
+        let version: String?
+        let startedAt: String?
+        let serverURL: String?
+        let projectID: String?
+
+        enum CodingKeys: String, CodingKey {
+            case ok
+            case version
+            case startedAt = "started_at"
+            case serverURL = "server_url"
+            case projectID = "project_id"
+        }
+    }
+
+    func fetchServerStatus() async throws -> ServerStatus {
+        let data = try await get("/api/status")
+        return try JSONDecoder().decode(ServerStatus.self, from: data)
+    }
 
     func checkReachability() async -> Bool {
         guard let url = URL(string: "\(baseURL)/api/status") else { return false }
@@ -267,13 +288,13 @@ final class DianeAPIClient: ObservableObject {
         return data
     }
 
-    private func post(_ path: String, body: Data?) async throws -> Data {
+    private func post(_ path: String, body: Data?, timeout: TimeInterval? = nil) async throws -> Data {
         guard let url = URL(string: "\(baseURL)\(path)") else {
             throw DianeAPIError.invalidURL(path)
         }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = 10
+        request.timeoutInterval = timeout ?? 10
         if let b = body {
             request.httpBody = b
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")

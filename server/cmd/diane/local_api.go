@@ -31,6 +31,7 @@ type localAPIServer struct {
 	port      int
 	proxy     *mcpproxy.Proxy
 	proxyOnce sync.Once
+	startedAt time.Time
 }
 
 // startLocalAPI starts a local HTTP API server on 127.0.0.1:port.
@@ -49,9 +50,10 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	}
 
 	api := &localAPIServer{
-		config: pc,
-		bridge: bridge,
-		port:   port,
+		config:    pc,
+		bridge:    bridge,
+		port:      port,
+		startedAt: time.Now(),
 	}
 
 	mux := http.NewServeMux()
@@ -1263,7 +1265,7 @@ func (a *localAPIServer) handleNodeByID(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// GET /api/status — simple health check
+// GET /api/status — health check with version and uptime
 func (a *localAPIServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -1271,6 +1273,8 @@ func (a *localAPIServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonResponse(w, map[string]any{
 		"ok":         true,
+		"version":    Version,
+		"started_at": a.startedAt.Format(time.RFC3339),
 		"server_url": a.config.ServerURL,
 		"project_id": a.config.ProjectID,
 	})
