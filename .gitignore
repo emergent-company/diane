@@ -30,4 +30,5 @@ logs/
 # Local development
 .env
 .env.local
+server/diane-test
 server/swift/DianeCompanion/build/

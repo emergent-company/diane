@@ -490,19 +490,19 @@ func cmdAgentShow(name string) {
 
 	if jsonOutput {
 		emitJSON("ok", map[string]interface{}{
-			"name":           name,
-			"description":    ac.Description,
-			"system_prompt":  ac.SystemPrompt,
-			"flow_type":      orDefault(ac.FlowType, "standard"),
-			"visibility":     orDefault(ac.Visibility, "project"),
-			"dispatch_mode":  orDefault(ac.DispatchMode, "auto"),
-			"max_steps":      orDefaultInt(ac.MaxSteps, 50),
+			"name":            name,
+			"description":     ac.Description,
+			"system_prompt":   ac.SystemPrompt,
+			"flow_type":       orDefault(ac.FlowType, "standard"),
+			"visibility":      orDefault(ac.Visibility, "project"),
+			"dispatch_mode":   orDefault(ac.DispatchMode, "auto"),
+			"max_steps":       orDefaultInt(ac.MaxSteps, 50),
 			"default_timeout": orDefaultInt(ac.DefaultTimeout, 300),
-			"tools":          ac.Tools,
-			"skills":         ac.Skills,
-			"model":          ac.Model,
-			"sandbox":        ac.Sandbox,
-			"acp":            ac.ACP,
+			"tools":           ac.Tools,
+			"skills":          ac.Skills,
+			"model":           ac.Model,
+			"sandbox":         ac.Sandbox,
+			"acp":             ac.ACP,
 		})
 		return
 	}

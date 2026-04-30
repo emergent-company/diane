@@ -33,7 +33,7 @@ import (
 type NodeConfig struct {
 	InstanceID string `json:"instance_id"`
 	Hostname   string `json:"hostname,omitempty"`
-	Mode       string `json:"mode"`         // "master" or "slave"
+	Mode       string `json:"mode"` // "master" or "slave"
 	Version    string `json:"version,omitempty"`
 	LastSeen   string `json:"last_seen,omitempty"` // ISO 8601
 	EntityID   string `json:"entity_id,omitempty"` // graph object EntityID, populated on read
@@ -347,6 +347,7 @@ func (b *Bridge) UpsertOrgProvider(ctx context.Context, orgID, providerType stri
 }
 
 // UpsertProjectProvider creates or updates a project-level provider config with credentials.
+// Runs a live credential test and syncs model catalog on success.
 func (b *Bridge) UpsertProjectProvider(ctx context.Context, projectID, providerType string, apiKey, model, baseURL string) (*sdkprovider.ProviderConfig, error) {
 	req := &sdkprovider.UpsertProviderConfigRequest{
 		APIKey:          apiKey,
@@ -828,14 +829,14 @@ func (b *Bridge) ListNodeConfigs(ctx context.Context) ([]NodeConfig, error) {
 
 // ProviderStats holds aggregated metrics grouped by (provider, model).
 type ProviderStats struct {
-	ProviderName    string  `json:"provider_name"`
-	ModelName       string  `json:"model_name"`
-	TotalRuns       int     `json:"total_runs"`
-	SuccessRuns     int     `json:"success_runs"`
-	ErrorRuns       int     `json:"error_runs"`
-	TotalInputTokens int64  `json:"total_input_tokens"`
-	TotalOutputTokens int64 `json:"total_output_tokens"`
-	TotalCostUSD    float64 `json:"total_cost_usd"`
+	ProviderName      string  `json:"provider_name"`
+	ModelName         string  `json:"model_name"`
+	TotalRuns         int     `json:"total_runs"`
+	SuccessRuns       int     `json:"success_runs"`
+	ErrorRuns         int     `json:"error_runs"`
+	TotalInputTokens  int64   `json:"total_input_tokens"`
+	TotalOutputTokens int64   `json:"total_output_tokens"`
+	TotalCostUSD      float64 `json:"total_cost_usd"`
 }
 
 // GetProviderStats aggregates recent project runs by (provider, model).
@@ -857,8 +858,8 @@ func (b *Bridge) GetProviderStats(ctx context.Context, hours int) ([]ProviderSta
 	}
 	type agg struct {
 		total, success, errorRuns int
-		inTokens, outTokens      int64
-		cost                     float64
+		inTokens, outTokens       int64
+		cost                      float64
 	}
 	byKey := make(map[key]*agg)
 
@@ -904,14 +905,14 @@ func (b *Bridge) GetProviderStats(ctx context.Context, hours int) ([]ProviderSta
 	result := make([]ProviderStats, 0, len(byKey))
 	for k, a := range byKey {
 		result = append(result, ProviderStats{
-			ProviderName:     k.provider,
-			ModelName:        k.model,
-			TotalRuns:        a.total,
-			SuccessRuns:      a.success,
-			ErrorRuns:        a.errorRuns,
-			TotalInputTokens: a.inTokens,
+			ProviderName:      k.provider,
+			ModelName:         k.model,
+			TotalRuns:         a.total,
+			SuccessRuns:       a.success,
+			ErrorRuns:         a.errorRuns,
+			TotalInputTokens:  a.inTokens,
 			TotalOutputTokens: a.outTokens,
-			TotalCostUSD:     a.cost,
+			TotalCostUSD:      a.cost,
 		})
 	}
 	// Sort by total runs descending
@@ -969,6 +970,152 @@ func (b *Bridge) GetProjectInfo(ctx context.Context) (*AuthInfo, error) {
 		return nil, fmt.Errorf("decode auth/me response: %w", err)
 	}
 	return &info, nil
+}
+
+// ============================================================================
+// Session Todo API — /api/v1/agent/sessions/:id/todos
+// ============================================================================
+
+// SessionTodo represents a todo item associated with an agent session.
+type SessionTodo struct {
+	ID        string    `json:"id"`
+	SessionID string    `json:"sessionId"`
+	Content   string    `json:"content"`
+	Status    string    `json:"status"`
+	Author    string    `json:"author"`
+	Order     int       `json:"order"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// CreateSessionTodo creates a new todo draft for a session.
+func (b *Bridge) CreateSessionTodo(ctx context.Context, sessionID, content, author string) (*SessionTodo, error) {
+	body := map[string]any{
+		"content": content,
+		"author":  author,
+	}
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal create todo: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/api/v1/agent/sessions/%s/todos", b.serverURL, sessionID)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("create todo request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+b.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	httpResp, err := bridgeHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("create todo http: %w", err)
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode >= 400 {
+		var errResp map[string]any
+		json.NewDecoder(httpResp.Body).Decode(&errResp)
+		return nil, fmt.Errorf("create todo: %d %v", httpResp.StatusCode, errResp)
+	}
+
+	var todo SessionTodo
+	if err := json.NewDecoder(httpResp.Body).Decode(&todo); err != nil {
+		return nil, fmt.Errorf("decode create todo: %w", err)
+	}
+	return &todo, nil
+}
+
+// ListSessionTodos lists todos for a session, optionally filtered by status.
+func (b *Bridge) ListSessionTodos(ctx context.Context, sessionID, status string) ([]SessionTodo, error) {
+	url := fmt.Sprintf("%s/api/v1/agent/sessions/%s/todos", b.serverURL, sessionID)
+	if status != "" {
+		url += "?status=" + status
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("list todos request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+b.apiKey)
+
+	httpResp, err := bridgeHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("list todos http: %w", err)
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode >= 400 {
+		var errResp map[string]any
+		json.NewDecoder(httpResp.Body).Decode(&errResp)
+		return nil, fmt.Errorf("list todos: %d %v", httpResp.StatusCode, errResp)
+	}
+
+	var todos []SessionTodo
+	if err := json.NewDecoder(httpResp.Body).Decode(&todos); err != nil {
+		return nil, fmt.Errorf("decode list todos: %w", err)
+	}
+	return todos, nil
+}
+
+// UpdateSessionTodo updates the status of a session todo.
+func (b *Bridge) UpdateSessionTodo(ctx context.Context, sessionID, todoID, status string) (*SessionTodo, error) {
+	body := map[string]any{
+		"status": status,
+	}
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal update todo: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/api/v1/agent/sessions/%s/todos/%s", b.serverURL, sessionID, todoID)
+	req, err := http.NewRequestWithContext(ctx, "PATCH", url, bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("update todo request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+b.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	httpResp, err := bridgeHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("update todo http: %w", err)
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode >= 400 {
+		var errResp map[string]any
+		json.NewDecoder(httpResp.Body).Decode(&errResp)
+		return nil, fmt.Errorf("update todo: %d %v", httpResp.StatusCode, errResp)
+	}
+
+	var todo SessionTodo
+	if err := json.NewDecoder(httpResp.Body).Decode(&todo); err != nil {
+		return nil, fmt.Errorf("decode update todo: %w", err)
+	}
+	return &todo, nil
+}
+
+// DeleteSessionTodo deletes a todo from a session.
+func (b *Bridge) DeleteSessionTodo(ctx context.Context, sessionID, todoID string) error {
+	url := fmt.Sprintf("%s/api/v1/agent/sessions/%s/todos/%s", b.serverURL, sessionID, todoID)
+	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
+	if err != nil {
+		return fmt.Errorf("delete todo request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+b.apiKey)
+
+	httpResp, err := bridgeHTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("delete todo http: %w", err)
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode >= 400 {
+		var errResp map[string]any
+		json.NewDecoder(httpResp.Body).Decode(&errResp)
+		return fmt.Errorf("delete todo: %d %v", httpResp.StatusCode, errResp)
+	}
+	return nil
 }
 
 // ============================================================================

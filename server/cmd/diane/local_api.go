@@ -19,8 +19,8 @@ import (
 	"github.com/Emergent-Comapny/diane/internal/mcpproxy"
 	"github.com/Emergent-Comapny/diane/internal/memory"
 
-	sdkagentrun "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agents"
 	sdkagents "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agentdefinitions"
+	sdkagentrun "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agents"
 )
 
 // localAPIServer manages the local HTTP API for the companion app.
@@ -1045,14 +1045,14 @@ func (a *localAPIServer) handleProviderStats(w http.ResponseWriter, r *http.Requ
 	}
 
 	jsonResponse(w, map[string]any{
-		"providers":         providers,
-		"total_runs":        totalRuns,
-		"total_success":     totalSuccess,
-		"total_errors":      totalErrors,
+		"providers":           providers,
+		"total_runs":          totalRuns,
+		"total_success":       totalSuccess,
+		"total_errors":        totalErrors,
 		"total_input_tokens":  totalInputTokens,
 		"total_output_tokens": totalOutputTokens,
-		"total_cost_usd":    totalCost,
-		"hours":             hours,
+		"total_cost_usd":      totalCost,
+		"hours":               hours,
 	})
 }
 

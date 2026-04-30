@@ -93,9 +93,9 @@ func cmdMCPAuth(args []string) {
 		if err == nil && tokens.AccessToken != "" {
 			if jsonOutput {
 				emitJSON("ok", map[string]interface{}{
-					"server":       *serverName,
-					"message":      "Already authenticated",
-					"expires_at":   tokens.ExpiresAt.Format(time.RFC3339),
+					"server":     *serverName,
+					"message":    "Already authenticated",
+					"expires_at": tokens.ExpiresAt.Format(time.RFC3339),
 				})
 			} else {
 				fmt.Printf("✅ %s is already authenticated (token expires at %s)\n", *serverName, tokens.ExpiresAt.Format(time.RFC3339))
@@ -132,7 +132,7 @@ func cmdMCPAuth(args []string) {
 	if err != nil {
 		if jsonOutput {
 			emitJSON("error", map[string]interface{}{
-				"server": *serverName,
+				"server":  *serverName,
 				"message": "Authentication failed",
 				"error":   err.Error(),
 			})
@@ -146,8 +146,8 @@ func cmdMCPAuth(args []string) {
 
 	if jsonOutput {
 		emitJSON("ok", map[string]interface{}{
-			"server":   *serverName,
-			"message":  "Successfully authenticated",
+			"server":     *serverName,
+			"message":    "Successfully authenticated",
 			"token_path": mcpproxy.TokenPath(*serverName),
 		})
 	} else {

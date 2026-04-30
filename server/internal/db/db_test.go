@@ -705,3 +705,210 @@ func TestLoadAllDedupMessages(t *testing.T) {
 		}
 	}
 }
+
+// =========================================================================
+// Session Todos
+// =========================================================================
+
+func TestCreateAndGetTodo(t *testing.T) {
+	d := setupDB(t)
+
+	todo, err := d.CreateTodo("channel-1", "session-1", "fix the login bug", "mcj")
+	if err != nil {
+		t.Fatalf("CreateTodo: %v", err)
+	}
+	if todo == nil {
+		t.Fatal("CreateTodo returned nil")
+	}
+	if todo.Content != "fix the login bug" {
+		t.Errorf("Content = %q, want 'fix the login bug'", todo.Content)
+	}
+	if todo.Status != "draft" {
+		t.Errorf("Status = %q, want 'draft'", todo.Status)
+	}
+	if todo.ChannelID != "channel-1" {
+		t.Errorf("ChannelID = %q", todo.ChannelID)
+	}
+	if todo.Author != "mcj" {
+		t.Errorf("Author = %q", todo.Author)
+	}
+	if todo.ID <= 0 {
+		t.Errorf("ID = %d, want > 0", todo.ID)
+	}
+	if todo.Position != 0 {
+		t.Errorf("Position = %d, want 0", todo.Position)
+	}
+
+	// Get by ID
+	got, err := d.GetTodo(todo.ID)
+	if err != nil {
+		t.Fatalf("GetTodo: %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetTodo returned nil")
+	}
+	if got.Content != "fix the login bug" {
+		t.Errorf("GetTodo Content = %q", got.Content)
+	}
+}
+
+func TestCreateTodo_AutoIncrementsPosition(t *testing.T) {
+	d := setupDB(t)
+
+	t1, err := d.CreateTodo("channel-pos", "", "first", "alice")
+	if err != nil {
+		t.Fatalf("First CreateTodo: %v", err)
+	}
+	if t1.Position != 0 {
+		t.Errorf("First position = %d, want 0", t1.Position)
+	}
+
+	t2, err := d.CreateTodo("channel-pos", "", "second", "bob")
+	if err != nil {
+		t.Fatalf("Second CreateTodo: %v", err)
+	}
+	if t2.Position != 1 {
+		t.Errorf("Second position = %d, want 1", t2.Position)
+	}
+
+	// Different channel resets position
+	t3, err := d.CreateTodo("other-channel", "", "first in other", "alice")
+	if err != nil {
+		t.Fatalf("Other channel CreateTodo: %v", err)
+	}
+	if t3.Position != 0 {
+		t.Errorf("Other channel first position = %d, want 0", t3.Position)
+	}
+}
+
+func TestListTodos_ByStatus(t *testing.T) {
+	d := setupDB(t)
+
+	_, err := d.CreateTodo("list-channel", "", "todo one", "alice")
+	if err != nil {
+		t.Fatalf("CreateTodo one: %v", err)
+	}
+	t2, err := d.CreateTodo("list-channel", "", "todo two", "bob")
+	if err != nil {
+		t.Fatalf("CreateTodo two: %v", err)
+	}
+
+	// Mark t2 as completed
+	if err := d.UpdateTodoStatus(t2.ID, "completed"); err != nil {
+		t.Fatalf("UpdateTodoStatus: %v", err)
+	}
+
+	// List all
+	all, err := d.ListTodos("list-channel", "")
+	if err != nil {
+		t.Fatalf("ListTodos: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("ListTodos all = %d, want 2", len(all))
+	}
+	if all[0].Status != "draft" || all[1].Status != "completed" {
+		t.Errorf("Order: got %s, %s", all[0].Status, all[1].Status)
+	}
+
+	// List only drafts
+	drafts, err := d.ListTodos("list-channel", "draft")
+	if err != nil {
+		t.Fatalf("ListTodos draft: %v", err)
+	}
+	if len(drafts) != 1 {
+		t.Fatalf("ListTodos draft = %d, want 1", len(drafts))
+	}
+	if drafts[0].Content != "todo one" {
+		t.Errorf("Draft content = %q", drafts[0].Content)
+	}
+
+	// List only completed
+	completed, err := d.ListTodos("list-channel", "completed")
+	if err != nil {
+		t.Fatalf("ListTodos completed: %v", err)
+	}
+	if len(completed) != 1 {
+		t.Fatalf("ListTodos completed = %d, want 1", len(completed))
+	}
+
+	// Different channel = empty
+	other, err := d.ListTodos("other-channel", "")
+	if err != nil {
+		t.Fatalf("ListTodos other: %v", err)
+	}
+	if len(other) != 0 {
+		t.Errorf("Other channel has %d todos", len(other))
+	}
+}
+
+func TestUpdateTodoStatus(t *testing.T) {
+	d := setupDB(t)
+
+	todo, err := d.CreateTodo("status-channel", "", "test item", "tester")
+	if err != nil {
+		t.Fatalf("CreateTodo: %v", err)
+	}
+
+	// draft → pending
+	if err := d.UpdateTodoStatus(todo.ID, "pending"); err != nil {
+		t.Fatalf("Update to pending: %v", err)
+	}
+	got, _ := d.GetTodo(todo.ID)
+	if got.Status != "pending" {
+		t.Errorf("After pending update, status = %q", got.Status)
+	}
+
+	// pending → completed
+	if err := d.UpdateTodoStatus(todo.ID, "completed"); err != nil {
+		t.Fatalf("Update to completed: %v", err)
+	}
+	got, _ = d.GetTodo(todo.ID)
+	if got.Status != "completed" {
+		t.Errorf("After completed update, status = %q", got.Status)
+	}
+}
+
+func TestDeleteTodo(t *testing.T) {
+	d := setupDB(t)
+
+	todo, err := d.CreateTodo("delete-channel", "", "delete me", "tester")
+	if err != nil {
+		t.Fatalf("CreateTodo: %v", err)
+	}
+
+	if err := d.DeleteTodo(todo.ID); err != nil {
+		t.Fatalf("DeleteTodo: %v", err)
+	}
+
+	got, err := d.GetTodo(todo.ID)
+	if err != nil {
+		t.Fatalf("GetTodo after delete: %v", err)
+	}
+	if got != nil {
+		t.Error("Expected nil after delete")
+	}
+}
+
+func TestListTodos_Empty(t *testing.T) {
+	d := setupDB(t)
+
+	todos, err := d.ListTodos("empty-channel", "")
+	if err != nil {
+		t.Fatalf("ListTodos empty: %v", err)
+	}
+	if len(todos) != 0 {
+		t.Errorf("Expected 0 todos, got %d", len(todos))
+	}
+}
+
+func TestGetTodo_NonExistent(t *testing.T) {
+	d := setupDB(t)
+
+	got, err := d.GetTodo(99999)
+	if err != nil {
+		t.Fatalf("GetTodo non-existent: %v", err)
+	}
+	if got != nil {
+		t.Error("Expected nil for non-existent todo")
+	}
+}

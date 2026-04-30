@@ -231,6 +231,20 @@ func (db *DB) migrate() error {
 		seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
 	CREATE INDEX IF NOT EXISTS idx_dedup_messages_seen_at ON dedup_messages(seen_at);
+
+	CREATE TABLE IF NOT EXISTS session_todos (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		channel_id TEXT NOT NULL,
+		session_id TEXT NOT NULL DEFAULT '',
+		content TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'draft',
+		author TEXT NOT NULL DEFAULT '',
+		position INTEGER NOT NULL DEFAULT 0,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_session_todos_channel ON session_todos(channel_id);
+	CREATE INDEX IF NOT EXISTS idx_session_todos_status ON session_todos(status);
 	`
 
 	_, err := db.conn.Exec(schema)
@@ -749,4 +763,97 @@ func TagsFromJSON(s string) ([]string, error) {
 		return nil, err
 	}
 	return tags, nil
+}
+
+// ============================================================================
+// Session Todos
+// ============================================================================
+
+// SessionTodo represents a todo item for a session.
+type SessionTodo struct {
+	ID        int64     `json:"id"`
+	ChannelID string    `json:"channel_id"`
+	SessionID string    `json:"session_id"`
+	Content   string    `json:"content"`
+	Status    string    `json:"status"`
+	Author    string    `json:"author"`
+	Position  int       `json:"position"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// CreateTodo creates a new todo item for a channel/session.
+func (db *DB) CreateTodo(channelID, sessionID, content, author string) (*SessionTodo, error) {
+	// Get next position
+	var maxPos int
+	err := db.conn.QueryRow("SELECT COALESCE(MAX(position), -1) FROM session_todos WHERE channel_id = ?", channelID).Scan(&maxPos)
+	if err != nil {
+		return nil, fmt.Errorf("get max position: %w", err)
+	}
+
+	result, err := db.conn.Exec(`
+		INSERT INTO session_todos (channel_id, session_id, content, status, author, position)
+		VALUES (?, ?, ?, 'draft', ?, ?)
+	`, channelID, sessionID, content, author, maxPos+1)
+	if err != nil {
+		return nil, fmt.Errorf("create todo: %w", err)
+	}
+
+	id, _ := result.LastInsertId()
+	return db.GetTodo(id)
+}
+
+// GetTodo returns a single todo by ID.
+func (db *DB) GetTodo(id int64) (*SessionTodo, error) {
+	t := &SessionTodo{}
+	err := db.conn.QueryRow(`
+		SELECT id, channel_id, session_id, content, status, author, position, created_at, updated_at
+		FROM session_todos WHERE id = ?
+	`, id).Scan(&t.ID, &t.ChannelID, &t.SessionID, &t.Content, &t.Status, &t.Author, &t.Position, &t.CreatedAt, &t.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+// ListTodos returns todos for a channel, optionally filtered by status.
+func (db *DB) ListTodos(channelID string, status string) ([]*SessionTodo, error) {
+	query := "SELECT id, channel_id, session_id, content, status, author, position, created_at, updated_at FROM session_todos WHERE channel_id = ?"
+	args := []any{channelID}
+	if status != "" {
+		query += " AND status = ?"
+		args = append(args, status)
+	}
+	query += " ORDER BY position ASC"
+
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var todos []*SessionTodo
+	for rows.Next() {
+		t := &SessionTodo{}
+		if err := rows.Scan(&t.ID, &t.ChannelID, &t.SessionID, &t.Content, &t.Status, &t.Author, &t.Position, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			return nil, err
+		}
+		todos = append(todos, t)
+	}
+	return todos, rows.Err()
+}
+
+// UpdateTodoStatus updates the status of a todo.
+func (db *DB) UpdateTodoStatus(id int64, status string) error {
+	_, err := db.conn.Exec("UPDATE session_todos SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", status, id)
+	return err
+}
+
+// DeleteTodo removes a todo by ID.
+func (db *DB) DeleteTodo(id int64) error {
+	_, err := db.conn.Exec("DELETE FROM session_todos WHERE id = ?", id)
+	return err
 }
