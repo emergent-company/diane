@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Emergent-Comapny/diane/internal/config"
@@ -97,6 +100,19 @@ func cmdServe() {
 		log.Printf("  LocalAPI: ✓ port=%d", *apiPort)
 	}
 
+	// ── Signal handler: catch SIGTERM/SIGINT for graceful shutdown ──
+	// The relay's own signal handler also catches these, so both fire.
+	// Whichever arrives first triggers the select below.
+	shutdownCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		log.Printf("[SERVE] Received %v, shutting down...", sig)
+		cancel()
+	}()
+
 	// ── Error collector ──
 	errCh := make(chan error, 3)
 
@@ -145,18 +161,19 @@ func cmdServe() {
 		}()
 	}
 
-	// ── Wait for first exit ──
-	err = <-errCh
-	if err != nil {
-		log.Printf("[SERVE] Service exited with error: %v", err)
-	} else {
-		log.Printf("[SERVE] Service exited cleanly")
+	// ── Wait for first exit or shutdown signal ──
+	select {
+	case err = <-errCh:
+		if err != nil {
+			log.Printf("[SERVE] Service exited with error: %v", err)
+		} else {
+			log.Printf("[SERVE] Service exited cleanly")
+		}
+	case <-shutdownCtx.Done():
+		log.Printf("[SERVE] Shutdown requested — stopping all services")
 	}
 
-	// Log what's still running for visibility
-	if startBot && startRelay {
-		log.Printf("[SERVE] Stopping all services")
-	}
+	log.Printf("[SERVE] All services stopped")
 }
 
 // resolveInstanceID returns the instance ID to use, preferring the CLI flag

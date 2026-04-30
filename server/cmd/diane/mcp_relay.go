@@ -11,10 +11,10 @@
 //	MCP Relay Server (on memory.emergent-company.ai)
 //	    │ WebSocket (persistent, outbound)
 //	    ▼
-//	diane mcp relay (this process)
-//	    │ stdin/stdout
-//	    ▼
-//	Diane MCP Server (mcp/server.go subprocess)
+// diane mcp relay (in-process)
+//     │ mcpproxy.Proxy + handleMCPServeRequest()
+//     ▼
+// Diane MCP Tools (built-in + proxied MCP servers)
 //
 // Each Diane instance connects with a unique instance ID,
 // registered with its tool list for discovery.
@@ -22,7 +22,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -42,6 +41,7 @@ import (
 	"time"
 
 	"github.com/Emergent-Comapny/diane/internal/config"
+	"github.com/Emergent-Comapny/diane/internal/mcpproxy"
 	"github.com/Emergent-Comapny/diane/internal/memory"
 	"github.com/gorilla/websocket"
 )
@@ -60,31 +60,19 @@ type MCPRelayConfig struct {
 	// ProjectToken authenticates this instance against the relay.
 	ProjectToken string
 
-	// MCPBinary is the path to the MCP server binary plus arguments.
-	// Defaults to "diane mcp serve" (spawns itself as MCP subprocess).
-	MCPBinary string
-
 	// ReconnectDelay is the initial delay between reconnection attempts.
 	// Increases with exponential backoff (30s, 60s, 120s, capped at 300s).
 	ReconnectDelay time.Duration
 }
 
-// MCPSession manages the MCP server subprocess and WS relay connection.
+// MCPSession manages the WebSocket relay connection and in-process MCP handler.
 type MCPSession struct {
 	cfg     MCPRelayConfig
-	mcpCmd  *exec.Cmd
-	mcpIn   *bufio.Writer
-	mcpOut  *bufio.Scanner
+	proxy   *mcpproxy.Proxy // shared MCP proxy (manages sub-MCP servers)
 	wsConn  *websocket.Conn
 	wsMutex sync.Mutex
-	mcpMu   sync.Mutex // protects mcpIn writes from tool watch vs forward loops
-	pending sync.Map   // map[requestID]chan response
 	done    chan struct{}
-
-	// Dynamic tool registration: register immediately on connect, then
-	// re-register when new MCP servers appear (slow starters like AirMCP
-	// get picked up via periodic tool watch).
-	toolWatchID int64 // incrementing request ID for tool watch polls
+	version string // build version for registration
 }
 
 // upsertNodeConfigInGraph registers this node's config in the Memory Platform graph.
@@ -129,19 +117,31 @@ func upsertNodeConfigInGraph(pc *config.ProjectConfig, instanceID string) {
 
 func cmdMCPRelay(cfg MCPRelayConfig) {
 	// Resolve defaults
-	if cfg.MCPBinary == "" {
-		exe, _ := os.Executable()
-		cfg.MCPBinary = exe + " mcp serve"
-	}
 	if cfg.ReconnectDelay == 0 {
 		cfg.ReconnectDelay = 5 * time.Second
 	}
 
 	log.Printf("[mcp-relay] Starting relay for instance: %s", cfg.InstanceID)
 	log.Printf("[mcp-relay] Relay server: %s", cfg.RelayURL)
-	log.Printf("[mcp-relay] MCP binary: %s", cfg.MCPBinary)
 
-	session := &MCPSession{cfg: cfg, done: make(chan struct{})}
+	// Create MCP proxy in-process (no subprocess)
+	configPath := mcpproxy.GetDefaultConfigPath()
+	proxy, err := mcpproxy.NewProxy(configPath)
+	if err != nil {
+		log.Printf("[mcp-relay] Warning: failed to create MCP proxy: %v", err)
+	}
+	defer func() {
+		if proxy != nil {
+			proxy.Close()
+		}
+	}()
+
+	session := &MCPSession{
+		cfg:     cfg,
+		proxy:   proxy,
+		done:    make(chan struct{}),
+		version: Version,
+	}
 
 	// Handle graceful shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -150,7 +150,6 @@ func cmdMCPRelay(cfg MCPRelayConfig) {
 		<-sigCh
 		log.Printf("[mcp-relay] Shutting down...")
 		close(session.done)
-		session.stopMCP()
 		session.disconnectWS()
 	}()
 
@@ -184,13 +183,7 @@ func cmdMCPRelay(cfg MCPRelayConfig) {
 }
 
 func (s *MCPSession) run() error {
-	// 1. Start MCP server subprocess
-	if err := s.startMCP(); err != nil {
-		return fmt.Errorf("start MCP: %w", err)
-	}
-	defer s.stopMCP()
-
-	// 2. Connect to relay
+	// 1. Connect to relay
 	u, _ := url.Parse(s.cfg.RelayURL)
 	query := u.Query()
 	query.Set("instance", s.cfg.InstanceID)
@@ -245,9 +238,8 @@ func (s *MCPSession) run() error {
 
 	defer s.disconnectWS()
 
-	// 3. Forward loop: WS → MCP stdin
-	errCh := make(chan error, 2)
-
+	// Forward loop: WS → in-process handler → WS response
+	errCh := make(chan error, 1)
 	go func() {
 		for {
 			select {
@@ -270,62 +262,36 @@ func (s *MCPSession) run() error {
 
 			switch frame.Type {
 			case "request":
-				s.forwardToMCP(frame)
+				// Parse JSON-RPC request from payload
+				var req struct {
+					JSONRPC string          `json:"jsonrpc"`
+					ID      interface{}     `json:"id"`
+					Method  string          `json:"method"`
+					Params  json.RawMessage `json:"params,omitempty"`
+				}
+				if err := json.Unmarshal(frame.Payload, &req); err != nil {
+					log.Printf("[mcp-relay] Invalid request payload: %v", err)
+					continue
+				}
+
+				// Handle in-process via shared handler
+				resp := handleMCPServeRequest(req, s.proxy)
+				resp.JSONRPC = "2.0"
+				resp.ID = req.ID
+
+				// Wrap in response frame for relay routing
+				respData, _ := json.Marshal(resp)
+				wrapped := map[string]interface{}{
+					"type":    "response",
+					"id":      req.ID,
+					"payload": json.RawMessage(respData),
+				}
+				wrappedData, _ := json.Marshal(wrapped)
+				s.sendWS(wrappedData)
+
 			case "ping":
 				s.sendWS(json.RawMessage(`{"type":"pong"}`))
 			}
-		}
-	}()
-
-	// 4. Forward loop: MCP stdout → WS, with tool-change detection and
-	//    ResponseFrame wrapping for relay-proxied tool calls.
-	go func() {
-		for s.mcpOut.Scan() {
-			line := s.mcpOut.Bytes()
-
-			// Check if this is a tools/list response from our watch loop
-			// (watch IDs start at 1000000). If tools changed, re-register.
-			var respMeta struct {
-				ID float64 `json:"id"`
-			}
-			if err := json.Unmarshal(line, &respMeta); err == nil && respMeta.ID >= 999999 {
-				s.checkToolChangeAndReregister(line)
-			}
-
-			// Extract response ID for relay request matching.
-			var respID struct {
-				ID string `json:"id"`
-			}
-			if err := json.Unmarshal(line, &respID); err != nil {
-				log.Printf("[mcp-relay] Failed to parse response ID from MCP output: %v", err)
-			}
-
-			// If this response matches a pending relay tool call, wrap it in
-			// a ResponseFrame so the MP server's relay handler can route it.
-			if respID.ID != "" {
-				if _, ok := s.pending.LoadAndDelete(respID.ID); ok {
-					wrapped := map[string]interface{}{
-						"type":    "response",
-						"id":      respID.ID,
-						"payload": json.RawMessage(line),
-					}
-					wrappedData, _ := json.Marshal(wrapped)
-					s.sendWS(wrappedData)
-					continue
-				}
-			}
-
-			// All other MCP output: forward raw (tool list updates, etc.)
-			var resp json.RawMessage
-			if err := json.Unmarshal(line, &resp); err != nil {
-				continue
-			}
-			s.sendWS(resp)
-		}
-		if err := s.mcpOut.Err(); err != nil {
-			errCh <- fmt.Errorf("mcp read: %w", err)
-		} else {
-			errCh <- fmt.Errorf("mcp process exited")
 		}
 	}()
 
@@ -338,45 +304,64 @@ func (s *MCPSession) run() error {
 	}
 }
 
-func (s *MCPSession) startMCP() error {
-	// Split binary path and args (supports "diane mcp serve" etc.)
-	parts := strings.Fields(s.cfg.MCPBinary)
-	cmd := exec.Command(parts[0], parts[1:]...)
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return fmt.Errorf("stdin pipe: %w", err)
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("stdout pipe: %w", err)
-	}
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start process: %w", err)
+// sendRegister registers tools with the relay immediately on connection.
+func (s *MCPSession) sendRegister() {
+	// Build tool list directly from proxy (no subprocess)
+	tools := buildMCPToolList()
+	if s.proxy != nil {
+		proxiedTools, err := s.proxy.ListAllTools()
+		if err != nil {
+			log.Printf("[mcp-relay] Failed to list proxied tools: %v", err)
+		} else if proxiedTools != nil {
+			tools = append(tools, proxiedTools...)
+		}
 	}
 
-	s.mcpCmd = cmd
-	s.mcpIn = bufio.NewWriter(stdin)
-	s.mcpOut = bufio.NewScanner(bufio.NewReader(stdout))
-	s.mcpOut.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB buffer
-
-	log.Printf("[mcp-relay] MCP server started (PID: %d)", cmd.Process.Pid)
-	return nil
+	toolsData, _ := json.Marshal(map[string]interface{}{"tools": tools})
+	s.doRegister(toolsData)
 }
 
-func (s *MCPSession) stopMCP() {
-	if s.mcpCmd != nil && s.mcpCmd.Process != nil {
-		s.mcpCmd.Process.Signal(syscall.SIGTERM)
-		go func() {
-			time.Sleep(5 * time.Second)
-			if s.mcpCmd != nil && s.mcpCmd.Process != nil {
-				s.mcpCmd.Process.Kill()
-			}
-		}()
-		s.mcpCmd.Wait()
-		s.mcpCmd = nil
+// doRegister sends a register frame to the relay with the current tool list.
+func (s *MCPSession) doRegister(data []byte) {
+	hostname, _ := os.Hostname()
+	reg := RegisterFrame{
+		Type:       "register",
+		InstanceID: s.cfg.InstanceID,
+		Hostname:   hostname,
+		Version:    s.version,
+		Tools:      json.RawMessage(data),
 	}
+	data, _ = json.Marshal(reg)
+	s.sendWS(data)
+
+	log.Printf("[mcp-relay] Registered with relay: %s", s.cfg.InstanceID)
+}
+
+// startToolWatch periodically checks for new/changed tools and re-registers.
+// This picks up slow-starting MCP servers (like AirMCP) without blocking.
+func (s *MCPSession) startToolWatch() {
+	go func() {
+		ticker := time.NewTicker(20 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				// Check tools directly (no subprocess)
+				tools := buildMCPToolList()
+				if s.proxy != nil {
+					proxiedTools, err := s.proxy.ListAllTools()
+					if err == nil && proxiedTools != nil {
+						tools = append(tools, proxiedTools...)
+					}
+				}
+				toolsData, _ := json.Marshal(map[string]interface{}{"tools": tools})
+				log.Printf("[mcp-relay] Tools watch: re-registering...")
+				s.doRegister(toolsData)
+			case <-s.done:
+				return
+			}
+		}
+	}()
 }
 
 func (s *MCPSession) disconnectWS() {
@@ -398,142 +383,6 @@ func (s *MCPSession) sendWS(msg json.RawMessage) {
 	}
 }
 
-func (s *MCPSession) forwardToMCP(frame RelayFrame) {
-	// Extract the request ID from the JSON-RPC payload so we can match
-	// the response when it comes back from the MCP subprocess.
-	var payloadMeta struct {
-		JSONRPC string          `json:"jsonrpc"`
-		ID      json.RawMessage `json:"id"`
-	}
-	if err := json.Unmarshal(frame.Payload, &payloadMeta); err == nil && payloadMeta.ID != nil {
-		// json.RawMessage for a string contains JSON quotes — unmarshal to string.
-		var idStr string
-		if err := json.Unmarshal(payloadMeta.ID, &idStr); err == nil && idStr != "" {
-			s.pending.Store(idStr, true)
-		}
-	}
-
-	// Send the MCP JSON-RPC request to the subprocess
-	s.mcpMu.Lock()
-	if _, err := s.mcpIn.Write(frame.Payload); err != nil {
-		log.Printf("[mcp-relay] Error writing to MCP stdin: %v", err)
-		s.mcpMu.Unlock()
-		return
-	}
-	if err := s.mcpIn.WriteByte('\n'); err != nil {
-		log.Printf("[mcp-relay] Error writing newline to MCP stdin: %v", err)
-		s.mcpMu.Unlock()
-		return
-	}
-	if err := s.mcpIn.Flush(); err != nil {
-		log.Printf("[mcp-relay] Error flushing MCP stdin: %v", err)
-	}
-	s.mcpMu.Unlock()
-}
-
-func (s *MCPSession) sendRegister() {
-	// Single tools/list poll — register immediately with whatever is available.
-	// Slow-starting servers (AirMCP) get picked up later via toolWatchLoop.
-	initMsg := json.RawMessage(`{"jsonrpc":"2.0","id":0,"method":"tools/list","params":{}}`)
-	s.mcpMu.Lock()
-	s.mcpIn.Write(initMsg)
-	s.mcpIn.WriteByte('\n')
-	s.mcpIn.Flush()
-	s.mcpMu.Unlock()
-
-	if s.mcpOut.Scan() {
-		s.doRegister(s.mcpOut.Bytes())
-	} else {
-		// MCP process didn't respond — register with empty tools
-		s.doRegister(json.RawMessage(`{"tools":[]}`))
-	}
-}
-
-// doRegister registers (or re-registers) tools with the relay. Stores the
-// tool list for comparison on subsequent updates.
-func (s *MCPSession) doRegister(data []byte) {
-	var mcpResponse struct {
-		Result json.RawMessage `json:"result"`
-		Error  *struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	toolsData := data
-	if err := json.Unmarshal(data, &mcpResponse); err == nil {
-		if mcpResponse.Error != nil {
-			log.Printf("[mcp-relay] Failed to list tools: %s (code %d)", mcpResponse.Error.Message, mcpResponse.Error.Code)
-			toolsData = json.RawMessage(`{"tools":[]}`)
-		} else if mcpResponse.Result != nil {
-			toolsData = mcpResponse.Result
-		}
-	}
-
-	// Send register frame to relay
-	hostname, _ := os.Hostname()
-	reg := RegisterFrame{
-		Type:       "register",
-		InstanceID: s.cfg.InstanceID,
-		Hostname:   hostname,
-		Version:    "1.0",
-		Tools:      json.RawMessage(toolsData),
-	}
-	data, _ = json.Marshal(reg)
-	s.sendWS(data)
-
-	log.Printf("[mcp-relay] Registered with relay: %s", s.cfg.InstanceID)
-}
-
-// startToolWatch starts a background loop that periodically checks for new or
-// changed MCP tools and re-registers them with the relay. This picks up
-// slow-starting MCP servers (like AirMCP) without blocking initial registration.
-func (s *MCPSession) startToolWatch() {
-	s.toolWatchID = 999999
-	go func() {
-		ticker := time.NewTicker(20 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				s.toolWatchID++
-				reqID := s.toolWatchID
-				msg := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/list","params":{}}`, reqID)
-				s.mcpMu.Lock()
-				s.mcpIn.WriteString(msg)
-				s.mcpIn.WriteByte('\n')
-				s.mcpIn.Flush()
-				s.mcpMu.Unlock()
-			case <-s.done:
-				return
-			}
-		}
-	}()
-}
-
-// checkToolChangeAndReregister re-registers tools with the relay when the
-// tool watch loop detects a tools/list response. Called from the MCP stdout
-// forwarding goroutine. We always re-register on watch responses — the
-// overhead is negligible (one WS frame per 20s), and it ensures slow-starting
-// servers like AirMCP get registered as soon as their tools appear.
-func (s *MCPSession) checkToolChangeAndReregister(line []byte) {
-	// Verify the response has tools data
-	var mcpResponse struct {
-		Result *struct {
-			Tools []json.RawMessage `json:"tools"`
-		} `json:"result,omitempty"`
-		Tools []json.RawMessage `json:"tools,omitempty"`
-	}
-	if err := json.Unmarshal(line, &mcpResponse); err != nil {
-		return
-	}
-	if mcpResponse.Result == nil && mcpResponse.Tools == nil {
-		return
-	}
-
-	log.Printf("[mcp-relay] Tools update detected, re-registering...")
-	s.doRegister(line)
-}
-
 // RelayFrame is the wire format for WS messages.
 type RelayFrame struct {
 	Type    string          `json:"type"`
@@ -549,14 +398,6 @@ type RegisterFrame struct {
 	Version    string          `json:"version"`
 	Tools      json.RawMessage `json:"tools"`
 }
-
-// init registers the "relay" subcommand
-func init() {
-	// This runs when the diane CLI starts — registers the relay command
-	// via the command routing in main.go
-}
-
-// RelayFrame is the wire format for WS messages.
 
 // ── Graph Config Sync ──
 
@@ -779,8 +620,6 @@ func mergeProxyConfigs(configs []scoredConfig) string {
 	return string(data)
 }
 
-// ── Actual CLI integration ──
-
 // generateInstanceID creates a random instance ID like "diane-a4fd".
 func generateInstanceID() string {
 	bytes := make([]byte, 2)
@@ -791,12 +630,13 @@ func generateInstanceID() string {
 	return "diane-" + hex.EncodeToString(bytes)
 }
 
+// ── Actual CLI integration ──
+
 // Actual CLI integration — called from main.go's command switch
 func runMCPRelay(args []string) {
 	// Parse optional flags
 	instanceID := ""
 	relayURL := ""
-	mcpBinary := ""
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--instance":
@@ -809,13 +649,8 @@ func runMCPRelay(args []string) {
 				relayURL = args[i+1]
 				i++
 			}
-		case "--mcp-binary":
-			if i+1 < len(args) {
-				mcpBinary = args[i+1]
-				i++
-			}
 		case "--help", "-h":
-			fmt.Println("Usage: diane mcp relay [--instance <name>] [--relay <url>] [--mcp-binary <path>]")
+			fmt.Println("Usage: diane mcp relay [--instance <name>] [--relay <url>]")
 			fmt.Println("")
 			fmt.Println("Connects Diane's MCP tools to the Memory Platform relay.")
 			fmt.Println("")
@@ -823,7 +658,6 @@ func runMCPRelay(args []string) {
 			fmt.Println("  --instance     Unique instance name (default: from config or auto-generated)")
 			fmt.Println("  --relay        Relay WebSocket URL")
 			fmt.Println("                 (default: from config, derived from server URL)")
-			fmt.Println("  --mcp-binary   Path to MCP server binary (default: self with \"mcp serve\" subcommand)")
 			os.Exit(0)
 		}
 	}
@@ -831,10 +665,9 @@ func runMCPRelay(args []string) {
 	// For JSON mode, acknowledge and exit (don't start the daemon)
 	if jsonOutput {
 		emitJSON("ok", map[string]interface{}{
-			"message":    "Starting relay",
-			"instance":   instanceID,
-			"relay_url":  relayURL,
-			"mcp_binary": mcpBinary,
+			"message":   "Starting relay",
+			"instance":  instanceID,
+			"relay_url": relayURL,
 		})
 		return
 	}
@@ -875,7 +708,6 @@ func runMCPRelay(args []string) {
 		RelayURL:     relayURL,
 		InstanceID:   instanceID,
 		ProjectToken: pc.Token,
-		MCPBinary:    mcpBinary,
 	}
 
 	// Sync MCP proxy config and secrets from the MP graph

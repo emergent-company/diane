@@ -15,7 +15,7 @@ import (
 )
 
 // cmdMCPServe runs the MCP server that reads JSON-RPC from stdin and writes to stdout.
-// This is used by 'diane mcp relay' as the MCP subprocess.
+// This is used when invoked standalone as 'diane mcp serve'.
 func cmdMCPServe() {
 	// For JSON mode, acknowledge and exit (don't start the daemon)
 	if jsonOutput {
