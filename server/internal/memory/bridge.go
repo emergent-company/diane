@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -825,6 +826,76 @@ func (b *Bridge) ListNodeConfigs(ctx context.Context) ([]NodeConfig, error) {
 		nodes = append(nodes, nc)
 	}
 	return nodes, nil
+}
+
+// ============================================================================
+// Graph Object Stats
+// ============================================================================
+
+// TypeCount holds the count for a single graph object type.
+type TypeCount struct {
+	TypeName string `json:"type_name"`
+	Count    int    `json:"count"`
+}
+
+// GraphObjectStats holds aggregate stats about graph objects in the project.
+type GraphObjectStats struct {
+	Total int          `json:"total"`
+	ByType []TypeCount `json:"by_type"`
+}
+
+// GetGraphObjectStats queries the Memory Platform for graph object counts.
+// It returns total objects across all types plus a per-type breakdown.
+func (b *Bridge) GetGraphObjectStats(ctx context.Context) (*GraphObjectStats, error) {
+	// Key types we track individually
+	keyTypes := []struct {
+		name string
+		nice string
+	}{
+		{"Session", "Session"},
+		{"MemoryFact", "Memory Fact"},
+		{"DianeNodeConfig", "Node Config"},
+		{"MCPProxyConfig", "MCP Proxy Config"},
+		{"MCPSecret", "MCP Secret"},
+	}
+
+	// Get total count of all objects
+	total, err := b.client.Graph.CountObjects(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("count objects: %w", err)
+	}
+
+	byType := make([]TypeCount, 0, len(keyTypes))
+	keyTotal := 0
+
+	for _, kt := range keyTypes {
+		count, err := b.client.Graph.CountObjects(ctx, &graph.CountObjectsOptions{
+			Type: kt.name,
+		})
+		if err != nil {
+			// Skip types that don't exist in the project schema yet
+			continue
+		}
+		if count > 0 {
+			byType = append(byType, TypeCount{TypeName: kt.nice, Count: count})
+			keyTotal += count
+		}
+	}
+
+	other := total - keyTotal
+	if other > 0 {
+		byType = append(byType, TypeCount{TypeName: "Other", Count: other})
+	}
+
+	// Sort by count descending
+	sort.Slice(byType, func(i, j int) bool {
+		return byType[i].Count > byType[j].Count
+	})
+
+	return &GraphObjectStats{
+		Total:   total,
+		ByType:  byType,
+	}, nil
 }
 
 // ProviderStats holds aggregated metrics grouped by (provider, model).
