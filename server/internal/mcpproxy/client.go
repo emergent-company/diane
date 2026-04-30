@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 )
@@ -373,7 +375,34 @@ func (c *MCPClient) Close() error {
 	return nil
 }
 
-// getPath returns the PATH environment variable with common locations
+// getPath returns the PATH environment variable with common locations appended.
+// Starts with the inherited PATH so Homebrew/nvm/node installations are found
+// even when the process has a minimal PATH (e.g. SSH sessions on tool/slave nodes).
 func getPath() string {
-	return "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"
+	base := os.Getenv("PATH")
+	extras := []string{
+		"/opt/homebrew/bin",
+		"/opt/homebrew/sbin",
+		"/usr/local/bin",
+		"/usr/local/sbin",
+		"/usr/bin",
+		"/bin",
+		"/usr/sbin",
+		"/sbin",
+	}
+	// Only append paths not already in the inherited PATH
+	seen := make(map[string]bool)
+	for _, p := range strings.Split(base, ":") {
+		seen[p] = true
+	}
+	for _, p := range extras {
+		if !seen[p] {
+			if base != "" {
+				base += ":"
+			}
+			base += p
+			seen[p] = true
+		}
+	}
+	return base
 }
