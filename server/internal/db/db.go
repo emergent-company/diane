@@ -81,7 +81,7 @@ type AgentRunStat struct {
 }
 
 // New creates a new database connection
-// If path is empty, uses ~/.diane/cron.db
+// If path is empty, uses ~/.diane/diane.db
 func New(path string) (*DB, error) {
 	if path == "" {
 		home, err := os.UserHomeDir()
@@ -92,7 +92,7 @@ func New(path string) (*DB, error) {
 		if err := os.MkdirAll(dianeDir, 0755); err != nil {
 			return nil, fmt.Errorf("failed to create .diane directory: %w", err)
 		}
-		path = filepath.Join(dianeDir, "cron.db")
+		path = filepath.Join(dianeDir, "diane.db")
 	}
 
 	conn, err := sql.Open("sqlite", path)

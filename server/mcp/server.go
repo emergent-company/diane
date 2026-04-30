@@ -691,7 +691,7 @@ func getDB() (*db.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	dbPath := filepath.Join(home, ".diane", "cron.db")
+	dbPath := filepath.Join(home, ".diane", "diane.db")
 	return db.New(dbPath)
 }
 
