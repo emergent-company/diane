@@ -1134,3 +1134,62 @@ struct RelaySession: Identifiable, Codable, Hashable, Sendable {
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
     static func == (lhs: RelaySession, rhs: RelaySession) -> Bool { lhs.id == rhs.id }
 }
+
+// MARK: - Graph Schema (from GET /api/schema)
+
+public struct SchemaProperty: Codable, Sendable, Identifiable {
+    public let name: String
+    public let type: String
+    public let description: String
+    public let enumValues: [String]?
+    
+    public var id: String { name }
+    
+    enum CodingKeys: String, CodingKey {
+        case name, type, description
+        case enumValues = "enum_values"
+    }
+}
+
+public struct SchemaNodeType: Codable, Sendable, Identifiable {
+    public let typeName: String
+    public let label: String
+    public let description: String
+    public let namespace: String?
+    public let properties: [SchemaProperty]
+    
+    public var id: String { typeName }
+    
+    enum CodingKeys: String, CodingKey {
+        case typeName = "type_name"
+        case label, description, namespace, properties
+    }
+}
+
+public struct SchemaRelationship: Codable, Sendable, Identifiable {
+    public let name: String
+    public let label: String
+    public let inverseLabel: String
+    public let description: String
+    public let sourceType: String
+    public let targetType: String
+    
+    public var id: String { name }
+    
+    enum CodingKeys: String, CodingKey {
+        case name, label, description
+        case inverseLabel = "inverse_label"
+        case sourceType = "source_type"
+        case targetType = "target_type"
+    }
+}
+
+public struct SchemaResponse: Codable, Sendable {
+    public let nodeTypes: [SchemaNodeType]
+    public let relationships: [SchemaRelationship]
+    
+    enum CodingKeys: String, CodingKey {
+        case nodeTypes = "node_types"
+        case relationships
+    }
+}

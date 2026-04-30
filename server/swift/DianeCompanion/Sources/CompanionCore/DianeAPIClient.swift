@@ -247,6 +247,14 @@ final class DianeAPIClient: ObservableObject {
         return try JSONDecoder().decode(GraphObjectStatsResponse.self, from: data)
     }
 
+    // MARK: - Graph Schema
+
+    /// Fetch the embedded graph schema definitions (object types + relationships).
+    func fetchGraphSchema() async throws -> SchemaResponse {
+        let data = try await get("/api/schema")
+        return try JSONDecoder().decode(SchemaResponse.self, from: data)
+    }
+
     // MARK: - Agent Definitions
 
     func fetchAgentDefs() async throws -> [AgentDef] {
