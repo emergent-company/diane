@@ -1,205 +1,253 @@
 import SwiftUI
-import AppKit
 
+/// The macOS menu bar icon, status popover, and update checker.
 struct MenuBarView: View {
     @EnvironmentObject var statusMonitor: StatusMonitor
     @EnvironmentObject var updateChecker: UpdateChecker
-    @EnvironmentObject var serverConfig: ServerConfiguration
-    @EnvironmentObject var cliManager: CLIManager
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var cliManager: CLIManager
+    @EnvironmentObject var serverConfig: ServerConfiguration
     @EnvironmentObject var apiClient: EmergentAPIClient
-    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Update banner
-            if updateChecker.updateAvailable, let version = updateChecker.latestVersion {
-                updateBanner(version: version)
-                Divider().padding(.vertical, 6)
+        VStack(spacing: 0) {
+            connectionStatus
+            Divider()
+            serverInfo
+            Divider()
+            VStack(spacing: 0) {
+                botStatus
             }
-
-            // Header: icon + app name + version
-            headerSection
-                .padding(.horizontal, 14)
-                .padding(.top, 12)
-                .padding(.bottom, 8)
-
+            if updateChecker.updateAvailable ?? false {
+                Divider()
+                updateBanner
+            }
             Divider()
-
-            // Server connection status
-            statusSection
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-
-            Divider()
-
-            // Footer: Quit (left) + Open App (right) (task 4.4)
-            footerSection
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+            HStack(spacing: 0) {
+                quitButton
+                Spacer()
+                settingsButton
+                Spacer()
+                checkNowButton
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
         }
-        .frame(width: 320)
+        .frame(width: 280)
+        .background(
+            VisualEffectView(material: .menu, blendingMode: .behindWindow)
+                .ignoresSafeArea()
+        )
     }
 
-    // MARK: - Header
+    // MARK: - Connection Status
 
-    private var headerSection: some View {
+    private var connectionStatus: some View {
         HStack(spacing: 8) {
-            Image(systemName: headerIcon)
-                .foregroundStyle(headerColor)
-                .font(.system(size: 14, weight: .medium))
-            Text("Diane")
-                .font(.headline)
+            Image(systemName: statusIcon)
+                .foregroundStyle(statusColor)
+                .font(.title3)
+            VStack(alignment: .leading, spacing: 0) {
+                if statusMonitor.connectionState == .connected {
+                    Text("Connected")
+                        .fontWeight(.medium)
+                } else {
+                    HStack(spacing: 4) {
+                        Text("Disconnected")
+                            .fontWeight(.medium)
+                        if statusMonitor.isChecking {
+                            ProgressView()
+                                .scaleEffect(0.6)
+                                .frame(width: 12, height: 12)
+                        }
+                    }
+                }
+                Text(statusDetail)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
             Spacer()
-            if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
-                Text("v\(version)")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .monospacedDigit()
-            }
-            if statusMonitor.isChecking {
-                ProgressView().controlSize(.mini)
-            }
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
     }
 
-    private var headerIcon: String {
+    private var statusIcon: String {
         switch statusMonitor.connectionState {
         case .connected:    return "brain.head.profile"
         case .disconnected: return "brain"
         case .error:        return "brain.head.profile.fill"
-        case .unknown:      return "brain"
-        }
-    }
-
-    private var headerColor: Color {
-        switch statusMonitor.connectionState {
-        case .connected:    return .primary
-        case .disconnected: return .secondary
-        case .error:        return .orange
-        case .unknown:      return .secondary
-        }
-    }
-
-    // MARK: - Server Status
-
-    private var statusSection: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(statusColor)
-                .frame(width: 8, height: 8)
-            Text(statusMonitor.statusLabel)
-                .font(.subheadline)
-                .fontWeight(.medium)
-            Spacer()
-            if statusMonitor.isChecking {
-                ProgressView().controlSize(.mini)
-            }
         }
     }
 
     private var statusColor: Color {
         switch statusMonitor.connectionState {
+        case .connected:    return .primary
+        case .disconnected: return .secondary
+        case .error:        return .orange
+        }
+    }
+
+    private var statusDetail: String {
+        switch statusMonitor.connectionState {
+        case .connected:
+            if statusMonitor.isLocalAPIReachable {
+                return "Local API reachable"
+            }
+            return "Remote server only"
+        case .disconnected:
+            if statusMonitor.isChecking {
+                return "Checking…"
+            }
+            return "Tap to reconnect"
+        case .error:
+            return statusMonitor.lastError ?? "Unknown error"
+        }
+    }
+
+    private var connectionDot: Color {
+        switch statusMonitor.connectionState {
         case .connected:    return .green
         case .disconnected: return .secondary
         case .error:        return .orange
-        case .unknown:      return .secondary
         }
     }
 
-    // MARK: - Update banner
+    // MARK: - Server Info
 
-    private func updateBanner(version: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: updateChecker.isUpdating ? "arrow.down.to.line.circle" : "arrow.up.circle.fill")
-                .foregroundStyle(.orange)
-                .font(.system(size: 16))
-
-            VStack(alignment: .leading, spacing: 2) {
-                if updateChecker.isUpdating {
-                    Text(updateChecker.updateOutput)
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                } else if let current = updateChecker.currentVersion {
-                    Text("\(current)  →  \(version)")
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                        .monospacedDigit()
-                } else {
-                    Text("Update available: \(version)")
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                }
-                Text("Update ready")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
+    private var serverInfo: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "server.rack")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text(serverConfig.displayName)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
             Spacer()
-
-            if updateChecker.isUpdating {
-                ProgressView()
-                    .progressViewStyle(.circular)
-                    .controlSize(.small)
-            } else {
-                Button(action: { updateChecker.performUpdate() }) {
-                    Text("Update")
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, Design.Padding.badgeH + 4)
-                        .padding(.vertical, Design.Spacing.xs)
-                        .background(Design.Semantic.warning)
-                        .cornerRadius(Design.CornerRadius.medium)
-                }
-                .buttonStyle(.plain)
-            }
         }
-        .padding(.horizontal, Design.Padding.card)
-        .padding(.vertical, Design.Padding.banner)
-        .background(Design.Semantic.warning.opacity(0.08))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
     }
 
-    // MARK: - Footer (task 4.4: Open App button)
+    // MARK: - Bot Status
 
-    private var footerSection: some View {
-        HStack(spacing: 0) {
-            footerButton("Quit", role: .destructive) {
-                NSApplication.shared.terminate(nil)
-            }
-
-            Spacer()
-
-            // Task 4.4: Open App button opens the main application window
-            footerButton("Open App") {
-                openMainWindow()
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func footerButton(
-        _ label: String,
-        role: ButtonRole? = nil,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(role: role, action: action) {
-            Text(label)
+    private var botStatus: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "dot.circle.fill")
+                .foregroundStyle(statusDotColor)
+                .font(.caption2)
+            Text("Discord Bot")
                 .font(.subheadline)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 4)
-                .contentShape(Rectangle())
+            Spacer()
+            Text(botDetail)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(role == .destructive ? Color.red : Color.primary)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
     }
 
-    // MARK: - Actions
-
-    private func openMainWindow() {
-        openWindow(id: "main")
-        NSApp.activate(ignoringOtherApps: true)
+    private var statusDotColor: Color {
+        switch statusMonitor.connectionState {
+        case .connected:    return .green
+        case .disconnected: return .secondary
+        case .error:        return .orange
+        }
     }
+
+    private var botDetail: String {
+        let agentsCount = appState.agentCount
+        if agentsCount > 0 {
+            return "\(agentsCount) agent\(agentsCount == 1 ? "" : "s")"
+        }
+        return "—"
+    }
+
+    // MARK: - Update Banner
+
+    private var updateBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: updateChecker.isUpdating ?? false ? "arrow.triangle.2.circlepath" : "arrow.up.circle.fill")
+                .foregroundStyle(updateChecker.isUpdating ?? false ? .blue : .green)
+                .font(.title3)
+            VStack(alignment: .leading, spacing: 0) {
+                if updateChecker.isUpdating ?? false {
+                    Text("Updating…")
+                        .fontWeight(.medium)
+                    if let output = updateChecker.updateOutput {
+                        Text(output)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("Update Available")
+                        .fontWeight(.medium)
+                    HStack(spacing: 4) {
+                        Text(updateChecker.currentVersion ?? "")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .strikethrough()
+                        Image(systemName: "arrow.right")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text(updateChecker.latestVersion ?? "")
+                            .font(.caption2)
+                            .foregroundStyle(.green)
+                            .fontWeight(.medium)
+                    }
+                }
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+    }
+
+    // MARK: - Bottom Actions
+
+    private var quitButton: some View {
+        Button("Quit") {
+            NSApplication.shared.terminate(nil)
+        }
+        .buttonStyle(.borderless)
+        .font(.subheadline)
+    }
+
+    private var settingsButton: some View {
+        Button("Settings…") {
+            // Open settings window
+        }
+        .buttonStyle(.borderless)
+        .font(.subheadline)
+    }
+
+    private var checkNowButton: some View {
+        Button("Check Now") {
+            statusMonitor.checkNow()
+        }
+        .buttonStyle(.borderless)
+        .font(.subheadline)
+    }
+}
+
+// MARK: - Visual Effect View
+
+/// NSVisualEffectView wrapper for menu bar background.
+struct VisualEffectView: NSViewRepresentable {
+    let material: NSVisualEffectView.Material
+    let blendingMode: NSVisualEffectView.BlendingMode
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = material
+        view.blendingMode = blendingMode
+        view.state = .active
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }
 
 // MARK: - Previews
@@ -207,7 +255,7 @@ struct MenuBarView: View {
 #Preview("Connected") {
     MenuBarView()
         .environmentObject(AppState())
-        .environmentObject(StatusMonitor.forPreviews(connectionState: .connected, isLocalReachable: true))
+        .environmentObject(StatusMonitor.forPreviews(connectionState: ConnectionState.connected, isLocalReachable: true))
         .environmentObject(ServerConfiguration())
         .environmentObject(EmergentAPIClient())
         .environmentObject(UpdateChecker.forPreviews())
@@ -218,7 +266,7 @@ struct MenuBarView: View {
 #Preview("Disconnected") {
     MenuBarView()
         .environmentObject(AppState())
-        .environmentObject(StatusMonitor.forPreviews(connectionState: .disconnected, isLocalReachable: false))
+        .environmentObject(StatusMonitor.forPreviews(connectionState: ConnectionState.disconnected, isLocalReachable: false))
         .environmentObject(ServerConfiguration())
         .environmentObject(EmergentAPIClient())
         .environmentObject(UpdateChecker.forPreviews())
@@ -262,7 +310,7 @@ struct MenuBarView: View {
     VStack(spacing: 0) {
         MenuBarView()
             .environmentObject(AppState())
-            .environmentObject(StatusMonitor.forPreviews(connectionState: .connected, isLocalReachable: true))
+            .environmentObject(StatusMonitor.forPreviews(connectionState: ConnectionState.connected, isLocalReachable: true))
             .environmentObject(ServerConfiguration())
             .environmentObject(EmergentAPIClient())
             .environmentObject(UpdateChecker.forPreviews())
@@ -272,7 +320,7 @@ struct MenuBarView: View {
 
         MenuBarView()
             .environmentObject(AppState())
-            .environmentObject(StatusMonitor.forPreviews(connectionState: .disconnected, isLocalReachable: false))
+            .environmentObject(StatusMonitor.forPreviews(connectionState: ConnectionState.disconnected, isLocalReachable: false))
             .environmentObject(ServerConfiguration())
             .environmentObject(EmergentAPIClient())
             .environmentObject(UpdateChecker.forPreviews())
@@ -292,5 +340,5 @@ struct MenuBarView: View {
             ))
             .environmentObject(CLIManager())
     }
-    .frame(width: 320, height: 700)
+    .frame(width: 320)
 }
