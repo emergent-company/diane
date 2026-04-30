@@ -122,12 +122,20 @@ func (a *localAPIServer) ensureProxy() {
 // ─── Handlers ────────────────────────────────────────────────
 
 // GET /api/sessions — list all sessions
+// POST /api/sessions — create a new session
 func (a *localAPIServer) handleSessions(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		a.handleListSessions(w, r)
+	case http.MethodPost:
+		a.handleCreateSession(w, r)
+	default:
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
 	}
+}
 
+// handleListSessions lists all sessions.
+func (a *localAPIServer) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
 	ctx := context.Background()
 	sessions, err := a.bridge.ListSessions(ctx, status)
@@ -173,13 +181,10 @@ func (a *localAPIServer) handleSessions(w http.ResponseWriter, r *http.Request) 
 
 // GET /api/sessions/{id} — session detail with aggregated run stats
 // GET /api/sessions/{id}/messages — get messages for a session
+// DELETE /api/sessions/{id} — close a session
+// PATCH /api/sessions/{id} — update session (title)
 func (a *localAPIServer) handleSessionByID(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	// Extract session ID from path: /api/sessions/{id}[/messages]
+	// Extract session ID from path: /api/sessions/{id}[/messages|/todos[/...]]
 	path := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
 	parts := strings.SplitN(path, "/", 2)
 	sessionID := parts[0]
@@ -188,18 +193,35 @@ func (a *localAPIServer) handleSessionByID(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// If sub-path exists, route to sub-handlers
+	// If sub-path exists, route to sub-handlers first (before method check)
 	if len(parts) > 1 && parts[1] != "" {
-		switch parts[1] {
+		subParts := strings.SplitN(parts[1], "/", 2)
+		switch subParts[0] {
 		case "messages":
 			a.handleSessionMessages(w, r, sessionID)
+		case "todos":
+			a.handleSessionTodos(w, r, sessionID)
 		default:
-			jsonError(w, http.StatusNotFound, "unknown session sub-path; use /messages")
+			jsonError(w, http.StatusNotFound, "unknown session sub-path; use /messages, /todos")
 		}
 		return
 	}
 
-	// GET /api/sessions/{id} — session detail with aggregated run stats
+	// Top-level session operations: GET detail, DELETE close, PATCH update
+	switch r.Method {
+	case http.MethodGet:
+		// continue below
+	case http.MethodDelete:
+		a.handleCloseSession(w, r)
+		return
+	case http.MethodPatch:
+		a.handleUpdateSession(w, r)
+		return
+	default:
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
 	ctx := context.Background()
 
 	// Fetch session metadata
@@ -236,7 +258,21 @@ func (a *localAPIServer) handleSessionByID(w http.ResponseWriter, r *http.Reques
 }
 
 // GET /api/sessions/{id}/messages — get messages for a session
+// GET /api/sessions/{id}/messages — get messages for a session
+// POST /api/sessions/{id}/messages — append a message to a session
 func (a *localAPIServer) handleSessionMessages(w http.ResponseWriter, r *http.Request, sessionID string) {
+	switch r.Method {
+	case http.MethodGet:
+		a.handleGetSessionMessages(w, r, sessionID)
+	case http.MethodPost:
+		a.handleAppendMessage(w, r, sessionID)
+	default:
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+// handleGetSessionMessages returns messages for a session.
+func (a *localAPIServer) handleGetSessionMessages(w http.ResponseWriter, r *http.Request, sessionID string) {
 	ctx := context.Background()
 	messages, err := a.bridge.GetMessages(ctx, sessionID)
 	if err != nil {
@@ -289,7 +325,243 @@ func (a *localAPIServer) handleSessionMessages(w http.ResponseWriter, r *http.Re
 	})
 }
 
-// GET /api/mcp-servers — list MCP servers from local config
+// ─── Session Write Handlers ───────────────────────────────────
+
+// handleCreateSession creates a new session.
+// POST /api/sessions
+func (a *localAPIServer) handleCreateSession(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, fmt.Sprintf("invalid JSON: %v", err))
+		return
+	}
+	ctx := context.Background()
+	session, err := a.bridge.CreateSession(ctx, req.Title)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("create session: %v", err))
+		return
+	}
+	jsonResponse(w, map[string]any{
+		"id":     session.ID,
+		"key":    session.Key,
+		"title":  session.Title,
+		"status": session.Status,
+	})
+}
+
+// handleCloseSession closes a session.
+// DELETE /api/sessions/{id}
+func (a *localAPIServer) handleCloseSession(w http.ResponseWriter, r *http.Request) {
+	sessionID := extractSessionID(r.URL.Path)
+	if sessionID == "" {
+		jsonError(w, http.StatusBadRequest, "session ID required")
+		return
+	}
+	ctx := context.Background()
+	if err := a.bridge.CloseSession(ctx, sessionID); err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("close session: %v", err))
+		return
+	}
+	jsonResponse(w, map[string]any{"ok": true, "id": sessionID, "status": "closed"})
+}
+
+// handleUpdateSession updates a session (title).
+// PATCH /api/sessions/{id}
+func (a *localAPIServer) handleUpdateSession(w http.ResponseWriter, r *http.Request) {
+	sessionID := extractSessionID(r.URL.Path)
+	if sessionID == "" {
+		jsonError(w, http.StatusBadRequest, "session ID required")
+		return
+	}
+	// PATCH currently closes the session (rename not supported by MP API yet)
+	ctx := context.Background()
+	if err := a.bridge.CloseSession(ctx, sessionID); err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("update session: %v", err))
+		return
+	}
+	jsonResponse(w, map[string]any{"ok": true, "id": sessionID, "status": "closed"})
+}
+
+// handleAppendMessage appends a message to a session.
+// POST /api/sessions/{id}/messages
+func (a *localAPIServer) handleAppendMessage(w http.ResponseWriter, r *http.Request, sessionID string) {
+	var req struct {
+		Role       string `json:"role"`
+		Content    string `json:"content"`
+		TokenCount int    `json:"token_count,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, fmt.Sprintf("invalid JSON: %v", err))
+		return
+	}
+	if req.Role == "" {
+		jsonError(w, http.StatusBadRequest, "role is required")
+		return
+	}
+	ctx := context.Background()
+	msg, err := a.bridge.AppendMessage(ctx, sessionID, req.Role, req.Content, req.TokenCount)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("append message: %v", err))
+		return
+	}
+	jsonResponse(w, map[string]any{
+		"id":      msg.ID,
+		"role":    msg.Role,
+		"content": msg.Content,
+	})
+}
+
+// ─── Todo Handlers ───────────────────────────────────────
+
+// handleSessionTodos handles todo list/create.
+// GET /api/sessions/{id}/todos — list todos
+// POST /api/sessions/{id}/todos — create a todo
+func (a *localAPIServer) handleSessionTodos(w http.ResponseWriter, r *http.Request, sessionID string) {
+	// Check for sub-todo path: /api/sessions/{id}/todos/{todoId}
+	path := strings.TrimPrefix(r.URL.Path, "/api/sessions/"+sessionID+"/todos")
+	if path != "" && path != "/" {
+		todoID := strings.TrimPrefix(path, "/")
+		if todoID != "" {
+			a.handleSessionTodoByID(w, r, sessionID, todoID)
+			return
+		}
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		a.handleListSessionTodos(w, r, sessionID)
+	case http.MethodPost:
+		a.handleCreateSessionTodo(w, r, sessionID)
+	default:
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+// handleListSessionTodos lists todos for a session.
+func (a *localAPIServer) handleListSessionTodos(w http.ResponseWriter, r *http.Request, sessionID string) {
+	status := r.URL.Query().Get("status")
+	ctx := context.Background()
+	todos, err := a.bridge.ListSessionTodos(ctx, sessionID, status)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("list todos: %v", err))
+		return
+	}
+	type todoJSON struct {
+		ID        string `json:"id"`
+		Content   string `json:"content"`
+		Author    string `json:"author,omitempty"`
+		Status    string `json:"status"`
+		Position  int    `json:"order"`
+		CreatedAt string `json:"created_at,omitempty"`
+	}
+	items := make([]todoJSON, 0, len(todos))
+	for _, t := range todos {
+		items = append(items, todoJSON{
+			ID:        t.ID,
+			Content:   t.Content,
+			Author:    t.Author,
+			Status:    t.Status,
+			Position:  t.Order,
+			CreatedAt: t.CreatedAt.Format(time.RFC3339),
+		})
+	}
+	jsonResponse(w, map[string]any{
+		"items": items,
+		"total": len(items),
+	})
+}
+
+// handleCreateSessionTodo creates a todo for a session.
+func (a *localAPIServer) handleCreateSessionTodo(w http.ResponseWriter, r *http.Request, sessionID string) {
+	var req struct {
+		Content string `json:"content"`
+		Author  string `json:"author,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, fmt.Sprintf("invalid JSON: %v", err))
+		return
+	}
+	if req.Content == "" {
+		jsonError(w, http.StatusBadRequest, "content is required")
+		return
+	}
+	if req.Author == "" {
+		req.Author = "local-api"
+	}
+	ctx := context.Background()
+	todo, err := a.bridge.CreateSessionTodo(ctx, sessionID, req.Content, req.Author)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("create todo: %v", err))
+		return
+	}
+	jsonResponse(w, map[string]any{
+		"id":       todo.ID,
+		"content":  todo.Content,
+		"author":   todo.Author,
+		"status":   todo.Status,
+		"order": todo.Order,
+	})
+}
+
+// handleSessionTodoByID handles single-todo operations.
+// PATCH /api/sessions/{id}/todos/{todoId} — update status
+// DELETE /api/sessions/{id}/todos/{todoId} — delete a todo
+func (a *localAPIServer) handleSessionTodoByID(w http.ResponseWriter, r *http.Request, sessionID, todoID string) {
+	switch r.Method {
+	case http.MethodPatch:
+		a.handleUpdateSessionTodo(w, r, sessionID, todoID)
+	case http.MethodDelete:
+		a.handleDeleteSessionTodo(w, r, sessionID, todoID)
+	default:
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed; use PATCH or DELETE")
+	}
+}
+
+// handleUpdateSessionTodo updates a todo's status.
+func (a *localAPIServer) handleUpdateSessionTodo(w http.ResponseWriter, r *http.Request, sessionID, todoID string) {
+	var req struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, fmt.Sprintf("invalid JSON: %v", err))
+		return
+	}
+	if req.Status == "" {
+		jsonError(w, http.StatusBadRequest, "status is required")
+		return
+	}
+	ctx := context.Background()
+	todo, err := a.bridge.UpdateSessionTodo(ctx, sessionID, todoID, req.Status)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("update todo: %v", err))
+		return
+	}
+	jsonResponse(w, map[string]any{
+		"id":      todo.ID,
+		"content": todo.Content,
+		"status":  todo.Status,
+	})
+}
+
+// handleDeleteSessionTodo deletes a todo.
+func (a *localAPIServer) handleDeleteSessionTodo(w http.ResponseWriter, r *http.Request, sessionID, todoID string) {
+	ctx := context.Background()
+	if err := a.bridge.DeleteSessionTodo(ctx, sessionID, todoID); err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("delete todo: %v", err))
+		return
+	}
+	jsonResponse(w, map[string]any{"ok": true})
+}
+
+// extractSessionID extracts the session ID from a /api/sessions/{id} path.
+func extractSessionID(path string) string {
+	trimmed := strings.TrimPrefix(path, "/api/sessions/")
+	parts := strings.SplitN(trimmed, "/", 2)
+	return parts[0]
+}
+
 func (a *localAPIServer) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -1302,7 +1574,7 @@ func jsonError(w http.ResponseWriter, status int, msg string) {
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
