@@ -48,10 +48,10 @@ struct StatusBadgeView: View {
     }
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: Design.Spacing.xs) {
             if let icon = icon {
                 Image(systemName: icon)
-                    .font(.system(size: 9))
+                    .font(.system(size: Design.IconSize.tiny))
                     .foregroundStyle(color)
             }
             Text(text)
@@ -59,10 +59,10 @@ struct StatusBadgeView: View {
                 .fontWeight(.medium)
                 .foregroundStyle(color)
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
+        .padding(.horizontal, Design.Padding.badgeH)
+        .padding(.vertical, Design.Padding.badgeV)
         .background(color.opacity(0.1))
-        .cornerRadius(4)
+        .cornerRadius(Design.CornerRadius.small)
     }
 }
 
@@ -87,7 +87,7 @@ struct StatusDotView: View {
 
     var body: some View {
         Image(systemName: "circle.fill")
-            .font(.system(size: 10))
+            .font(.system(size: Design.IconSize.tiny + 1))
             .foregroundStyle(color)
     }
 }
@@ -95,7 +95,7 @@ struct StatusDotView: View {
 // MARK: - Previews
 
 #Preview {
-    HStack(spacing: 8) {
+    HStack(spacing: Design.Spacing.sm) {
         StatusBadgeView(status: "active")
         StatusBadgeView(status: "completed")
         StatusBadgeView(status: "error")
@@ -106,7 +106,7 @@ struct StatusDotView: View {
 }
 
 #Preview {
-    HStack(spacing: 8) {
+    HStack(spacing: Design.Spacing.sm) {
         StatusDotView(status: "active")
         StatusDotView(status: "completed")
         StatusDotView(status: "error")

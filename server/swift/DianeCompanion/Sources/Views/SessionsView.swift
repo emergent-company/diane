@@ -77,7 +77,7 @@ struct SessionsView: View {
                     .font(.caption)
                     .buttonStyle(.borderless)
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, Design.Padding.sectionHeader)
             .padding(.vertical, 6)
         }
         .onChange(of: selectedSession) { _, session in
@@ -91,34 +91,34 @@ struct SessionsView: View {
     }
 
     private func sessionRow(_ session: DianeSession) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: Design.Spacing.sm) {
             // Status indicator
             statusIcon(session.status)
-                .font(.system(size: 10))
+                .font(.system(size: Design.IconSize.tiny + 1))
                 .frame(width: 20, height: 20)
 
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: Design.Spacing.xxs) {
+                HStack(spacing: Design.Spacing.xs) {
                     Text(session.title ?? "Untitled")
                         .font(.subheadline)
                         .fontWeight(.medium)
                         .lineLimit(1)
                     statusBadge(session.status)
                 }
-                HStack(spacing: 8) {
+                HStack(spacing: Design.Spacing.sm) {
                     if let count = session.messageCount {
-                        HStack(spacing: 3) {
+                        HStack(spacing: Design.Spacing.xxs) {
                             Image(systemName: "text.bubble")
-                                .font(.system(size: 9))
+                                .font(.system(size: Design.IconSize.tiny))
                             Text("\(count)")
                                 .font(.caption2)
                         }
                         .foregroundStyle(.secondary)
                     }
                     if let tokens = session.totalTokens {
-                        HStack(spacing: 3) {
+                        HStack(spacing: Design.Spacing.xxs) {
                             Image(systemName: "number")
-                                .font(.system(size: 9))
+                                .font(.system(size: Design.IconSize.tiny))
                             Text(formatTokenCount(tokens))
                                 .font(.caption2)
                         }
@@ -134,7 +134,7 @@ struct SessionsView: View {
                 }
             }
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, Design.Spacing.xxs)
     }
 
     @ViewBuilder
@@ -163,12 +163,8 @@ struct SessionsView: View {
     private func statusBadge(_ status: String?) -> some View {
         if let s = status, !s.isEmpty {
             Text(s.capitalized)
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(statusColor(s))
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
-                .background(statusColor(s).opacity(0.1))
-                .cornerRadius(3)
+                .font(.system(size: Design.IconSize.tiny, weight: .medium))
+                .badgeStyle(color: statusColor(s))
         }
     }
 
@@ -217,7 +213,7 @@ struct SessionsView: View {
                                     .id(message.id)
                             }
                         }
-                        .padding(.horizontal, 16)
+                        .padding(.horizontal, Design.Spacing.lg)
                         .padding(.vertical, 8)
                     }
                     .onAppear {
@@ -232,15 +228,15 @@ struct SessionsView: View {
 
     private func sessionHeader(_ session: DianeSession) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
+            HStack(spacing: Design.Spacing.sm) {
                 statusIcon(session.status)
-                    .font(.system(size: 14))
+                    .font(.system(size: Design.IconSize.small))
 
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: Design.Spacing.xxs) {
                     Text(session.title ?? "Untitled")
                         .font(.subheadline)
                         .fontWeight(.semibold)
-                    HStack(spacing: 8) {
+                    HStack(spacing: Design.Spacing.sm) {
                         statusBadge(session.status)
                         if let dateStr = session.updatedAt ?? session.createdAt {
                             Text(relativeTimestamp(dateStr))
@@ -257,20 +253,20 @@ struct SessionsView: View {
 
                 Spacer()
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 12)
-            .padding(.bottom, 8)
+            .padding(.horizontal, Design.Padding.sectionHeader)
+            .padding(.top, Design.Padding.sectionHeader)
+            .padding(.bottom, Design.Spacing.sm)
 
             // Session ID + Agent info row
             sessionMetaRow(session)
-                .padding(.horizontal, 12)
-                .padding(.bottom, 8)
+                .padding(.horizontal, Design.Padding.sectionHeader)
+                .padding(.bottom, Design.Spacing.sm)
 
             // Stats bar
             if let detail = sessionDetail {
                 statsBar(detail)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 12)
+                    .padding(.horizontal, Design.Padding.sectionHeader)
+                    .padding(.bottom, Design.Padding.sectionHeader)
             } else if isLoadingDetail {
                 HStack {
                     ProgressView()
@@ -279,11 +275,11 @@ struct SessionsView: View {
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 12)
+                .padding(.horizontal, Design.Padding.sectionHeader)
+                .padding(.bottom, Design.Padding.sectionHeader)
             }
         }
-        .background(Color.primary.opacity(0.04))
+        .background(Design.Surface.cardBackground)
     }
 
     /// Session metadata row — truncated session ID and agent name badges.
@@ -291,9 +287,9 @@ struct SessionsView: View {
     private func sessionMetaRow(_ session: DianeSession) -> some View {
         HStack(spacing: 12) {
             // Session ID — truncated with full ID in tooltip
-            HStack(spacing: 4) {
+            HStack(spacing: Design.Spacing.xs) {
                 Image(systemName: "number")
-                    .font(.system(size: 9))
+                    .font(.system(size: Design.IconSize.tiny))
                     .foregroundStyle(.tertiary)
                 Text(sessionIDShortForm(session.id))
                     .font(.system(size: 10, design: .monospaced))
@@ -303,15 +299,15 @@ struct SessionsView: View {
 
             // Agent name from run aggregates
             if let detail = sessionDetail, let names = detail.aggregates?.agentNames, !names.isEmpty {
-                HStack(spacing: 4) {
+                HStack(spacing: Design.Spacing.xs) {
                     Image(systemName: "brain.head.profile")
-                        .font(.system(size: 9))
+                        .font(.system(size: Design.IconSize.tiny))
                         .foregroundStyle(.secondary)
                     ForEach(names, id: \.self) { name in
                         Text(agentShortName(name))
                             .font(.system(size: 10, design: .monospaced))
                             .foregroundStyle(.secondary)
-                            .padding(.horizontal, 4)
+                            .padding(.horizontal, Design.Spacing.xs)
                             .padding(.vertical, 1)
                             .background(Color.primary.opacity(0.06))
                             .cornerRadius(3)
@@ -344,7 +340,7 @@ struct SessionsView: View {
     @ViewBuilder
     private func statsBar(_ detail: SessionDetailResponse) -> some View {
         let agg = detail.aggregates
-        HStack(spacing: 16) {
+        HStack(spacing: Design.Spacing.lg) {
             if let agg = agg {
                 if detail.totalTokens > 0 {
                     statsBadge(icon: "number", value: formatTokenCount(detail.totalTokens), label: "tokens")
@@ -364,9 +360,9 @@ struct SessionsView: View {
     }
 
     private func statsBadge(icon: String, value: String, label: String) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: Design.Spacing.xs) {
             Image(systemName: icon)
-                .font(.system(size: 9))
+                .font(.system(size: Design.IconSize.tiny))
                 .foregroundStyle(.secondary)
             Text(value)
                 .font(.caption2)
@@ -378,7 +374,7 @@ struct SessionsView: View {
                 .foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .padding(.vertical, Design.Spacing.xs)
         .background(Color.primary.opacity(0.05))
         .cornerRadius(5)
     }
@@ -390,9 +386,9 @@ struct SessionsView: View {
         let isUser = message.role.lowercased() == "user"
         let isSystem = message.role.lowercased() == "system"
 
-        VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
+        VStack(alignment: isUser ? .trailing : .leading, spacing: Design.Spacing.xs) {
             // Role label + sequence
-            HStack(spacing: 6) {
+            HStack(spacing: Design.Spacing.xs) {
                 if !isUser {
                     roleBadge(message.role)
                 }
@@ -407,10 +403,10 @@ struct SessionsView: View {
                         .foregroundStyle(.tertiary)
                 }
             }
-            .padding(.horizontal, 4)
+            .padding(.horizontal, Design.Spacing.xs)
 
             // Content bubble
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: Design.Spacing.xs) {
                 // Reasoning / Thinking section (collapsible)
                 if let thinking = message.reasoningContent, !thinking.isEmpty {
                     thinkingSection(thinking)
@@ -436,9 +432,9 @@ struct SessionsView: View {
                     }
                 }
             }
-            .padding(10)
+            .padding(Design.Padding.banner)
             .background(bubbleBackground(isUser: isUser, isSystem: isSystem))
-            .cornerRadius(10)
+            .cornerRadius(Design.CornerRadius.medium)
             .overlay(alignment: isUser ? .bottomTrailing : .bottomLeading) {
                 BubbleTail(isUser: isUser)
                     .fill(bubbleTailColor(isUser: isUser, isSystem: isSystem))
@@ -451,10 +447,10 @@ struct SessionsView: View {
                 Text(DateUtils.formatTimestamp(dateStr))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 4)
+                    .padding(.horizontal, Design.Spacing.xs)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, Design.Spacing.xs)
         .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
     }
 
@@ -480,11 +476,11 @@ struct SessionsView: View {
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 4)
+                .padding(.top, Design.Spacing.xs)
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: Design.Spacing.xs) {
                 Image(systemName: "brain")
-                    .font(.system(size: 10))
+                    .font(.system(size: Design.IconSize.tiny + 1))
                 Text("Thinking")
                     .font(.caption)
                     .fontWeight(.medium)
@@ -495,9 +491,9 @@ struct SessionsView: View {
             .foregroundStyle(.orange)
         }
         .disclosureGroupStyle(PlainDisclosureGroupStyle())
-        .padding(6)
-        .background(Color.orange.opacity(0.06))
-        .cornerRadius(6)
+        .padding(Design.Spacing.xs)
+        .background(Design.Semantic.warning.opacity(0.06))
+        .cornerRadius(Design.CornerRadius.medium)
     }
 
     // MARK: - Tool Calls Section
@@ -505,16 +501,16 @@ struct SessionsView: View {
     @ViewBuilder
     private func toolCallsSection(_ toolCalls: [ToolCall]) -> some View {
         DisclosureGroup {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: Design.Spacing.xs) {
                 ForEach(toolCalls) { tc in
                     toolCallRow(tc)
                 }
             }
-            .padding(.top, 4)
+            .padding(.top, Design.Spacing.xs)
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: Design.Spacing.xs) {
                 Image(systemName: "wrench.and.screwdriver")
-                    .font(.system(size: 10))
+                    .font(.system(size: Design.IconSize.tiny + 1))
                 Text("Tool Calls")
                     .font(.caption)
                     .fontWeight(.medium)
@@ -525,17 +521,17 @@ struct SessionsView: View {
             .foregroundStyle(.purple)
         }
         .disclosureGroupStyle(PlainDisclosureGroupStyle())
-        .padding(6)
-        .background(Color.purple.opacity(0.06))
-        .cornerRadius(6)
+        .padding(Design.Spacing.xs)
+        .background(Design.Semantic.info.opacity(0.06))
+        .cornerRadius(Design.CornerRadius.medium)
     }
 
     @ViewBuilder
     private func toolCallRow(_ tc: ToolCall) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
+            HStack(spacing: Design.Spacing.xs) {
                 Image(systemName: "function")
-                    .font(.system(size: 9))
+                    .font(.system(size: Design.IconSize.tiny))
                     .foregroundStyle(.purple)
                 Text(tc.name)
                     .font(.caption)
@@ -558,9 +554,9 @@ struct SessionsView: View {
                     .lineLimit(3)
             }
         }
-        .padding(6)
-        .background(Color.purple.opacity(0.04))
-        .cornerRadius(4)
+        .padding(Design.Spacing.xs)
+        .background(Design.Semantic.info.opacity(0.04))
+        .cornerRadius(Design.CornerRadius.small)
     }
 
     /// Format tool arguments: try to pretty-print JSON, fall back to raw string.
@@ -576,7 +572,7 @@ struct SessionsView: View {
     // MARK: - Role Badge
 
     private func roleBadge(_ role: String) -> some View {
-        HStack(spacing: 3) {
+        HStack(spacing: Design.Spacing.xxs) {
             roleIcon(role)
             Text(role.capitalized)
                 .font(.caption2)
@@ -586,7 +582,7 @@ struct SessionsView: View {
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
         .background(roleColor(role).opacity(0.1))
-        .cornerRadius(4)
+        .cornerRadius(Design.CornerRadius.small)
     }
 
     private func roleIcon(_ role: String) -> Image {
@@ -714,7 +710,7 @@ private struct PlainDisclosureGroupStyle: DisclosureGroupStyle {
                     configuration.isExpanded.toggle()
                 }
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: Design.Spacing.xs) {
                     Image(systemName: configuration.isExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(.secondary)

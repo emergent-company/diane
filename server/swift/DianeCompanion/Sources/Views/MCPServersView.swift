@@ -500,10 +500,7 @@ private struct MCPServerDetailView: View {
                         Text(arg.name)
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(Color.primary.opacity(0.05))
-                            .cornerRadius(3)
+                            .badgeStyle(color: .secondary)
                     }
                 }
                 .padding(.top, 2)

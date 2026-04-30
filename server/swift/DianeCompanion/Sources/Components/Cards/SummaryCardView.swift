@@ -20,11 +20,11 @@ struct SummaryCardView: View {
     let color: Color
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: Design.Spacing.sm) {
+            HStack(spacing: Design.Spacing.xs) {
                 Image(systemName: icon)
                     .foregroundStyle(color)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: Design.IconSize.medium, weight: .semibold))
                 Text(title)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -35,21 +35,15 @@ struct SummaryCardView: View {
                 .monospacedDigit()
                 .foregroundStyle(.primary)
         }
-        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.primary.opacity(0.04))
-        .cornerRadius(10)
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
-        )
+        .cardStyle()
     }
 }
 
 // MARK: - Previews
 
 #Preview {
-    HStack(spacing: 12) {
+    HStack(spacing: Design.Spacing.md) {
         SummaryCardView(title: "Total Runs", value: "42", icon: "arrow.triangle.branch", color: .blue)
         SummaryCardView(title: "Success Rate", value: "95.2%", icon: "checkmark.circle.fill", color: .green)
         SummaryCardView(title: "Avg Duration", value: "24.1s", icon: "clock.fill", color: .orange)

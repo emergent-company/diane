@@ -16,7 +16,7 @@ struct StatsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: Design.Spacing.lg) {
                 timeRangePicker
 
                 if let err = error {
@@ -26,7 +26,7 @@ struct StatsView: View {
                 }
 
                 if isLoading && stats == nil && providerStats == nil {
-                    VStack(spacing: 12) {
+                    VStack(spacing: Design.Spacing.md) {
                         ProgressView()
                         Text("Loading stats…")
                             .font(.subheadline)
@@ -49,7 +49,7 @@ struct StatsView: View {
 
                     if let s = stats {
                         agentBreakdownSection(agents: s.agents, hours: s.hours)
-                            .padding(.top, 8)
+                            .padding(.top, Design.Spacing.sm)
                     }
 
                     if stats == nil && providerStats == nil {
@@ -86,7 +86,7 @@ struct StatsView: View {
     // MARK: - Summary Cards
 
     private func summaryCardsSection(totals: AgentStatsTotals) -> some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 160, maximum: 220), spacing: 12)], spacing: 12) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 160, maximum: 220), spacing: Design.Spacing.md)], spacing: Design.Spacing.md) {
             SummaryCardView(
                 title: "Total Runs",
                 value: "\(totals.totalRuns)",
@@ -123,7 +123,7 @@ struct StatsView: View {
     // MARK: - Project-Level Providers
 
     private func projectProvidersSection(providers: [ProjectProviderInfo]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Design.Spacing.sm) {
             HStack {
                 Image(systemName: "gearshape.2")
                     .foregroundStyle(.teal)
@@ -134,9 +134,9 @@ struct StatsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            .padding(.top, 8)
+            .padding(.top, Design.Spacing.sm)
 
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 200, maximum: 280), spacing: 12)], spacing: 12) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 200, maximum: 280), spacing: Design.Spacing.md)], spacing: Design.Spacing.md) {
                 ForEach(providers) { provider in
                     projectProviderCard(provider)
                 }
@@ -145,8 +145,8 @@ struct StatsView: View {
     }
 
     private func projectProviderCard(_ p: ProjectProviderInfo) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: Design.Spacing.sm) {
+            HStack(spacing: Design.Spacing.sm) {
                 Image(systemName: providerIcon(p.provider))
                     .font(.title3)
                     .foregroundStyle(providerColor(p.provider))
@@ -167,29 +167,23 @@ struct StatsView: View {
                     .help(url)
             }
         }
-        .padding(12)
-        .background(Color.primary.opacity(0.03))
-        .cornerRadius(10)
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
-        )
+        .cardStyle(cornerRadius: Design.CornerRadius.medium)
     }
 
     // MARK: - Provider Usage
 
     private func providerUsageSection(providers: [ProviderStatsSummary], totals: ProviderStatsResponse) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Design.Spacing.sm) {
             HStack {
                 Image(systemName: "cpu")
                     .foregroundStyle(.indigo)
                 Text("Provider Usage")
                     .font(.headline)
             }
-            .padding(.top, 8)
+            .padding(.top, Design.Spacing.sm)
 
             let grouped = Dictionary(grouping: providers, by: { $0.providerName.lowercased() })
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 200, maximum: 280), spacing: 12)], spacing: 12) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 200, maximum: 280), spacing: Design.Spacing.md)], spacing: Design.Spacing.md) {
                 ForEach(Array(grouped.keys.sorted()), id: \.self) { key in
                     let items = grouped[key]!
                     let totalRuns = items.reduce(0) { $0 + $1.totalRuns }
@@ -206,8 +200,8 @@ struct StatsView: View {
     }
 
     private func providerGroupCard(providerName: String, models: [String], totalRuns: Int, totalCost: Double) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: Design.Spacing.sm) {
+            HStack(spacing: Design.Spacing.sm) {
                 Image(systemName: providerIcon(providerName))
                     .font(.title3)
                     .foregroundStyle(providerColor(providerName))
@@ -223,7 +217,7 @@ struct StatsView: View {
 
             if models.count <= 3 {
                 ForEach(models, id: \.self) { model in
-                    HStack(spacing: 4) {
+                    HStack(spacing: Design.Spacing.xs) {
                         Circle()
                             .fill(Color.primary.opacity(0.15))
                             .frame(width: 4, height: 4)
@@ -244,30 +238,24 @@ struct StatsView: View {
                 Spacer()
             }
         }
-        .padding(12)
-        .background(Color.primary.opacity(0.03))
-        .cornerRadius(10)
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
-        )
+        .cardStyle(cornerRadius: Design.CornerRadius.medium)
     }
 
     // MARK: - Per-Agent Breakdown
 
     private func agentBreakdownSection(agents: [AgentStatsSummary], hours: Int) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Design.Spacing.sm) {
             Text("Per-Agent Breakdown")
                 .font(.headline)
-                .padding(.top, 8)
+                .padding(.top, Design.Spacing.sm)
 
             if agents.isEmpty {
                 Text("No agent runs in this period.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                    .padding(.top, 4)
+                    .padding(.top, Design.Spacing.xs)
             } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 300, maximum: 480), spacing: 12)], spacing: 12) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 300, maximum: 480), spacing: Design.Spacing.md)], spacing: Design.Spacing.md) {
                     ForEach(agents) { agent in
                         AgentStatsCardView(agent: agent)
                     }

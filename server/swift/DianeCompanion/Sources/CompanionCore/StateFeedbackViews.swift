@@ -9,12 +9,12 @@ struct EmptyStateView: View {
     var actionLabel: String? = nil
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: Design.Spacing.md) {
             Spacer()
             Image(systemName: icon)
-                .font(.system(size: 32))
+                .font(.system(size: Design.IconSize.large))
                 .foregroundStyle(.secondary)
-                .padding(.bottom, 4)
+                .padding(.bottom, Design.Spacing.xs)
             Text(title)
                 .font(.title3)
                 .fontWeight(.medium)
@@ -23,13 +23,13 @@ struct EmptyStateView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                    .padding(.horizontal, 40)
+                    .padding(.horizontal, Design.Padding.card * 3)
             }
             if let action = action, let label = actionLabel {
                 Button(label, action: action)
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
-                    .padding(.top, 4)
+                    .padding(.top, Design.Spacing.xs)
             }
             Spacer()
         }
@@ -42,7 +42,7 @@ struct LoadingStateView: View {
     let message: String
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: Design.Spacing.sm) {
             ProgressView()
                 .controlSize(.large)
             Text(message)
@@ -59,7 +59,7 @@ struct ErrorBannerView: View {
     var retry: (() -> Void)? = nil
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Design.Spacing.sm) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
             Text(message)
@@ -74,9 +74,9 @@ struct ErrorBannerView: View {
                     .controlSize(.mini)
             }
         }
-        .padding(10)
-        .background(Color.orange.opacity(0.08))
-        .cornerRadius(6)
+        .padding(Design.Padding.banner)
+        .background(Design.Semantic.warning.opacity(0.08))
+        .cornerRadius(Design.CornerRadius.medium)
     }
 }
 

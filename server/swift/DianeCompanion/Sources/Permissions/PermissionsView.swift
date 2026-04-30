@@ -120,10 +120,10 @@ struct PermissionsView: View {
         .padding(12)
         .frame(minHeight: 180)
         .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color.primary.opacity(0.03))
+            RoundedRectangle(cornerRadius: Design.CornerRadius.large)
+                .fill(Design.Surface.elevatedBackground)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 10)
+                    RoundedRectangle(cornerRadius: Design.CornerRadius.large)
                         .stroke(
                             permission.status.isGranted ? Color.green.opacity(0.2) : Color.secondary.opacity(0.1),
                             lineWidth: 1

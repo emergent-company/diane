@@ -85,7 +85,7 @@ struct RelayNodesView: View {
             .font(.caption)
             .buttonStyle(.borderless)
         }
-        .padding(12)
+        .padding(Design.Padding.sectionHeader)
         .background(Color.primary.opacity(0.04))
         .cornerRadius(8)
     }
@@ -111,20 +111,16 @@ struct RelayNodesView: View {
                     }
                 }
             }) {
-                HStack(spacing: 10) {
+                HStack(spacing: Design.Spacing.sm) {
                     // Mode badge
                     if let mode = node.mode {
                         Text(mode.capitalized)
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 2)
-                            .background(Color.secondary.opacity(0.12))
-                            .cornerRadius(4)
+                            .badgeStyle(color: .secondary)
                     }
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
+                    VStack(alignment: .leading, spacing: Design.Spacing.xxs) {
+                        HStack(spacing: Design.Spacing.xs) {
                             Circle()
                                 .fill(node.online ? Color.green : Color.gray.opacity(0.4))
                                 .frame(width: 7, height: 7)
@@ -134,7 +130,7 @@ struct RelayNodesView: View {
                                 .lineLimit(1)
                         }
 
-                        HStack(spacing: 8) {
+                        HStack(spacing: Design.Spacing.sm) {
                             if let ver = node.version {
                                 Text(ver)
                                     .font(.caption2)
@@ -159,7 +155,7 @@ struct RelayNodesView: View {
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
-                .padding(12)
+                .padding(Design.Padding.sectionHeader)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -168,7 +164,7 @@ struct RelayNodesView: View {
             if isExpanded {
                 Divider().padding(.horizontal, 12)
 
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: Design.Spacing.xs) {
                     HStack {
                         Text("MCP Tools")
                             .font(.caption)
@@ -181,14 +177,14 @@ struct RelayNodesView: View {
                         }
                     }
                     .padding(.horizontal, 12)
-                    .padding(.top, 8)
+                    .padding(.top, Design.Spacing.sm)
 
                     if isLoadingTools {
                         HStack {
                             Spacer()
                             ProgressView("Loading tools…")
                                 .controlSize(.small)
-                                .padding(12)
+                                .padding(Design.Padding.sectionHeader)
                             Spacer()
                         }
                     } else if tools.isEmpty {
@@ -200,7 +196,7 @@ struct RelayNodesView: View {
                             .padding(.bottom, 8)
                     } else {
                         ForEach(tools) { tool in
-                            VStack(alignment: .leading, spacing: 2) {
+                            VStack(alignment: .leading, spacing: Design.Spacing.xxs) {
                                 Text(tool.name)
                                     .font(.caption)
                                     .fontWeight(.medium)
@@ -220,12 +216,7 @@ struct RelayNodesView: View {
                 }
             }
         }
-        .background(Color.primary.opacity(0.03))
-        .cornerRadius(8)
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
-        )
+        .cardStyle(cornerRadius: Design.CornerRadius.medium)
     }
 
     // MARK: - Mode Badge
@@ -235,7 +226,7 @@ struct RelayNodesView: View {
         switch mode {
         case "master":
             return AnyView(
-                HStack(spacing: 4) {
+                HStack(spacing: Design.Spacing.xs) {
                     Circle()
                         .fill(Color.green)
                         .frame(width: 7, height: 7)
@@ -251,7 +242,7 @@ struct RelayNodesView: View {
             )
         case "slave":
             return AnyView(
-                HStack(spacing: 4) {
+                HStack(spacing: Design.Spacing.xs) {
                     Circle()
                         .fill(Color.blue)
                         .frame(width: 7, height: 7)
@@ -267,7 +258,7 @@ struct RelayNodesView: View {
             )
         default:
             return AnyView(
-                HStack(spacing: 4) {
+                HStack(spacing: Design.Spacing.xs) {
                     Circle()
                         .fill(Color.secondary)
                         .frame(width: 7, height: 7)

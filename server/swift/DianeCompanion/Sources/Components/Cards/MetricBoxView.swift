@@ -12,10 +12,10 @@ struct MetricBoxView: View {
     var color: Color = .secondary
 
     var body: some View {
-        VStack(spacing: 2) {
-            HStack(spacing: 3) {
+        VStack(spacing: Design.Spacing.xxs) {
+            HStack(spacing: Design.Spacing.xxs) {
                 Image(systemName: icon)
-                    .font(.system(size: 9))
+                    .font(.system(size: Design.IconSize.tiny))
                     .foregroundStyle(color)
                 Text(value)
                     .font(.caption)
@@ -24,20 +24,20 @@ struct MetricBoxView: View {
                     .foregroundStyle(.primary)
             }
             Text(label)
-                .font(.system(size: 9))
+                .font(.system(size: Design.IconSize.tiny))
                 .foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 4)
-        .background(Color.primary.opacity(0.04))
-        .cornerRadius(6)
+        .padding(.vertical, Design.Padding.sectionHeader)
+        .background(Design.Surface.cardBackground)
+        .cornerRadius(Design.CornerRadius.medium)
     }
 }
 
 // MARK: - Previews
 
 #Preview {
-    HStack(spacing: 8) {
+    HStack(spacing: Design.Spacing.sm) {
         MetricBoxView(icon: "arrow.triangle.branch", value: "42", label: "Runs")
         MetricBoxView(icon: "checkmark", value: "40", label: "OK", color: .green)
         MetricBoxView(icon: "xmark", value: "2", label: "Err", color: .red)

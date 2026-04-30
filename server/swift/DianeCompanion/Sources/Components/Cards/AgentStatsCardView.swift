@@ -12,7 +12,7 @@ struct AgentStatsCardView: View {
     let agent: AgentStatsSummary
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: Design.Spacing.sm) {
             // Header row
             HStack {
                 statusDot
@@ -40,7 +40,7 @@ struct AgentStatsCardView: View {
             LazyVGrid(columns: [
                 GridItem(.flexible()), GridItem(.flexible()),
                 GridItem(.flexible()), GridItem(.flexible())
-            ], spacing: 6) {
+            ], spacing: Design.Spacing.xs) {
                 MetricBoxView(icon: "arrow.triangle.branch", value: "\(agent.totalRuns)", label: "Runs")
                 MetricBoxView(icon: "checkmark", value: "\(agent.successRuns)", label: "OK", color: .green)
                 MetricBoxView(icon: "xmark", value: "\(agent.errorRuns)", label: "Err", color: .red)
@@ -51,13 +51,7 @@ struct AgentStatsCardView: View {
                 MetricBoxView(icon: "percent", value: String(format: "%.0f%%", agent.successRate), label: "Rate")
             }
         }
-        .padding(14)
-        .background(Color.primary.opacity(0.03))
-        .cornerRadius(12)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
-        )
+        .cardStyle()
     }
 
     // MARK: - Sub-views
@@ -77,29 +71,24 @@ struct AgentStatsCardView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .background(Color.primary.opacity(0.06))
-        .cornerRadius(6)
+        .padding(.horizontal, Design.Padding.sectionHeader)
+        .padding(.vertical, Design.Spacing.xxs)
+        .background(Design.Surface.tint)
+        .cornerRadius(Design.CornerRadius.medium)
     }
 
     private func flowBadge(_ flow: String) -> some View {
         Text(flow)
-            .font(.caption2)
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 4)
-            .padding(.vertical, 1)
-            .background(Color.secondary.opacity(0.1))
-            .cornerRadius(3)
+            .badgeStyle(color: .secondary)
     }
 
     private var successBar: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 3)
+                RoundedRectangle(cornerRadius: Design.CornerRadius.small)
                     .fill(Color.primary.opacity(0.08))
                     .frame(height: 6)
-                RoundedRectangle(cornerRadius: 3)
+                RoundedRectangle(cornerRadius: Design.CornerRadius.small)
                     .fill(successBarColor(agent.successRate))
                     .frame(width: max(geo.size.width * CGFloat(agent.successRate / 100), 2), height: 6)
             }

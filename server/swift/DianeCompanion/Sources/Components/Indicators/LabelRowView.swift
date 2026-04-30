@@ -11,9 +11,9 @@ struct LabelRowView: View {
     let value: String
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: Design.Spacing.xs) {
             Image(systemName: icon)
-                .font(.system(size: 9))
+                .font(.system(size: Design.IconSize.tiny))
                 .foregroundStyle(.secondary)
             Text(label + ":")
                 .font(.caption2)
@@ -30,7 +30,7 @@ struct LabelRowView: View {
 // MARK: - Previews
 
 #Preview {
-    VStack(alignment: .leading, spacing: 6) {
+    VStack(alignment: .leading, spacing: Design.Spacing.xs) {
         LabelRowView(icon: "sparkle", label: "Model", value: "gpt-4o")
         LabelRowView(icon: "square.text.square", label: "Embed", value: "text-embedding-3-small")
         LabelRowView(icon: "link", label: "URL", value: "https://api.openai.com/v1")

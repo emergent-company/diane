@@ -78,30 +78,26 @@ struct AgentsView: View {
     }
 
     private func agentRow(_ agent: AgentDef) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: Design.Spacing.sm) {
             Image(systemName: agentIcon(agent.flowType))
-                .font(.system(size: 12))
+                .font(.system(size: Design.IconSize.small))
                 .foregroundStyle(agentColor(agent.flowType))
                 .frame(width: 20, height: 20)
 
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: Design.Spacing.xxs) {
+                HStack(spacing: Design.Spacing.xs) {
                     Text(agent.name)
                         .font(.subheadline)
                         .fontWeight(.medium)
                         .lineLimit(1)
                     if agent.isDefault {
                         Text("default")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(.blue)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(Color.blue.opacity(0.1))
-                            .cornerRadius(3)
+                            .font(.system(size: Design.IconSize.tiny, weight: .medium))
+                            .badgeStyle(color: .blue)
                     }
                     flowBadge(agent.flowType)
                 }
-                HStack(spacing: 8) {
+                HStack(spacing: Design.Spacing.sm) {
                     if let desc = agent.description, !desc.isEmpty {
                         Text(desc)
                             .font(.caption2)
@@ -124,17 +120,13 @@ struct AgentsView: View {
                 }
             }
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, Design.Spacing.xxs)
     }
 
     private func flowBadge(_ flow: String) -> some View {
         Text(flow.isEmpty ? "chat" : flow)
-            .font(.system(size: 9, weight: .medium))
-            .foregroundStyle(agentColor(flow))
-            .padding(.horizontal, 4)
-            .padding(.vertical, 1)
-            .background(agentColor(flow).opacity(0.1))
-            .cornerRadius(3)
+            .font(.system(size: Design.IconSize.tiny, weight: .medium))
+            .badgeStyle(color: agentColor(flow))
     }
 
     private func agentColor(_ flow: String) -> Color {
