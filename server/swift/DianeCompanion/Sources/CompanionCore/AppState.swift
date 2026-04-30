@@ -23,6 +23,7 @@ final class AppState: ObservableObject {
 /// Represents the navigable sections in the main window sidebar.
 enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
     case dashboard  = "Dashboard"
+    case chat       = "Chat"
     case sessions   = "Sessions"
     case agents     = "Agents"
     case schema     = "Schema"
@@ -35,6 +36,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
     var systemIcon: String {
         switch self {
         case .dashboard:  return "chart.bar.fill"
+        case .chat:       return "bubble.left.and.bubble.right.fill"
         case .sessions:    return "message"
         case .agents:      return "brain.head.profile"
         case .schema:      return "square.grid.3x3.fill"
