@@ -2,7 +2,6 @@ import Foundation
 import EventKit
 import Contacts
 import AppKit
-import OSLog
 import UserNotifications
 @preconcurrency import ApplicationServices
 
@@ -103,7 +102,6 @@ struct PermissionInfo: Identifiable, Sendable {
 /// Central permission manager that checks and requests all macOS permissions.
 @MainActor
 final class PermissionManager: ObservableObject {
-    private let logger = Logger(subsystem: "com.emergent-company.diane-companion", category: "Permissions")
     
     @Published var permissions: [PermissionInfo] = []
     @Published var isRefreshing = false
@@ -197,7 +195,7 @@ final class PermissionManager: ObservableObject {
                 return granted
             }
         } catch {
-            logger.error("Calendar permission error: \(error.localizedDescription)")
+            logError(error, category: "Permissions")
             return false
         }
     }
@@ -215,7 +213,7 @@ final class PermissionManager: ObservableObject {
                 return granted
             }
         } catch {
-            logger.error("Reminders permission error: \(error.localizedDescription)")
+            logError(error, category: "Permissions")
             return false
         }
     }
@@ -227,7 +225,7 @@ final class PermissionManager: ObservableObject {
             refresh()
             return granted
         } catch {
-            logger.error("Contacts permission error: \(error.localizedDescription)")
+            logError(error, category: "Permissions")
             return false
         }
     }
@@ -238,7 +236,7 @@ final class PermissionManager: ObservableObject {
             refresh()
             return granted
         } catch {
-            logger.error("Notification permission error: \(error.localizedDescription)")
+            logError(error, category: "Permissions")
             return false
         }
     }

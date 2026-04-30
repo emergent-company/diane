@@ -1,10 +1,8 @@
 import Foundation
-import OSLog
 
 /// Creates Apple Notes via AppleScript.
 @MainActor
 final class NotesManager: ObservableObject {
-    private let logger = Logger(subsystem: "com.emergent-company.diane-companion", category: "Notes")
     
     func createNote(title: String, body: String) async throws {
         let escapedTitle = title.replacingOccurrences(of: "\"", with: "\\\"")
@@ -17,6 +15,6 @@ final class NotesManager: ObservableObject {
         end tell
         """
         try await AppleScriptRunner.run(script)
-        logger.info("Created note: \(title)")
+        logInfo("Created note: \(title)", category: "Notes")
     }
 }

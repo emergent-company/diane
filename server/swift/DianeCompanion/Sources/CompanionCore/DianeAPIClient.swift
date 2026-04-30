@@ -1,5 +1,4 @@
 import Foundation
-import OSLog
 
 /// Client for Diane's local companion API (served by `diane serve` on 127.0.0.1:8890).
 ///
@@ -8,7 +7,6 @@ import OSLog
 /// config for MCP servers, Memory Platform relay for nodes).
 @MainActor
 final class DianeAPIClient: ObservableObject {
-    private let logger = Logger(subsystem: "com.emergent-company.diane-companion", category: "DianeAPI")
     private let session: URLSession
     private let baseURL: String
 
@@ -54,7 +52,7 @@ final class DianeAPIClient: ObservableObject {
     /// Log a snippet of response data when JSON decoding fails, so we can debug API mismatches.
     private func logDecodeFailure<T>(_ type: T.Type, data: Data, context: String) {
         let prefix = String(data: data.prefix(1024), encoding: .utf8) ?? "<non-utf8>"
-        logger.warning("JSON decode failed for \(context) — expected \(T.self). Response prefix: \(prefix)")
+        logWarning("JSON decode failed for \(context) — expected \(T.self). Response prefix: \(prefix)", category: "DianeAPI")
     }
 
     func fetchSessions(status: String? = nil) async throws -> [DianeSession] {

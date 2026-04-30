@@ -1,11 +1,9 @@
 import Foundation
 import Contacts
-import OSLog
 
 /// Manages macOS Contacts access via Contacts framework.
 @MainActor
 final class ContactsManager: ObservableObject {
-    private let logger = Logger(subsystem: "com.emergent-company.diane-companion", category: "Contacts")
     private nonisolated(unsafe) let store = CNContactStore()
     
     @Published private(set) var isAuthorized = false
@@ -20,7 +18,7 @@ final class ContactsManager: ObservableObject {
             isAuthorized = granted
             return granted
         } catch {
-            logger.error("Contacts permission request failed: \(error.localizedDescription)")
+            logError("Contacts permission request failed: \(error.localizedDescription)", category: "Contacts")
             return false
         }
     }

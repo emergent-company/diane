@@ -1,10 +1,8 @@
 import Foundation
-import OSLog
 
 /// Manages iMessage via AppleScript.
 @MainActor
 final class MessagesManager: ObservableObject {
-    private let logger = Logger(subsystem: "com.emergent-company.diane-companion", category: "Messages")
 
     @Published private(set) var isAuthorized = false
 
@@ -39,7 +37,7 @@ final class MessagesManager: ObservableObject {
         end tell
         """
         try await AppleScriptRunner.run(script)
-        logger.info("Sent iMessage to \(recipient)")
+        logInfo("Sent iMessage to \(recipient)", category: "Messages")
     }
 
     /// Send an SMS via the Messages app (falls back to iMessage if SMS unavailable).
@@ -54,7 +52,7 @@ final class MessagesManager: ObservableObject {
         end tell
         """
         try await AppleScriptRunner.run(script)
-        logger.info("Sent SMS to \(phoneNumber)")
+        logInfo("Sent SMS to \(phoneNumber)", category: "Messages")
     }
 
     /// Get recent conversations (last 10).

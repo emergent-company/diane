@@ -1,9 +1,7 @@
 import SwiftUI
-import OSLog
 
 /// MCP Servers view — reads from Diane's local API (served by `diane serve`) or remote fallback.
 struct MCPServersView: View {
-    private let logger = Logger(subsystem: "com.emergent-company.diane-companion", category: "MCPView")
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var serverConfig: ServerConfiguration
     @EnvironmentObject var dianeAPI: DianeAPIClient
@@ -183,7 +181,7 @@ struct MCPServersView: View {
             error = nil
         } catch let localError {
             // Fall back to remote API if local fails
-            logger.warning("Local API failed: \(localError.localizedDescription), trying remote...")
+            logWarning("Local API failed: \(localError.localizedDescription), trying remote...", category: "MCPView")
             do {
                 servers = try await apiClient.fetchMCPServers(projectID: serverConfig.projectID)
                 await loadNodes()

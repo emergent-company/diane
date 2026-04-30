@@ -1,9 +1,7 @@
 import Foundation
-import OSLog
 
-/// Executes AppleScript commands via `/usr/bin/osascript`.
+@MainActor
 enum AppleScriptRunner {
-    private static let logger = Logger(subsystem: "com.emergent-company.diane-companion", category: "AppleScript")
     
     @discardableResult
     static func run(_ script: String) async throws -> String {

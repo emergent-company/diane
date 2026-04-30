@@ -78,7 +78,7 @@ struct StatsView: View {
         }
         .pickerStyle(.segmented)
         .frame(maxWidth: 280)
-        .onChange(of: selectedHours) { _ in
+        .onChange(of: selectedHours) { _, _ in
             Task { await load() }
         }
     }

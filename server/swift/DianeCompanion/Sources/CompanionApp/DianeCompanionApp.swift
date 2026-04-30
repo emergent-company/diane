@@ -1,9 +1,7 @@
 import SwiftUI
-import OSLog
 
 @main
 struct DianeCompanionApp: App {
-    private let logger = Logger(subsystem: "com.emergent-company.diane-companion", category: "App")
 
     @StateObject private var statusMonitor  = StatusMonitor()
     @StateObject private var updateChecker  = UpdateChecker()

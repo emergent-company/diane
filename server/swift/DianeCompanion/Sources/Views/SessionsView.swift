@@ -80,7 +80,7 @@ struct SessionsView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
         }
-        .onChange(of: selectedSession) { session in
+        .onChange(of: selectedSession) { _, session in
             if let s = session {
                 Task { await loadMessages(session: s) }
                 Task { await loadSessionDetail(session: s) }
@@ -384,6 +384,14 @@ struct SessionsView: View {
                     .fill(bubbleTailColor(isUser: isUser, isSystem: isSystem))
                     .frame(width: 8, height: 8)
                     .offset(x: isUser ? 6 : -6, y: 4)
+            }
+
+            // Message timestamp below bubble
+            if let dateStr = message.createdAt {
+                Text(DateUtils.formatTimestamp(dateStr))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 4)
             }
         }
         .padding(.vertical, 4)

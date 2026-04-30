@@ -1,6 +1,5 @@
 import SwiftUI
 import ServiceManagement
-import AppKit
 
 struct SettingsView: View {
     @EnvironmentObject var statusMonitor: StatusMonitor
@@ -32,7 +31,7 @@ struct SettingsView: View {
                     TextField("https://your-server:8080", text: $urlDraft)
                         .textFieldStyle(.roundedBorder)
                         .onSubmit { saveSettings() }
-                        .onChange(of: urlDraft) { _ in testState = .idle }
+                        .onChange(of: urlDraft) { _, _ in testState = .idle }
 
                     if let error = urlError {
                         Label(error, systemImage: "exclamationmark.circle")
@@ -56,13 +55,13 @@ struct SettingsView: View {
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(.body, design: .monospaced))
                                 .onSubmit { saveSettings() }
-                                .onChange(of: apiKeyDraft) { _ in testState = .idle }
+                                .onChange(of: apiKeyDraft) { _, _ in testState = .idle }
                         } else {
                             SecureField("Account API key", text: $apiKeyDraft)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(.body, design: .monospaced))
                                 .onSubmit { saveSettings() }
-                                .onChange(of: apiKeyDraft) { _ in testState = .idle }
+                                .onChange(of: apiKeyDraft) { _, _ in testState = .idle }
                         }
                         Button {
                             isAPIKeyVisible.toggle()
@@ -143,7 +142,7 @@ struct SettingsView: View {
             GroupBox("Startup") {
                 VStack(alignment: .leading, spacing: 8) {
                     Toggle("Launch at Login", isOn: $serverConfig.launchAtLogin)
-                        .onChange(of: serverConfig.launchAtLogin) { newValue in
+                        .onChange(of: serverConfig.launchAtLogin) { _, newValue in
                             applyLaunchAtLogin(newValue)
                         }
                     Text("Automatically start Diane when you log in.")

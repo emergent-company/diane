@@ -3,7 +3,7 @@ options:
   bundleIdPrefix: com.emergent-company
   deploymentTarget:
     macOS: "15.0"
-  xcodeVersion: "26.0"
+  xcodeVersion: "26.4"
   generateEmptyDirectories: true
   indentWidth: 4
   tabWidth: 4
@@ -16,11 +16,13 @@ settings:
         DEVELOPMENT_TEAM: ""
         CODE_SIGN_STYLE: Automatic
         ENABLE_HARDENED_RUNTIME: YES
+        OTHER_LDFLAGS: "-Wl,-w"
+        OTHER_SWIFT_FLAGS: "-Xlinker -w"
 
 packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
-    version: 2.7.0
+    version: 2.9.1
 
 targets:
   Diane:
@@ -44,6 +46,7 @@ targets:
       configs:
         Debug:
           CODE_SIGN_IDENTITY: "-"
+          OTHER_LDFLAGS: "-Wl,-w"
         Release:
           CODE_SIGN_IDENTITY: "Apple Distribution"
     postbuildScripts:

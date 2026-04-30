@@ -1,5 +1,4 @@
 import Foundation
-import OSLog
 
 /// Lightweight HTTP client for Emergent REST API endpoints not yet
 /// exposed via the EmergentKit Swift Package CGO bridge.
@@ -8,7 +7,6 @@ import OSLog
 /// graph objects, agents, MCP servers, and user profile.
 @MainActor
 final class EmergentAPIClient: ObservableObject {
-    private let logger = Logger(subsystem: "com.emergent-company.diane-companion", category: "APIClient")
 
     private let session: URLSession
     private var baseURL: URL?
@@ -27,10 +25,10 @@ final class EmergentAPIClient: ObservableObject {
         self.apiKey = apiKey
         if serverURL.isEmpty {
             baseURL = nil
-            logger.info("APIClient: server URL cleared")
+            logInfo("APIClient: server URL cleared", category: "APIClient")
         } else {
             baseURL = URL(string: serverURL)
-            logger.info("APIClient: configured for \(serverURL, privacy: .public)")
+            logInfo("APIClient: configured for \(serverURL)", category: "APIClient")
         }
     }
 
@@ -368,11 +366,11 @@ final class EmergentAPIClient: ObservableObject {
 
     private func makeRequest(method: String, path: String) throws -> URLRequest {
         guard let base = baseURL else {
-            logger.error("APIClient: request attempted but server URL not configured (path: \(path, privacy: .public))")
+            logError("APIClient: request attempted but server URL not configured (path: \(path))", category: "APIClient")
             throw EmergentAPIError.notConfigured
         }
         guard let url = URL(string: path, relativeTo: base) else {
-            logger.error("APIClient: invalid URL for path \(path, privacy: .public)")
+            logError("APIClient: invalid URL for path \(path)", category: "APIClient")
             throw EmergentAPIError.invalidURL(path)
         }
         var req = URLRequest(url: url)
@@ -385,9 +383,9 @@ final class EmergentAPIClient: ObservableObject {
                 req.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
             }
         } else {
-            logger.warning("APIClient: no API key configured for request to \(url.absoluteString, privacy: .public)")
+            logWarning("APIClient: no API key configured for request to \(url.absoluteString)", category: "APIClient")
         }
-        logger.debug("APIClient: \(method, privacy: .public) \(url.absoluteString, privacy: .public)")
+        logDebug("APIClient: \(method) \(url.absoluteString)", category: "APIClient")
         return req
     }
 
@@ -398,24 +396,24 @@ final class EmergentAPIClient: ObservableObject {
             let (data, response) = try await session.data(for: request)
             let elapsed = Int(Date().timeIntervalSince(start) * 1000)
             if let http = response as? HTTPURLResponse {
-                logger.info("APIClient: \(request.httpMethod ?? "?", privacy: .public) \(urlStr, privacy: .public) → \(http.statusCode) (\(elapsed)ms)")
+                logInfo("APIClient: \(request.httpMethod ?? "?") \(urlStr) → \(http.statusCode) (\(elapsed)ms)", category: "APIClient")
                 switch http.statusCode {
                 case 200...299: return data
                 case 401, 403:
                     let body = String(data: data, encoding: .utf8) ?? ""
-                    logger.error("APIClient: unauthorized for \(urlStr, privacy: .public) — \(body, privacy: .public)")
+                    logError("APIClient: unauthorized for \(urlStr) — \(body)", category: "APIClient")
                     throw EmergentAPIError.unauthorized
                 case 404:
                     let body = String(data: data, encoding: .utf8) ?? ""
-                    logger.error("APIClient: not found: \(urlStr, privacy: .public) — \(body, privacy: .public)")
+                    logError("APIClient: not found: \(urlStr) — \(body)", category: "APIClient")
                     throw EmergentAPIError.notFound(request.url?.path ?? "")
                 case 500...599:
                     let body = String(data: data, encoding: .utf8) ?? ""
-                    logger.error("APIClient: server error \(http.statusCode) for \(urlStr, privacy: .public) — \(body, privacy: .public)")
+                    logError("APIClient: server error \(http.statusCode) for \(urlStr) — \(body)", category: "APIClient")
                     throw EmergentAPIError.serverError(http.statusCode)
                 default:
                     let body = String(data: data, encoding: .utf8) ?? ""
-                    logger.error("APIClient: HTTP \(http.statusCode) for \(urlStr, privacy: .public) — \(body, privacy: .public)")
+                    logError("APIClient: HTTP \(http.statusCode) for \(urlStr) — \(body)", category: "APIClient")
                     throw EmergentAPIError.httpError(http.statusCode)
                 }
             }
@@ -423,7 +421,7 @@ final class EmergentAPIClient: ObservableObject {
         } catch let e as EmergentAPIError {
             throw e
         } catch {
-            logger.error("APIClient: network error for \(urlStr, privacy: .public) — \(error.localizedDescription, privacy: .public)")
+            logError("APIClient: network error for \(urlStr) — \(error.localizedDescription)", category: "APIClient")
             throw EmergentAPIError.network(error.localizedDescription)
         }
     }
@@ -433,7 +431,7 @@ final class EmergentAPIClient: ObservableObject {
             return try JSONDecoder().decode(type, from: data)
         } catch {
             let raw = String(data: data, encoding: .utf8) ?? "<non-UTF8 body>"
-            logger.error("APIClient: decoding \(String(describing: type), privacy: .public) failed — \(error.localizedDescription, privacy: .public) — raw: \(raw, privacy: .public)")
+            logError("APIClient: decoding \(String(describing: type)) failed — \(error.localizedDescription) — raw: \(raw)", category: "APIClient")
             throw EmergentAPIError.decodingFailed(error.localizedDescription)
         }
     }

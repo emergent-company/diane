@@ -31,7 +31,7 @@ struct CalendarView: View {
         .navigationTitle("Calendar")
         .task {
             if #available(macOS 14.0, *) {
-                if manager.authorizationStatus == .authorized || manager.authorizationStatus == .fullAccess {
+                if manager.authorizationStatus == .fullAccess {
                     manager.refreshCalendars()
                     await loadEvents()
                 }

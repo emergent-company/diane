@@ -58,7 +58,7 @@ struct RemindersView: View {
     @MainActor
     private func loadIfAuthorized() async {
         if #available(macOS 14.0, *) {
-            guard manager.authorizationStatus == .authorized || manager.authorizationStatus == .fullAccess else { return }
+            guard manager.authorizationStatus == .fullAccess else { return }
         } else {
             guard manager.authorizationStatus == .authorized else { return }
         }
@@ -78,7 +78,7 @@ struct RemindersView: View {
     @ViewBuilder
     private var listSidebar: some View {
         listSidebarContent
-            .onChange(of: selectedList) { _ in
+            .onChange(of: selectedList) { _, _ in
                 Task { await loadReminders() }
             }
     }
@@ -112,7 +112,7 @@ struct RemindersView: View {
             HStack(spacing: 8) {
                 Image(systemName: "list.bullet")
                     .font(.caption)
-                    .foregroundStyle(Color(cgColor: list.color.cgColor ?? NSColor.labelColor.cgColor))
+                    .foregroundStyle(Color(cgColor: list.color.cgColor))
                 Text(list.title)
                     .font(.subheadline)
                     .lineLimit(1)

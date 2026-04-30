@@ -1,10 +1,8 @@
 import Foundation
 import AppKit
-import OSLog
 
 @MainActor
 final class UpdateChecker: ObservableObject {
-    private let logger = Logger(subsystem: "com.emergent-company.diane-companion", category: "Updates")
     @Published private(set) var updateAvailable = false
     @Published private(set) var currentVersion: String?
     @Published private(set) var latestVersion: String?
@@ -44,7 +42,7 @@ final class UpdateChecker: ObservableObject {
     }
 
     func checkForUpdates() async {
-        logger.debug("UpdateChecker: Starting checkForUpdates")
+        logDebug("UpdateChecker: Starting checkForUpdates", category: "Updates")
         isChecking = true
         defer { isChecking = false }
 
@@ -57,11 +55,11 @@ final class UpdateChecker: ObservableObject {
 
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else {
-                logger.error("UpdateChecker: Did not receive a valid HTTP response.")
+                logError("UpdateChecker: Did not receive a valid HTTP response.", category: "Updates")
                 return
             }
             guard http.statusCode == 200 else {
-                logger.error("UpdateChecker: GitHub API call failed with status code \(http.statusCode).")
+                logError("UpdateChecker: GitHub API call failed with status code \(http.statusCode).", category: "Updates")
                 return
             }
 
@@ -73,17 +71,17 @@ final class UpdateChecker: ObservableObject {
 
             if installed == "unknown" || installed == "dev" {
                 updateAvailable = true
-                logger.info("UpdateChecker: Update available (installed version \(installed) is dev/unknown).")
+                logInfo("UpdateChecker: Update available (installed version \(installed) is dev/unknown).", category: "Updates")
             } else {
                 updateAvailable = isOlderVersion(installed, than: release.tagName)
                 if updateAvailable {
-                    logger.info("UpdateChecker: Update available: \(installed) -> \(release.tagName).")
+                    logInfo("UpdateChecker: Update available: \(installed) -> \(release.tagName).", category: "Updates")
                 } else {
-                    logger.info("UpdateChecker: No update available. Current version: \(installed).")
+                    logInfo("UpdateChecker: No update available. Current version: \(installed).", category: "Updates")
                 }
             }
         } catch {
-            logger.debug("UpdateChecker: checkForUpdates failed: \(error.localizedDescription)")
+            logDebug("UpdateChecker: checkForUpdates failed: \(error.localizedDescription)", category: "Updates")
         }
     }
 
@@ -91,14 +89,14 @@ final class UpdateChecker: ObservableObject {
     func performUpdate() {
         guard !isUpdating else { return }
         guard let release = releaseData else {
-            logger.error("UpdateChecker: No release data available")
+            logError("UpdateChecker: No release data available", category: "Updates")
             return
         }
 
         // Find DMG asset
         guard let dmgAsset = release.assets?.first(where: { $0.name.hasSuffix(".dmg") && $0.name.hasPrefix("Diane-") }),
               let dmgURL = URL(string: dmgAsset.browserDownloadUrl) else {
-            logger.error("UpdateChecker: No DMG asset found in release")
+            logError("UpdateChecker: No DMG asset found in release", category: "Updates")
             // Fallback: open release page
             if let url = URL(string: release.htmlUrl) {
                 NSWorkspace.shared.open(url)
@@ -118,7 +116,7 @@ final class UpdateChecker: ObservableObject {
     private func performDMGUpdate(dmgURL: URL, version: String) async {
         isUpdating = true
         updateOutput = "Downloading \(version)…"
-        logger.info("UpdateChecker: Starting DMG download from \(dmgURL)")
+        logInfo("UpdateChecker: Starting DMG download from \(dmgURL)", category: "Updates")
 
         do {
             // Step 1: Download DMG to temp directory
@@ -130,7 +128,7 @@ final class UpdateChecker: ObservableObject {
 
             let (_, _) = try await downloadWithProgress(from: dmgURL, to: dmgPath)
             updateOutput = "Download complete. Installing…"
-            logger.info("UpdateChecker: DMG downloaded to \(dmgPath.path)")
+            logInfo("UpdateChecker: DMG downloaded to \(dmgPath.path)", category: "Updates")
 
             // Step 2: Mount DMG to find the .app name
             let mountPoint = tempDir.appendingPathComponent("diane-update-mount")
@@ -174,7 +172,7 @@ rm -f "\(scriptPath.path)"
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptPath.path)
 
             updateOutput = "Installing… (will relaunch)"
-            logger.info("UpdateChecker: Launching post-termination installer script")
+            logInfo("UpdateChecker: Launching post-termination installer script", category: "Updates")
 
             // Step 4: Launch installer script as a truly detached background process
             let installer = Process()
@@ -185,13 +183,13 @@ rm -f "\(scriptPath.path)"
             try installer.run()
 
             // Step 5: This process must terminate NOW so macOS lets us replace the bundle
-            logger.info("UpdateChecker: Terminating for update")
+            logInfo("UpdateChecker: Terminating for update", category: "Updates")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 NSApplication.shared.terminate(nil)
             }
 
         } catch {
-            logger.error("UpdateChecker: Update failed: \(error.localizedDescription)")
+            logError("UpdateChecker: Update failed: \(error.localizedDescription)", category: "Updates")
             updateOutput = "Update failed: \(error.localizedDescription)"
             isUpdating = false
 

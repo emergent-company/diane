@@ -1,5 +1,4 @@
 import Foundation
-import OSLog
 
 /// File-based logger for the Diane Companion app.
 ///
@@ -71,15 +70,6 @@ final class AppLogger: @unchecked Sendable {
     private func write(level: Level, message: String, category: String) {
         let timestamp = ISO8601DateFormatter().string(from: Date())
         let line = "\(timestamp) [\(level.rawValue)] [\(category)] \(message)"
-
-        // Always log to OSLog (unified logging) for Console.app
-        let osLogger = Logger(subsystem: "com.emergent-company.diane-companion", category: category)
-        switch level {
-        case .debug:   osLogger.debug("\(message)")
-        case .info:    osLogger.info("\(message)")
-        case .warning: osLogger.warning("\(message)")
-        case .error:   osLogger.error("\(message)")
-        }
 
         // Write to file asynchronously
         logQueue.async { [self] in

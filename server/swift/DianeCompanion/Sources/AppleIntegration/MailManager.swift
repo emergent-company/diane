@@ -1,10 +1,8 @@
 import Foundation
-import OSLog
 
 /// Manages Apple Mail via AppleScript.
 @MainActor
 final class MailManager: ObservableObject {
-    private let logger = Logger(subsystem: "com.emergent-company.diane-companion", category: "Mail")
 
     @Published private(set) var isAuthorized = false
 
@@ -36,7 +34,7 @@ final class MailManager: ObservableObject {
         end tell
         """
         try await AppleScriptRunner.run(script)
-        logger.info("Sent email to \(to)")
+        logInfo("Sent email to \(to)", category: "Mail")
     }
 
     /// Fetch recent inbox messages summary.

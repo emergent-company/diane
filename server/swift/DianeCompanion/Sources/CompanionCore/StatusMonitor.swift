@@ -1,5 +1,4 @@
 import Foundation
-import OSLog
 
 /// Polls both the local Diane API and remote Memory Platform and publishes connection state.
 /// Uses a fixed 30-second polling interval.

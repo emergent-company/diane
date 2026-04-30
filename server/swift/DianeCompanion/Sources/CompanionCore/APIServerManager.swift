@@ -1,5 +1,4 @@
 import Foundation
-import OSLog
 
 /// Manages the `diane serve --api-port 8890` process lifecycle.
 ///
@@ -12,7 +11,6 @@ import OSLog
 /// and survives SSH disconnects, reboots, and crashes.
 @MainActor
 final class APIServerManager: ObservableObject {
-    private let logger = Logger(subsystem: "com.emergent-company.diane-companion", category: "APIServer")
 
     @Published private(set) var isRunning = false
     @Published private(set) var lastError: String?
@@ -72,7 +70,7 @@ final class APIServerManager: ObservableObject {
         if usingLaunchd {
             stopLaunchd()
         } else if let proc = process, proc.isRunning {
-            logger.info("Stopping diane serve process (PID \(proc.processIdentifier))")
+            logInfo("Stopping diane serve process (PID \(proc.processIdentifier))", category: "APIServer")
             proc.terminate()
         }
         process = nil
@@ -245,9 +243,9 @@ final class APIServerManager: ObservableObject {
         do {
             try proc.run()
             proc.waitUntilExit()
-            logger.info("launchd service booted out")
+            logInfo("launchd service booted out", category: "APIServer")
         } catch {
-            logger.warning("Failed to bootout launchd service: \(error.localizedDescription)")
+            logWarning("Failed to bootout launchd service: \(error.localizedDescription)", category: "APIServer")
         }
     }
 
