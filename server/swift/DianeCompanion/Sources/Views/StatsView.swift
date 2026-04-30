@@ -8,6 +8,7 @@ struct StatsView: View {
     @State private var stats: AgentStatsResponse? = nil
     @State private var providerStats: ProviderStatsResponse? = nil
     @State private var projectProviders: [ProjectProviderInfo]? = nil
+    @State private var graphObjectStats: GraphObjectStatsResponse? = nil
     @State private var serverStatus: DianeAPIClient.ServerStatus? = nil
     @State private var isLoading = false
     @State private var error: String? = nil
@@ -42,6 +43,10 @@ struct StatsView: View {
                 } else {
                     if let s = stats {
                         summaryCardsSection(totals: s.totals)
+                    }
+
+                    if let gs = graphObjectStats {
+                        graphObjectsSection(gs)
                     }
 
                     if let pp = projectProviders, !pp.isEmpty {
@@ -173,6 +178,41 @@ struct StatsView: View {
                 icon: "dollarsign.circle.fill",
                 color: .yellow
             )
+        }
+    }
+
+    // MARK: - Graph Objects
+
+    private func graphObjectsSection(_ gs: GraphObjectStatsResponse) -> some View {
+        VStack(alignment: .leading, spacing: Design.Spacing.sm) {
+            HStack {
+                Image(systemName: "square.stack.3d.up.fill")
+                    .foregroundStyle(.cyan)
+                Text("Graph Objects")
+                    .font(.headline)
+                Spacer()
+                Text("\(gs.total) total")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.top, Design.Spacing.sm)
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 140, maximum: 180), spacing: Design.Spacing.md)], spacing: Design.Spacing.md) {
+                ForEach(gs.byType) { tc in
+                    VStack(spacing: Design.Spacing.xxs) {
+                        Text("\(tc.count)")
+                            .font(.title3)
+                            .fontWeight(.semibold)
+                        Text(tc.typeName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, Design.Spacing.sm)
+                    .cardStyle(cornerRadius: Design.CornerRadius.medium)
+                }
+            }
         }
     }
 
@@ -366,11 +406,13 @@ struct StatsView: View {
             async let statsTask = dianeAPI.fetchAgentStats(hours: selectedHours)
             async let providersTask = dianeAPI.fetchProviderStats(hours: selectedHours)
             async let projectTask = dianeAPI.fetchProjectProviders()
-            let (st, s, p, pp) = try await (statusTask, statsTask, providersTask, projectTask)
+            async let graphTask = dianeAPI.fetchGraphObjectStats()
+            let (st, s, p, pp, gs) = try await (statusTask, statsTask, providersTask, projectTask, graphTask)
             serverStatus = st
             stats = s
             providerStats = p
             projectProviders = pp
+            graphObjectStats = gs
         } catch {
             self.error = error.localizedDescription
         }
