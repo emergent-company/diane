@@ -531,8 +531,158 @@ func (b *Bridge) GetProjectRunFull(ctx context.Context, runID string) (*sdkagent
 
 // GetProjectRunStats returns aggregate analytics for agent runs over a period
 // (overview, per-agent, top errors, tool stats, time series).
+// Falls back to local aggregation from ListProjectRuns when the MP stats
+// endpoint returns 0 runs but runs actually exist.
 func (b *Bridge) GetProjectRunStats(ctx context.Context, opts *sdkagentrun.RunStatsOptions) (*sdkagentrun.APIResponse[sdkagentrun.RunStats], error) {
-	return b.client.Agents.GetProjectRunStats(ctx, b.projectID, opts)
+	resp, err := b.client.Agents.GetProjectRunStats(ctx, b.projectID, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	// If the MP stats endpoint returns data, use it directly
+	if resp != nil && resp.Data.Overview.TotalRuns > 0 {
+		return resp, nil
+	}
+
+	// Fallback: aggregate from ListProjectRuns when stats endpoint returns 0
+	// but runs actually exist (known MP API issue).
+	runs, listErr := b.client.Agents.ListProjectRuns(ctx, b.projectID, &sdkagentrun.ListRunsOptions{
+		Limit: 500,
+	})
+	if listErr != nil || runs == nil || len(runs.Data.Items) == 0 {
+		// No runs at all — return the original (empty) response
+		return resp, nil
+	}
+
+	return b.aggregateRunStats(runs.Data.Items, opts), nil
+}
+
+// aggregateRunStats converts a slice of AgentRun records into a RunStats
+// response, grouped by agent. Used as fallback when the MP stats API
+// returns empty results.
+func (b *Bridge) aggregateRunStats(runs []sdkagentrun.AgentRun, opts *sdkagentrun.RunStatsOptions) *sdkagentrun.APIResponse[sdkagentrun.RunStats] {
+	// Filter by time window if specified
+	var since time.Time
+	if opts != nil && opts.Since != nil {
+		since = *opts.Since
+	}
+
+	type agentAccum struct {
+		total       int64
+		success     int64
+		failed      int64
+		errored     int64
+		totalDurMs  float64
+		totalCost   float64
+		totalInput  float64
+		totalOutput float64
+	}
+
+	byAgent := make(map[string]*agentAccum)
+	var totalRuns, successCount, failedCount, errorCount int64
+	var totalDurationMs, totalCostUsd float64
+
+	for _, r := range runs {
+		if !since.IsZero() && r.StartedAt.Before(since) {
+			continue
+		}
+
+		// Determine agent key — use AgentName if available, fall back to AgentID
+		agentKey := r.AgentID
+		if r.AgentName != "" {
+			agentKey = r.AgentName
+		}
+
+		a, ok := byAgent[agentKey]
+		if !ok {
+			a = &agentAccum{}
+			byAgent[agentKey] = a
+		}
+
+		a.total++
+		totalRuns++
+
+		var durMs float64
+		if r.DurationMs != nil {
+			durMs = float64(*r.DurationMs)
+		}
+
+		switch r.Status {
+		case "success":
+			a.success++
+			successCount++
+		case "failed":
+			a.failed++
+			failedCount++
+		case "error", "errored":
+			a.errored++
+			errorCount++
+		default:
+			// Treat unknown as errored for stats purposes
+			a.errored++
+			errorCount++
+		}
+
+		a.totalDurMs += durMs
+		totalDurationMs += durMs
+
+		if r.TokenUsage != nil {
+			a.totalInput += float64(r.TokenUsage.TotalInputTokens)
+			a.totalOutput += float64(r.TokenUsage.TotalOutputTokens)
+			a.totalCost += r.TokenUsage.EstimatedCostUSD
+			totalCostUsd += r.TokenUsage.EstimatedCostUSD
+		}
+	}
+
+	// Build per-agent stats
+	byAgentStats := make(map[string]sdkagentrun.RunStatsAgent, len(byAgent))
+	for key, a := range byAgent {
+		var avgDur, avgCost, avgInput, avgOutput float64
+		if a.total > 0 {
+			avgDur = a.totalDurMs / float64(a.total)
+			avgCost = a.totalCost / float64(a.total)
+			avgInput = a.totalInput / float64(a.total)
+			avgOutput = a.totalOutput / float64(a.total)
+		}
+		byAgentStats[key] = sdkagentrun.RunStatsAgent{
+			Total:           a.total,
+			Success:         a.success,
+			Failed:          a.failed,
+			Errored:         a.errored,
+			AvgDurationMs:   avgDur,
+			AvgCostUSD:      avgCost,
+			TotalCostUSD:    a.totalCost,
+			AvgInputTokens:  avgInput,
+			AvgOutputTokens: avgOutput,
+		}
+	}
+
+	// Compute overall averages
+	var overallAvgDur, successRate float64
+	if totalRuns > 0 {
+		overallAvgDur = totalDurationMs / float64(totalRuns)
+		successRate = float64(successCount) / float64(totalRuns) * 100
+	}
+
+	return &sdkagentrun.APIResponse[sdkagentrun.RunStats]{
+		Success: true,
+		Data: sdkagentrun.RunStats{
+			Overview: sdkagentrun.RunStatsOverview{
+				TotalRuns:     totalRuns,
+				SuccessCount:  successCount,
+				FailedCount:   failedCount,
+				ErrorCount:    errorCount,
+				SuccessRate:   successRate,
+				AvgDurationMs: overallAvgDur,
+				TotalCostUSD:  totalCostUsd,
+			},
+			ByAgent: byAgentStats,
+			Period: sdkagentrun.RunStatsPeriod{
+				Since: time.Now().Add(-24 * time.Hour),
+				Until: time.Now(),
+			},
+		},
+	}
 }
 
 // GetProjectRunSessionStats returns session-level analytics — runs grouped by

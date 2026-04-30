@@ -10,7 +10,7 @@ struct StatsView: View {
     @State private var projectProviders: [ProjectProviderInfo]? = nil
     @State private var isLoading = false
     @State private var error: String? = nil
-    @State private var selectedHours: Int = 24
+    @State private var selectedHours: Int = 168
 
     private let hourOptions = [(24, "24h"), (168, "7d"), (720, "30d")]
 
