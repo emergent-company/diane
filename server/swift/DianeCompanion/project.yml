@@ -2,7 +2,7 @@ name: Diane
 options:
   bundleIdPrefix: com.emergent-company
   deploymentTarget:
-    macOS: "14.0"
+    macOS: "15.0"
   xcodeVersion: "26.0"
   generateEmptyDirectories: true
   indentWidth: 4
@@ -11,7 +11,7 @@ options:
 settings:
     base:
         SWIFT_VERSION: "6.0"
-        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        MACOSX_DEPLOYMENT_TARGET: "15.0"
         PRODUCT_BUNDLE_IDENTIFIER: com.emergent-company.diane-companion
         DEVELOPMENT_TEAM: ""
         CODE_SIGN_STYLE: Automatic
@@ -26,7 +26,7 @@ targets:
   Diane:
     type: application
     platform: macOS
-    deploymentTarget: "14.0"
+    deploymentTarget: "15.0"
     sources:
       - path: Sources
         excludes:
@@ -78,7 +78,7 @@ targets:
   DianeTests:
     type: bundle.unit-test
     platform: macOS
-    deploymentTarget: "14.0"
+    deploymentTarget: "15.0"
     sources:
       - path: DianeTests
     dependencies:
