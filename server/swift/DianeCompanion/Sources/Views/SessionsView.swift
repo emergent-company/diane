@@ -261,6 +261,11 @@ struct SessionsView: View {
             .padding(.top, 12)
             .padding(.bottom, 8)
 
+            // Session ID + Agent info row
+            sessionMetaRow(session)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+
             // Stats bar
             if let detail = sessionDetail {
                 statsBar(detail)
@@ -279,6 +284,61 @@ struct SessionsView: View {
             }
         }
         .background(Color.primary.opacity(0.04))
+    }
+
+    /// Session metadata row — truncated session ID and agent name badges.
+    @ViewBuilder
+    private func sessionMetaRow(_ session: DianeSession) -> some View {
+        HStack(spacing: 12) {
+            // Session ID — truncated with full ID in tooltip
+            HStack(spacing: 4) {
+                Image(systemName: "number")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+                Text(sessionIDShortForm(session.id))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .help(session.id)
+            }
+
+            // Agent name from run aggregates
+            if let detail = sessionDetail, let names = detail.aggregates?.agentNames, !names.isEmpty {
+                HStack(spacing: 4) {
+                    Image(systemName: "brain.head.profile")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                    ForEach(names, id: \.self) { name in
+                        Text(agentShortName(name))
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.primary.opacity(0.06))
+                            .cornerRadius(3)
+                    }
+                }
+            }
+
+            Spacer()
+        }
+    }
+
+    /// Truncate a long session ID to a compact short form.
+    private func sessionIDShortForm(_ id: String) -> String {
+        if id.count <= 16 { return id }
+        let prefix = id.prefix(8)
+        let suffix = id.suffix(4)
+        return "\(prefix)...\(suffix)"
+    }
+
+    /// Strip common prefixes from agent names for compact display.
+    private func agentShortName(_ name: String) -> String {
+        for prefix in ["discord-", "diane-", "agent-"] {
+            if name.hasPrefix(prefix) {
+                return String(name.dropFirst(prefix.count))
+            }
+        }
+        return name
     }
 
     @ViewBuilder

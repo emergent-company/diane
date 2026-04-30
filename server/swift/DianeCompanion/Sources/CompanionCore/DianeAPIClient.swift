@@ -86,6 +86,36 @@ final class DianeAPIClient: ObservableObject {
         return try JSONDecoder().decode(SessionDetailResponse.self, from: data)
     }
 
+    // MARK: - Chat Send
+
+    /// Send a chat message and wait for the full agent response via the agent pipeline.
+    func sendChatMessage(sessionID: String?, content: String, agentName: String = "diane-default") async throws -> ChatSendResponse {
+        let body: [String: Any] = [
+            "session_id": sessionID as Any,
+            "content": content,
+            "agent_name": agentName
+        ]
+        let jsonData = try JSONSerialization.data(withJSONObject: body)
+        let data = try await post("/api/chat/send", body: jsonData, timeout: 180)
+        return try JSONDecoder().decode(ChatSendResponse.self, from: data)
+    }
+
+    // MARK: - Session Write
+
+    func createSession(title: String? = nil) async throws -> DianeSession {
+        var body: Data? = nil
+        if let t = title {
+            body = try JSONEncoder().encode(["title": t])
+        }
+        let data = try await post("/api/sessions", body: body)
+        return try JSONDecoder().decode(DianeSession.self, from: data)
+    }
+
+    func closeSession(sessionID: String) async throws {
+        let encoded = sessionID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionID
+        _ = try await delete("/api/sessions/\(encoded)")
+    }
+
     // MARK: - MCP Servers
 
     func fetchMCPServers() async throws -> [MCPServer] {
