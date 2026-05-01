@@ -654,6 +654,11 @@ After creating entities, wire relationships between them:
 - Place ──located_at──→ entity (meeting location)
 - Entity ──has_task──→ Task (follow-ups spawned by this entity)
 
+After wiring entities to each other, also wire provenance edges back to sources:
+- MemoryFact ──yields──→ Entity (for each entity extracted from a MemoryFact)
+- Session ──mentions──→ Entity (for each entity extracted from a session)
+- Use the memory_fact_id or session_id you tracked as the source_id
+
 Use entity-edges-create(source_id, target_id, relationship_name).
 
 ## 7. TRACK
