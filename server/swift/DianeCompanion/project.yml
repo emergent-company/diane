@@ -51,12 +51,21 @@ targets:
           CODE_SIGN_IDENTITY: "Apple Distribution"
     postbuildScripts:
       - script: |
-          # Download diane CLI for current architecture (skip if already present from CI)
+          # Bundle diane CLI binary into the app bundle's Resources directory.
+          # CI places the binary at SRCROOT/Resources/diane before building; local
+          # builds fall back to downloading the latest release binary.
           ARCH=$(uname -m)
           RESOURCES="${TARGET_BUILD_DIR}/${PRODUCT_NAME}.app/Contents/Resources"
           mkdir -p "$RESOURCES"
-          if [ -f "${RESOURCES}/diane" ] && [ -s "${RESOURCES}/diane" ]; then
-            echo "diane binary already present (size: $(stat -f%z "${RESOURCES}/diane")) — skipping download"
+
+          # Prefer CI-provided binary from source Resources/ (correct version for this build)
+          if [ -f "${SRCROOT}/Resources/diane" ] && [ -s "${SRCROOT}/Resources/diane" ]; then
+            echo "diane binary found in source Resources/ (CI) — copying to build output"
+            cp "${SRCROOT}/Resources/diane" "${RESOURCES}/diane"
+            chmod +x "${RESOURCES}/diane"
+          # Next, check if already in build output (e.g. re-run)
+          elif [ -f "${RESOURCES}/diane" ] && [ -s "${RESOURCES}/diane" ]; then
+            echo "diane binary already present in build output (size: $(stat -f%z "${RESOURCES}/diane")) — skipping"
             chmod +x "${RESOURCES}/diane"
           else
             if [ "$ARCH" = "arm64" ]; then
