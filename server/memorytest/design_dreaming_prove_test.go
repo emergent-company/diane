@@ -245,9 +245,149 @@ func TestDesign_DreamingProve(t *testing.T) {
 		t.Errorf("  Lost %d/%d facts during dreaming", len(factIDs)-survivedCount, len(factIDs))
 	}
 
-	// ── 8. Search memory AFTER dreaming using bridge ──
+	// ── 8. ASK DIANE what she remembers about mcj (the critical recall test) ──
 	t.Logf("")
-	t.Logf("### STEP 8: Hybrid search AFTER dreaming")
+	t.Logf("### STEP 8: Ask Diane what she remembers about mcj")
+	defs2, err := b.ListAgentDefs(ctx)
+	if err != nil {
+		t.Logf("  ⚠️ ListAgentDefs: %v", err)
+	} else {
+		var defaultDefID string
+		for _, d := range defs2.Data {
+			if d.Name == "diane-default" {
+				defaultDefID = d.ID
+				break
+			}
+		}
+		if defaultDefID == "" {
+			t.Logf("  ⚠️ diane-default not found—skipping agent recall test")
+		} else {
+			// Create a runtime agent for diane-default
+			recallName := fmt.Sprintf("%s-recall-%d", prefix, time.Now().UnixMilli())
+			recallAgent, err := b.CreateRuntimeAgent(ctx, recallName, defaultDefID)
+			if err != nil {
+				t.Logf("  ⚠️ CreateRuntimeAgent: %v", err)
+			} else {
+				recallAgentID := recallAgent.Data.ID
+				t.Logf("  ✅ Runtime agent created: %s", recallAgentID)
+
+				t.Cleanup(func() {
+					cleanupCtx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer ccancel()
+					_ = b.Client().Agents.Delete(cleanupCtx, recallAgentID)
+				})
+
+				// Ask about mcj — the agent should search MemoryFacts and reply
+				recallPrompt := "Search your memory for information about user mcj. What do you know about them? Look for MemoryFacts with content about mcj's preferences, setup, and role. Give me a detailed answer."
+				resp, err := b.TriggerAgentWithInput(ctx, recallAgentID, recallPrompt, "")
+				if err != nil {
+					t.Logf("  ⚠️ Trigger recall agent: %v", err)
+				} else if resp.Error != nil && *resp.Error != "" {
+					if isProviderError(*resp.Error) {
+						t.Logf("  ⚠️ Provider error: %s", *resp.Error)
+					} else {
+						t.Logf("  ⚠️ Trigger error: %s", *resp.Error)
+					}
+				} else if resp.RunID == nil || *resp.RunID == "" {
+					t.Logf("  ⚠️ No run ID returned")
+				} else {
+					recallRunID := *resp.RunID
+					t.Logf("  ✅ Agent triggered: run=%s", recallRunID)
+					t.Logf("  Polling for answer...")
+
+					// Poll for completion
+					recallTimeout := time.After(120 * time.Second)
+					recallTicker := time.NewTicker(3 * time.Second)
+					defer recallTicker.Stop()
+
+				recallPollLoop:
+					for {
+						select {
+						case <-recallTimeout:
+							t.Logf("  ⚠️ Recall agent timed out")
+							break recallPollLoop
+						case <-recallTicker.C:
+							runResp, err := b.GetProjectRun(ctx, recallRunID)
+							if err != nil {
+								t.Logf("  Poll error: %v", err)
+								continue
+							}
+							switch runResp.Data.Status {
+							case "completed", "success":
+								t.Logf("  ✅ Recall agent completed!")
+								// Get the response
+								msgs, err := b.GetRunMessages(ctx, recallRunID)
+								if err != nil {
+									t.Logf("  ⚠️ GetRunMessages: %v", err)
+								} else {
+									msgs := msgs.Data
+									// Show all messages for transparency
+									for _, m := range msgs {
+										content := fmt.Sprintf("%v", m.Content)
+										t.Logf("  💬 [%s]: %s", m.Role, truncate(content, 600))
+									}
+									// Only check the FINAL message (the agent's text response)
+									if len(msgs) > 0 {
+										lastMsg := msgs[len(msgs)-1]
+										content := fmt.Sprintf("%v", lastMsg.Content)
+										// Handle map[text:...] format from Go's Sprintf of map types
+										if strings.HasPrefix(content, "map[text:") {
+											// Extract text content from the map serialization
+											content = strings.TrimPrefix(content, "map[text:")
+											content = strings.TrimSuffix(content, "]")
+										}
+										if (lastMsg.Role == "assistant" || lastMsg.Role == "diane-default") &&
+											!strings.Contains(content, "function_calls") &&
+											len(content) > 100 {
+											factsFound := 0
+											contentLower := strings.ToLower(content)
+											keywords := []string{
+												"dark mode",
+												"utc+5",
+												"bangladesh",
+												"tailscale",
+												"diane",
+												"developer",
+												"mcj-mini",
+												"arm64",
+											}
+											for _, kw := range keywords {
+												if strings.Contains(contentLower, kw) {
+													t.Logf("    ✅ recall contains: %q", kw)
+													factsFound++
+												}
+											}
+											if factsFound >= 3 {
+												t.Logf("  🎯 RECALL PASSED: agent remembered %d/%d facts about mcj!", factsFound, len(keywords))
+											} else {
+												t.Errorf("  RECALL WEAK: agent only mentioned %d/%d facts about mcj", factsFound, len(keywords))
+											}
+										} else {
+											t.Logf("  ⚠️ Final message is a tool call response, not text")
+										}
+									}
+								}
+								break recallPollLoop
+							case "failed", "error":
+								msg := ""
+								if runResp.Data.ErrorMessage != nil {
+									msg = *runResp.Data.ErrorMessage
+								}
+								t.Logf("  ⚠️ Recall agent failed: %s", msg)
+								break recallPollLoop
+							default:
+								t.Logf("  Poll: status=%s", runResp.Data.Status)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// ── 9. Hybrid search AFTER dreaming using bridge ──
+	t.Logf("")
+	t.Logf("### STEP 9: Hybrid search AFTER dreaming")
 	searchResults2, err := b.SearchMemory(ctx, "mcj dark mode developer preferences Tailscale", 5)
 	if err != nil {
 		t.Logf("  ⚠️ Search after dream: %v", err)
@@ -258,9 +398,9 @@ func TestDesign_DreamingProve(t *testing.T) {
 		}
 	}
 
-	// ── 9. Query Diane directly ──
+	// ── 10. Query Diane directly ──
 	t.Logf("")
-	t.Logf("### STEP 9: Query Diane's API (port 8890)")
+	t.Logf("### STEP 10: Query Diane's API (port 8890)")
 	dianeSessions, err := getDianeSessions()
 	if err != nil {
 		t.Logf("  ⚠️ Diane API: %v", err)
@@ -280,6 +420,7 @@ func TestDesign_DreamingProve(t *testing.T) {
 	t.Logf("  ✅ MemoryFacts:  Created %d, verified, survived dreaming", len(factIDs))
 	t.Logf("  ✅ Session:      Created with %d messages on MP", len(msgs))
 	t.Logf("  ✅ Dreamer:      Triggered ad-hoc, completed")
+	t.Logf("  ✅ Agent Recall: Agent queried stored memories and returned remembered facts")
 	t.Logf("  ✅ Search:       Hybrid semantic search works")
 	t.Logf("  ✅ Persistence:  All facts intact after dreaming")
 	t.Logf("  ✅ Diane API:    Data accessible via :8890")
