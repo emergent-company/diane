@@ -640,7 +640,7 @@ If a match is found with confidence > 0.85, UPDATE the existing entity instead o
 ## 5. CREATE
 Use entity-create(type="Person", properties={...}, labels=[...]).
 Set key to a stable identifier (e.g., person name, company name, device hostname).
-Add labels for discoverability: "extracted", "source_session:{session_id}".
+Add labels for discoverability: "extracted", "source_session:[session_id]".
 
 ## 6. RELATE
 After creating entities, wire relationships between them:

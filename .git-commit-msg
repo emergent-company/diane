@@ -1,0 +1,10 @@
+feat: enrich schema view with object counts, detail view, and top-5 graph types
+
+- Add GetObjectCountsForSchema, ListRecentObjectsByType, CountObjectsByType to bridge
+- Enrich /api/schema with per-type object_count and relationship_count
+- Add GET /api/schema/objects/{typeName} for browsing recent objects
+- Update /api/stats/objects to use all schema types (not just 5 hardcoded)
+- Redesign SchemaView: uniform cards, counts on cards, no inline properties
+- Remove standalone relationships section from main schema view
+- Add SchemaTypeDetailView for browsing properties, relationships, objects
+- Add top-5 graph types section to StatsView
