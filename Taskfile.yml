@@ -146,7 +146,6 @@ tasks:
           echo "  3. git add -u && git commit -m \"$msg\""
           echo "  4. git push origin main"
           echo "  5. git tag $new_tag && git push origin $new_tag"
-          echo "  6. gh release create $new_tag --repo $repo --generate-notes --title \"$new_tag\""
           exit 0
         fi
 
@@ -200,16 +199,8 @@ tasks:
         git push origin "$new_tag"
         echo "✅ Tagged: $new_tag"
 
-        # ── step 5: GitHub release ──
-        if [ -f "$gh_hosts" ]; then
-          export GH_TOKEN=$(grep -A3 'oauth_token' "$gh_hosts" | head -1 | awk '{print $2}')
-        fi
-        if [ -n "${GH_TOKEN:-}" ]; then
-          gh release create "$new_tag" --repo "$repo" --generate-notes --title "$new_tag"
-          echo "✅ GitHub release: https://github.com/$repo/releases/tag/$new_tag"
-        else
-          echo "⚠️  No GH_TOKEN found — tag pushed but release not created. Run:"
-          echo "   gh release create $new_tag --repo $repo --generate-notes --title \"$new_tag\""
-        fi
+        # ── step 5: CI handles the release ──
+        echo "✅ Tag pushed — CI workflow will build assets and create the release:"
+        echo "   https://github.com/$repo/actions"
         echo ""
         echo "🎉 Release $new_tag complete"
