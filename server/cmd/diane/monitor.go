@@ -77,8 +77,8 @@ func cmdMonitor() {
 			fmt.Printf("%d session(s)\n", len(all))
 			for _, s := range all {
 				sessionID := s.SessionID
-				if len(sessionID) > 12 {
-					sessionID = sessionID[:12] + "..."
+				if len(sessionID) > 6 {
+					sessionID = sessionID[len(sessionID)-6:]
 				}
 				if sessionID == "" {
 					sessionID = "(pending)"

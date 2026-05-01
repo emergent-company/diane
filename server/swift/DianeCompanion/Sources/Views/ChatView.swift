@@ -72,9 +72,21 @@ struct ChatView: View {
                 .foregroundStyle(.blue)
 
             if let id = currentSessionID {
-                Text("Session: \(id.prefix(8))…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Text("Session: …\(id.suffix(6))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(id, forType: .string)
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.tertiary.opacity(0.6))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Copy session ID")
+                }
             }
 
             Spacer()

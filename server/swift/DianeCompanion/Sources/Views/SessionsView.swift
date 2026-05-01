@@ -286,7 +286,7 @@ struct SessionsView: View {
     @ViewBuilder
     private func sessionMetaRow(_ session: DianeSession) -> some View {
         HStack(spacing: 12) {
-            // Session ID — truncated with full ID in tooltip
+            // Session ID — short form with copy button, full ID in tooltip
             HStack(spacing: Design.Spacing.xs) {
                 Image(systemName: "number")
                     .font(.system(size: Design.IconSize.tiny))
@@ -295,6 +295,16 @@ struct SessionsView: View {
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.tertiary)
                     .help(session.id)
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(session.id, forType: .string)
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary.opacity(0.6))
+                }
+                .buttonStyle(.plain)
+                .help("Copy session ID")
             }
 
             // Agent name from run aggregates
@@ -319,12 +329,10 @@ struct SessionsView: View {
         }
     }
 
-    /// Truncate a long session ID to a compact short form.
+    /// Short form: last 6 characters of the session ID.
     private func sessionIDShortForm(_ id: String) -> String {
-        if id.count <= 16 { return id }
-        let prefix = id.prefix(8)
-        let suffix = id.suffix(4)
-        return "\(prefix)...\(suffix)"
+        if id.count <= 6 { return id }
+        return String(id.suffix(6))
     }
 
     /// Strip common prefixes from agent names for compact display.
