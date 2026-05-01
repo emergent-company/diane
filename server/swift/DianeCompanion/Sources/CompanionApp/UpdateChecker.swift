@@ -201,6 +201,15 @@ rm -f "\(scriptPath.path)"
             updateOutput = "Update failed: \(error.localizedDescription)"
             isUpdating = false
 
+            // Report update failure
+            reportError(
+                title: "Auto-update failed",
+                body: "Failed to download/install Diane update.\n\nError: \(error.localizedDescription)\nVersion: \(releaseData?.tagName ?? "?")",
+                severity: "medium",
+                category: "Updates",
+                labels: "update"
+            )
+
             // Fallback: open release page so user can manually install
             if let url = URL(string: releaseData?.htmlUrl ?? "https://github.com/\(repoOwner)/\(repoName)/releases/latest") {
                 NSWorkspace.shared.open(url)

@@ -312,8 +312,16 @@ final class APIServerManager: ObservableObject {
     /// Start diane serve as a direct child process (fallback when launchd is unavailable).
     private func startDirectProcess(dianeAPI: DianeAPIClient) async {
         guard let dianeURL = findDianeBinary() else {
-            lastError = "No diane binary found in app bundle, ~/.diane/bin/, or PATH"
-            AppLogger.shared.error(lastError!, category: "APIServer")
+            let msg = "No diane binary found in app bundle, ~/.diane/bin/, or PATH"
+            AppLogger.shared.error(msg, category: "APIServer")
+            lastError = msg
+            reportError(
+                title: "diane serve binary not found",
+                body: msg,
+                severity: "high",
+                category: "APIServer",
+                labels: "serve"
+            )
             return
         }
 
@@ -387,6 +395,17 @@ final class APIServerManager: ObservableObject {
                     AppLogger.shared.error(msg, category: "APIServer")
                     self.lastError = msg
                     self.isRunning = false
+
+                    // Report circuit breaker trip via ErrorReporter
+                    DispatchQueue.global().async {
+                        reportError(
+                            title: "diane serve crash loop",
+                            body: "The diane serve process crashed \(self.restartCount) times in \(Self.circuitBreakerWindow)s and auto-restart has been stopped.\n\nExit code: \(exitCode)",
+                            severity: "critical",
+                            category: "APIServer",
+                            labels: "serve"
+                        )
+                    }
                     return
                 }
 
@@ -417,6 +436,14 @@ final class APIServerManager: ObservableObject {
             AppLogger.shared.error(msg, category: "APIServer")
             lastError = msg
             isRunning = false
+
+            reportError(
+                title: "Failed to start diane serve",
+                body: msg,
+                severity: "high",
+                category: "APIServer",
+                labels: "serve"
+            )
         }
     }
 

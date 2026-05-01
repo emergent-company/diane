@@ -78,6 +78,9 @@ struct DianeCompanionApp: App {
 
         AppLogger.shared.info("App startup sequence beginning", category: "App")
 
+        // Send any crash reports from previous sessions
+        ErrorReporter.shared.sendPendingReports()
+
         updateChecker.statusMonitor = statusMonitor
         updateChecker.cliManager = cliManager
         statusMonitor.configure(from: serverConfig)
