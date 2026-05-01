@@ -13,6 +13,8 @@ struct ChatView: View {
     @State private var isSending = false
     @State private var isLoading = false
     @State private var error: String? = nil
+    @State private var agentDefs: [AgentDef] = []
+    @State private var selectedAgent: String = "diane-default"
 
     var body: some View {
         VStack(spacing: 0) {
@@ -58,28 +60,38 @@ struct ChatView: View {
             }
         }
         .task { await loadSessions() }
+        .task { await loadAgentDefs() }
     }
 
     // MARK: - Header
 
     private var headerBar: some View {
-        HStack {
+        HStack(spacing: 10) {
+            Image(systemName: "bubble.left.and.bubble.right.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(.blue)
+
             if let id = currentSessionID {
-                Image(systemName: "bubble.left.and.bubble.right.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.blue)
                 Text("Session: \(id.prefix(8))…")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            } else {
-                Image(systemName: "message")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                Text("No active session")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
+
             Spacer()
+
+            // Agent selector
+            if !agentDefs.isEmpty {
+                Picker("Agent", selection: $selectedAgent) {
+                    ForEach(agentDefs) { def in
+                        Text(def.name).tag(def.name)
+                    }
+                }
+                .pickerStyle(.menu)
+                .font(.caption)
+                .frame(width: 160)
+                .disabled(isSending)
+            }
+
             if isSending {
                 HStack(spacing: 6) {
                     ProgressView()
@@ -353,18 +365,48 @@ struct ChatView: View {
         guard !text.isEmpty else { return }
 
         inputText = ""
-        isSending = true
         error = nil
+
+        // 1. Optimistic update: show user message immediately
+        let userMessage = DianeMessage(
+            id: UUID().uuidString,
+            role: "user",
+            content: text,
+            sequenceNumber: nil,
+            tokenCount: nil,
+            toolCalls: nil,
+            reasoningContent: nil,
+            createdAt: ISO8601DateFormatter().string(from: Date())
+        )
+        messages.append(userMessage)
+        isSending = true
+
+        // 2. Show working indicator
+        let workingID = UUID().uuidString
 
         do {
             let response = try await dianeAPI.sendChatMessage(
                 sessionID: currentSessionID,
-                content: text
+                content: text,
+                agentName: selectedAgent
             )
             currentSessionID = response.sessionID
+            // Replace the working indicator + user message with actual response messages
             messages = response.messages
         } catch {
             self.error = error.localizedDescription
+            // Keep the user message but add an error indicator
+            let errorMsg = DianeMessage(
+                id: UUID().uuidString,
+                role: "system",
+                content: "⚠️ Error: \(error.localizedDescription)",
+                sequenceNumber: nil,
+                tokenCount: nil,
+                toolCalls: nil,
+                reasoningContent: nil,
+                createdAt: nil
+            )
+            messages.append(errorMsg)
         }
         isSending = false
     }
@@ -396,6 +438,19 @@ struct ChatView: View {
             // Non-fatal — silence list errors
         }
         isLoading = false
+    }
+
+    @MainActor
+    private func loadAgentDefs() async {
+        do {
+            let defs = try await dianeAPI.fetchAgentDefs()
+            agentDefs = defs
+            if !defs.isEmpty, !defs.contains(where: { $0.name == selectedAgent }) {
+                selectedAgent = defs.first?.name ?? "diane-default"
+            }
+        } catch {
+            logDebug("ChatView: failed to load agent defs: \(error.localizedDescription)", category: "Chat")
+        }
     }
 
     @MainActor

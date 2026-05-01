@@ -975,7 +975,28 @@ public struct DianeMessage: Identifiable, Codable, Sendable {
     public let toolCalls: [ToolCall]?
     public let reasoningContent: String?
     public let createdAt: String?
-    
+
+    /// Memberwise initializer for creating messages locally (optimistic UI, error bubbles).
+    public init(
+        id: String,
+        role: String,
+        content: String,
+        sequenceNumber: Int? = nil,
+        tokenCount: Int? = nil,
+        toolCalls: [ToolCall]? = nil,
+        reasoningContent: String? = nil,
+        createdAt: String? = nil
+    ) {
+        self.id = id
+        self.role = role
+        self.content = content
+        self.sequenceNumber = sequenceNumber
+        self.tokenCount = tokenCount
+        self.toolCalls = toolCalls
+        self.reasoningContent = reasoningContent
+        self.createdAt = createdAt
+    }
+
     enum CodingKeys: String, CodingKey {
         case id, role, content
         case sequenceNumber = "sequence_number"
