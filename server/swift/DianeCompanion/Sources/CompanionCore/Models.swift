@@ -1214,3 +1214,47 @@ public struct SchemaResponse: Codable, Sendable {
         case relationships
     }
 }
+
+// MARK: - Doctor Check
+
+/// Response from GET /api/doctor
+public struct DoctorResponse: Codable, Sendable {
+    public let ok: Bool
+    public let version: String?
+    public let results: [DoctorCheckItem]
+}
+
+/// A single diagnostic check from /api/doctor
+public struct DoctorCheckItem: Codable, Sendable, Identifiable {
+    public let check: String
+    public let status: String   // "ok", "warning", "error"
+    public let message: String
+    public let details: [String: String]?
+
+    public var id: String { check }
+    
+    /// Display icon name based on status
+    public var iconName: String {
+        switch status {
+        case "ok":      return "checkmark.circle.fill"
+        case "warning": return "exclamationmark.triangle.fill"
+        case "error":   return "xmark.circle.fill"
+        default:        return "questionmark.circle"
+        }
+    }
+    
+    /// Human-readable label for the check name
+    public var displayName: String {
+        switch check {
+        case "config_file":     return "Config File"
+        case "api_token":       return "API Token"
+        case "sdk_connection":  return "SDK Connection"
+        case "project_info":    return "Project Info"
+        case "agent_definitions": return "Agent Definitions"
+        case "session_crud":    return "Session CRUD"
+        case "memory_search":   return "Memory Search"
+        case "server_version":  return "Server Version"
+        default:                return check.replacingOccurrences(of: "_", with: " ").capitalized
+        }
+    }
+}

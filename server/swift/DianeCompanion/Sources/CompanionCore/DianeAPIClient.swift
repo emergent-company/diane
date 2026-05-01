@@ -267,6 +267,14 @@ final class DianeAPIClient: ObservableObject {
         return []
     }
 
+    // MARK: - Doctor Check
+
+    /// Run the diane doctor diagnostics via the local API.
+    func fetchDoctorReport() async throws -> DoctorResponse {
+        let data = try await get("/api/doctor")
+        return try JSONDecoder().decode(DoctorResponse.self, from: data)
+    }
+
     // MARK: - Relay Nodes
 
     func fetchNodeTools(instanceID: String) async throws -> [MCPToolInfo] {

@@ -38,6 +38,7 @@ struct DianeCompanionApp: App {
                 .environmentObject(statusMonitor)
                 .environmentObject(serverConfig)
                 .environmentObject(dianeAPI)
+                .environmentObject(updateChecker)
                 .task { await startIfNeeded() }
         }
         .windowStyle(.titleBar)

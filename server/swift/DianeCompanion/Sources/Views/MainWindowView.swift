@@ -74,6 +74,8 @@ struct MainWindowView: View {
             RelayNodesView()
         case .permissions:
             PermissionsView()
+        case .system:
+            SystemView()
         case .none:
             EmptyStateView(
                 title: "Select a Section",

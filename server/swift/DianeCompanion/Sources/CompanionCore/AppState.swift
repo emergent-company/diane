@@ -30,6 +30,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
     case mcpServers = "MCP Servers"
     case nodes      = "Nodes"
     case permissions = "Permissions"
+    case system     = "System"
 
     var id: String { rawValue }
 
@@ -43,6 +44,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         case .mcpServers:  return "cable.connector.horizontal"
         case .nodes:       return "server.rack"
         case .permissions: return "lock.shield"
+        case .system:      return "gearshape.2"
         }
     }
 }
