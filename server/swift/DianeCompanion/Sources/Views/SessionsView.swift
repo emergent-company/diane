@@ -17,6 +17,12 @@ struct SessionsView: View {
     @State private var error: String? = nil
     @State private var messagesError: String? = nil
 
+    // Chat state
+    @State private var inputText: String = ""
+    @State private var isSending = false
+    @State private var agentDefs: [AgentDef] = []
+    @State private var selectedAgent: String = "diane-default"
+
     var body: some View {
         SplitListDetailView(
             emptyTitle: "Select a Session",
@@ -27,16 +33,29 @@ struct SessionsView: View {
                 if let session = selectedSession {
                     sessionDetailPanel(session)
                 } else {
-                    EmptyStateView(
-                        title: "Select a Session",
-                        icon: "message",
-                        description: "Select a conversation session to view its transcript."
-                    )
+                    newChatView
                 }
             }
         )
         .navigationTitle("Sessions")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button(action: startNewChat) {
+                    Label("New Chat", systemImage: "plus.bubble")
+                }
+                .disabled(isSending)
+            }
+            ToolbarItem(placement: .automatic) {
+                if selectedSession != nil {
+                    Button(action: closeCurrentSession) {
+                        Label("Close Session", systemImage: "xmark.circle")
+                    }
+                    .disabled(isSending)
+                }
+            }
+        }
         .task { await load() }
+        .task { await loadAgentDefs() }
     }
 
     // MARK: - Sessions List
@@ -187,42 +206,54 @@ struct SessionsView: View {
 
             Divider()
 
-            if isLoadingMessages {
-                LoadingStateView(message: "Loading messages…")
-            } else if let err = messagesError {
-                ErrorBannerView(message: err) {
-                    Task {
-                        if let session = selectedSession {
-                            await loadMessages(session: session)
-                        }
-                    }
-                }
-                .padding(8)
-            } else if messages.isEmpty {
-                EmptyStateView(
-                    title: "No Messages",
-                    icon: "text.bubble",
-                    description: "This session has no messages."
-                )
-            } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(spacing: 0) {
-                            ForEach(messages) { message in
-                                messageBubble(message)
-                                    .id(message.id)
+            // Messages area (takes all remaining space)
+            Group {
+                if isLoadingMessages {
+                    LoadingStateView(message: "Loading messages…")
+                } else if let err = messagesError {
+                    ErrorBannerView(message: err) {
+                        Task {
+                            if let session = selectedSession {
+                                await loadMessages(session: session)
                             }
                         }
-                        .padding(.horizontal, Design.Spacing.lg)
-                        .padding(.vertical, 8)
                     }
-                    .onAppear {
-                        if let last = messages.last {
-                            proxy.scrollTo(last.id, anchor: .bottom)
+                    .padding(8)
+                } else if messages.isEmpty {
+                    EmptyStateView(
+                        title: "No Messages",
+                        icon: "text.bubble",
+                        description: "Type a message below to start the conversation."
+                    )
+                } else {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            LazyVStack(spacing: 0) {
+                                ForEach(messages) { message in
+                                    messageBubble(message)
+                                        .id(message.id)
+                                }
+                            }
+                            .padding(.horizontal, Design.Spacing.lg)
+                            .padding(.vertical, 8)
+                        }
+                        .onAppear {
+                            if let last = messages.last {
+                                proxy.scrollTo(last.id, anchor: .bottom)
+                            }
                         }
                     }
                 }
             }
+            .layoutPriority(1)
+
+            Divider()
+
+            // Input bar
+            inputBar
+        }
+        .onChange(of: messages.count) { _, _ in
+            // Auto-scroll handled by ScrollViewReader id binding
         }
     }
 
@@ -251,7 +282,31 @@ struct SessionsView: View {
                     }
                 }
 
-                Spacer()
+                Spacer(minLength: 8)
+
+                // Agent picker
+                if !agentDefs.isEmpty {
+                    Picker("Agent", selection: $selectedAgent) {
+                        ForEach(agentDefs) { def in
+                            Text(def.name).tag(def.name)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .font(.caption)
+                    .frame(width: 160)
+                    .disabled(isSending || selectedSession == nil)
+                    .help("Agent used when sending messages to this session")
+                }
+
+                if isSending {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                        Text("Agent is thinking…")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
             }
             .padding(.horizontal, Design.Padding.sectionHeader)
             .padding(.top, Design.Padding.sectionHeader)
@@ -387,6 +442,72 @@ struct SessionsView: View {
         .cornerRadius(5)
     }
 
+    // MARK: - New Chat (Empty State)
+
+    /// Shown when no session is selected — start a new conversation or resume a recent one.
+    @ViewBuilder
+    private var newChatView: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 12) {
+                Spacer()
+                Image(systemName: "bubble.left.and.bubble.right")
+                    .font(.system(size: 40))
+                    .foregroundStyle(.tertiary)
+                Text("Start a Conversation")
+                    .font(.title3)
+                    .fontWeight(.medium)
+                Text("Type a message below or select a session from the list.\\nYour conversations are saved as sessions.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+                if !sessions.isEmpty {
+                    Button("Resume Recent Session") {
+                        if let latest = sessions.first {
+                            selectSession(latest)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .padding(.top, 4)
+                }
+                Spacer()
+            }
+            .layoutPriority(1)
+
+            Divider()
+            inputBar
+        }
+    }
+
+    // MARK: - Input Bar
+
+    private var inputBar: some View {
+        HStack(spacing: 8) {
+            TextField("Type a message…", text: $inputText, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.body)
+                .lineLimit(1...6)
+                .padding(10)
+                .background(Color.primary.opacity(0.05))
+                .cornerRadius(10)
+                .disabled(isSending)
+                .onSubmit { Task { await sendMessage() } }
+
+            Button(action: { Task { await sendMessage() } }) {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 28))
+                    .foregroundStyle(canSend ? Color.accentColor : Color.secondary.opacity(0.3))
+            }
+            .buttonStyle(.plain)
+            .disabled(!canSend)
+        }
+        .padding(12)
+    }
+
+    private var canSend: Bool {
+        !isSending && !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     // MARK: - Message Bubble
 
     @ViewBuilder
@@ -394,6 +515,12 @@ struct SessionsView: View {
         let isUser = message.role.lowercased() == "user"
         let isSystem = message.role.lowercased() == "system"
 
+        // Thinking placeholder — animated indicator while agent is generating
+        if message.id.hasPrefix("thinking-") {
+            return AnyView(thinkingBubble)
+        }
+
+        return AnyView(
         VStack(alignment: isUser ? .trailing : .leading, spacing: Design.Spacing.xs) {
             // Role label + sequence
             HStack(spacing: Design.Spacing.xs) {
@@ -460,6 +587,20 @@ struct SessionsView: View {
         }
         .padding(.vertical, Design.Spacing.xs)
         .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+        )
+    }
+
+    private var thinkingBubble: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .scaleEffect(0.9)
+            Text("Agent is thinking…")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .padding(Design.Padding.banner)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, Design.Spacing.xs)
     }
 
     private func bubbleBackground(isUser: Bool, isSystem: Bool) -> Color {
@@ -670,6 +811,165 @@ struct SessionsView: View {
             sessionDetail = nil
         }
         isLoadingDetail = false
+    }
+
+    // MARK: - Chat Actions
+
+    /// Select a session and load its messages (used by "Resume Recent" button).
+    @MainActor
+    private func selectSession(_ session: DianeSession) {
+        selectedSession = session
+        messages = []
+        inputText = ""
+        error = nil
+        Task { await loadMessages(session: session) }
+        Task { await loadSessionDetail(session: session) }
+    }
+
+    /// Start a new chat — clear session, allow typing in the empty state input bar.
+    @MainActor
+    private func startNewChat() {
+        selectedSession = nil
+        sessionDetail = nil
+        messages = []
+        inputText = ""
+        error = nil
+    }
+
+    /// Close the current session via the API.
+    @MainActor
+    private func closeCurrentSession() {
+        guard let session = selectedSession else { return }
+        isSending = true
+        Task {
+            do {
+                try await dianeAPI.closeSession(sessionID: session.id)
+                selectedSession = nil
+                sessionDetail = nil
+                messages = []
+                inputText = ""
+                await load()
+            } catch {
+                self.error = "Failed to close session: \(error.localizedDescription)"
+            }
+            isSending = false
+        }
+    }
+
+    /// Send a message to the current (or new) session and show the agent's response.
+    @MainActor
+    private func sendMessage() async {
+        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+
+        inputText = ""
+        error = nil
+
+        // 1. Optimistic: show user message immediately
+        let userMessage = DianeMessage(
+            id: UUID().uuidString,
+            role: "user",
+            content: text,
+            sequenceNumber: nil,
+            tokenCount: nil,
+            toolCalls: nil,
+            reasoningContent: nil,
+            createdAt: ISO8601DateFormatter().string(from: Date())
+        )
+        messages.append(userMessage)
+
+        // 2. Add a "thinking" agent bubble while we wait
+        let thinkingID = "thinking-\(UUID().uuidString.prefix(8))"
+        let thinkingMessage = DianeMessage(
+            id: thinkingID,
+            role: "assistant",
+            content: "",
+            sequenceNumber: nil,
+            tokenCount: nil,
+            toolCalls: nil,
+            reasoningContent: nil,
+            createdAt: nil
+        )
+        messages.append(thinkingMessage)
+        isSending = true
+
+        // Determine session ID: use existing or nil for new session
+        let currentID = selectedSession?.id
+
+        do {
+            let response = try await dianeAPI.sendChatMessage(
+                sessionID: currentID,
+                content: text,
+                agentName: selectedAgent
+            )
+
+            // Update selection to the new/existing session
+            if selectedSession == nil {
+                // Refresh session list to pick up the new session
+                await load()
+                // Find newly created session in list
+                if let newSession = sessions.first(where: { $0.id == response.sessionID }) {
+                    selectedSession = newSession
+                }
+            }
+
+            // 3. Remove thinking placeholder
+            messages.removeAll { $0.id == thinkingID }
+
+            // 4. Append response messages (skip user messages — we already have it)
+            var inserted = false
+            for msg in response.messages {
+                if msg.role == "user" { continue }
+                if !msg.content.isEmpty || msg.reasoningContent != nil || msg.toolCalls != nil {
+                    messages.append(msg)
+                    inserted = true
+                }
+            }
+
+            // 5. Fallback if no substantive response
+            if !inserted {
+                let fallback = DianeMessage(
+                    id: UUID().uuidString,
+                    role: "assistant",
+                    content: "✓ Done",
+                    sequenceNumber: nil,
+                    tokenCount: nil,
+                    toolCalls: nil,
+                    reasoningContent: nil,
+                    createdAt: nil
+                )
+                messages.append(fallback)
+            }
+        } catch {
+            self.error = error.localizedDescription
+            // Replace thinking bubble with error
+            messages.removeAll { $0.id == thinkingID }
+            let errorMsg = DianeMessage(
+                id: UUID().uuidString,
+                role: "system",
+                content: "⚠️ Error: \(error.localizedDescription)",
+                sequenceNumber: nil,
+                tokenCount: nil,
+                toolCalls: nil,
+                reasoningContent: nil,
+                createdAt: nil
+            )
+            messages.append(errorMsg)
+        }
+        isSending = false
+    }
+
+    @MainActor
+    private func loadAgentDefs() async {
+        do {
+            let defs = try await dianeAPI.fetchAgentDefs()
+            agentDefs = defs
+            if !defs.isEmpty, !defs.contains(where: { $0.name == selectedAgent }) {
+                selectedAgent = defs.first?.name ?? "diane-default"
+            }
+        } catch {
+            logDebug("SessionsView: failed to load agent defs: \(error.localizedDescription)", category: "Sessions")
+        }
     }
 
     private func formatCost(_ usd: Double) -> String {

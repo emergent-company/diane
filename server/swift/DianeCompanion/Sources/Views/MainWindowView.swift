@@ -61,7 +61,7 @@ struct MainWindowView: View {
         case .dashboard:
             StatsView()
         case .chat:
-            ChatView()
+            SessionsView()
         case .sessions:
             SessionsView()
         case .agents:
