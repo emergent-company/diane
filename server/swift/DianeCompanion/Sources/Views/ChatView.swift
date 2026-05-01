@@ -212,31 +212,43 @@ struct ChatView: View {
 
             // Content bubble
             VStack(alignment: .leading, spacing: 6) {
-                if let thinking = message.reasoningContent, !thinking.isEmpty {
-                    thinkingSection(thinking)
-                }
-
-                if !message.content.isEmpty {
-                    if isSystem {
-                        Text(message.content)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .italic()
-                    } else {
-                        Text(message.content)
-                            .font(.body)
-                            .textSelection(.enabled)
-                    }
-                }
-
-                // Show "Thinking…" for the last message (no assistant response yet)
-                if isSending && message.id == messages.last?.id && message.role != "assistant" {
-                    HStack(spacing: 4) {
+                if message.id.hasPrefix("thinking-") {
+                    // Thinking placeholder — show animated indicator
+                    HStack(spacing: 8) {
                         ProgressView()
-                            .scaleEffect(0.5)
-                        Text("Thinking…")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
+                            .scaleEffect(0.8)
+                        Text("Agent is thinking…")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                } else {
+                    if let thinking = message.reasoningContent, !thinking.isEmpty {
+                        thinkingSection(thinking)
+                    }
+
+                    if !message.content.isEmpty {
+                        if isSystem {
+                            Text(message.content)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .italic()
+                        } else {
+                            Text(message.content)
+                                .font(.body)
+                                .textSelection(.enabled)
+                        }
+                    }
+
+                    // Show "Thinking…" for the last message if still waiting
+                    if isSending && message.id == messages.last?.id && message.role != "assistant" {
+                        HStack(spacing: 4) {
+                            ProgressView()
+                                .scaleEffect(0.5)
+                            Text("Thinking…")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
                     }
                 }
             }
@@ -367,7 +379,7 @@ struct ChatView: View {
         inputText = ""
         error = nil
 
-        // 1. Optimistic update: show user message immediately
+        // 1. Optimistic: show user message immediately
         let userMessage = DianeMessage(
             id: UUID().uuidString,
             role: "user",
@@ -379,10 +391,21 @@ struct ChatView: View {
             createdAt: ISO8601DateFormatter().string(from: Date())
         )
         messages.append(userMessage)
-        isSending = true
 
-        // 2. Show working indicator
-        let workingID = UUID().uuidString
+        // 2. Add a "thinking" agent bubble while we wait
+        let thinkingID = "thinking-\(UUID().uuidString.prefix(8))"
+        let thinkingMessage = DianeMessage(
+            id: thinkingID,
+            role: "assistant",
+            content: "",
+            sequenceNumber: nil,
+            tokenCount: nil,
+            toolCalls: nil,
+            reasoningContent: nil,
+            createdAt: nil
+        )
+        messages.append(thinkingMessage)
+        isSending = true
 
         do {
             let response = try await dianeAPI.sendChatMessage(
@@ -391,11 +414,41 @@ struct ChatView: View {
                 agentName: selectedAgent
             )
             currentSessionID = response.sessionID
-            // Replace the working indicator + user message with actual response messages
-            messages = response.messages
+
+            // 3. Merge: keep user message + thinking bubble, replace thinking with response
+            // Remove the thinking placeholder
+            messages.removeAll { $0.id == thinkingID }
+
+            // Append response messages that aren't user messages (we already have it)
+            var inserted = false
+            for msg in response.messages {
+                if msg.role == "user" {
+                    continue // skip — we already have the user message
+                }
+                // Only add non-empty assistant messages
+                if !msg.content.isEmpty || msg.reasoningContent != nil || msg.toolCalls != nil {
+                    messages.append(msg)
+                    inserted = true
+                }
+            }
+            // If no substantive response messages, add a fallback
+            if !inserted {
+                let fallback = DianeMessage(
+                    id: UUID().uuidString,
+                    role: "assistant",
+                    content: "✓ Done",
+                    sequenceNumber: nil,
+                    tokenCount: nil,
+                    toolCalls: nil,
+                    reasoningContent: nil,
+                    createdAt: nil
+                )
+                messages.append(fallback)
+            }
         } catch {
             self.error = error.localizedDescription
-            // Keep the user message but add an error indicator
+            // Replace thinking bubble with error
+            messages.removeAll { $0.id == thinkingID }
             let errorMsg = DianeMessage(
                 id: UUID().uuidString,
                 role: "system",

@@ -599,28 +599,39 @@ pollLoop:
 	var assistantText string
 
 	for i, msg := range msgs.Data {
+		// Normalize role: MP returns the agent name as the role; we want "assistant"
+		role := msg.Role
+		switch role {
+		case "user", "tool", "system":
+			// keep as-is
+		default:
+			role = "assistant"
+		}
+
 		flatMsg := messageJSON{
-			Role:           msg.Role,
+			Role:           role,
 			SequenceNumber: i,
 			CreatedAt:      time.Now().UTC().Format(time.RFC3339),
 		}
 
 		// Extract content from the SDK's Content map
-		// Keys: "text" = main text, "reasoning" = thinking, tool calls are separate
 		if val, ok := msg.Content["reasoning"]; ok {
 			if s, ok := val.(string); ok && len(s) > 0 {
 				flatMsg.ReasoningContent = s
-				
 			}
 		}
 		if val, ok := msg.Content["text"]; ok {
 			if s, ok := val.(string); ok {
 				flatMsg.Content = s
-				// Track the last assistant message for session storage
-				if msg.Role != "user" && msg.Role != "tool" && len(s) > 0 {
+				if role != "user" && role != "tool" && len(s) > 0 {
 					assistantText = s
 				}
 			}
+		}
+		// If no text content but there's reasoning, show reasoning as content
+		if flatMsg.Content == "" && flatMsg.ReasoningContent != "" {
+			flatMsg.Content = flatMsg.ReasoningContent
+			flatMsg.ReasoningContent = ""
 		}
 
 		messages = append(messages, flatMsg)
