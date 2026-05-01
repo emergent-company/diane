@@ -9,7 +9,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // cmdUpgrade checks for a new version and replaces the current binary.
@@ -193,4 +195,86 @@ func cmdUpgrade() {
 	if symlinkTarget != "" {
 		fmt.Printf("   Symlink: %s → %s\n", targetPath, installTarget)
 	}
+
+	// ── Restart diane serve so it picks up the new binary ──
+	fmt.Print("\n🔄 Restarting diane serve... ")
+	if err := restartServeProcess(); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  %v\n", err)
+		fmt.Println("   You may need to restart diane serve manually:")
+		fmt.Println("     launchctl kickstart -kp gui/$(id -u)/com.emergent-company.diane-serve")
+	} else {
+		fmt.Println("✅")
+	}
+}
+
+// restartServeProcess restarts diane serve after upgrade.
+// Tries launchd kickstart first; falls back to PID-based restart.
+func restartServeProcess() error {
+	home, _ := os.UserHomeDir()
+
+	// Strategy 1: launchd — kickstart with kill-first + wait
+	label := "com.emergent-company.diane-serve"
+	uid := os.Getuid()
+	kickstart := exec.Command("launchctl", "kickstart", "-kp", fmt.Sprintf("gui/%d/%s", uid, label))
+	if _, err := kickstart.CombinedOutput(); err == nil {
+		// Success — wait for serve to be reachable
+		time.Sleep(2 * time.Second)
+		return nil
+	} else {
+		// launchctl might have exited non-zero even if kickstart worked.
+		// Check if the service is loaded by trying bootout first (which would fail if not loaded)
+		check := exec.Command("launchctl", "print", fmt.Sprintf("gui/%d/%s", uid, label))
+		if check.Run() != nil {
+			// launchd not managing this service — try PID-based restart
+			return restartServeByPID(home)
+		}
+		// launchd IS managing it, just not responding to kickstart — try bootout + bootstrap
+		_ = exec.Command("launchctl", "bootout", fmt.Sprintf("gui/%d/%s", uid, label)).Run()
+		time.Sleep(1 * time.Second)
+		plistPath := filepath.Join(home, "Library", "LaunchAgents", label+".plist")
+		if out2, err2 := exec.Command("launchctl", "bootstrap", fmt.Sprintf("gui/%d", uid), plistPath).CombinedOutput(); err2 != nil {
+			return fmt.Errorf("launchctl re-bootstrap failed: %v — %s", err2, string(out2))
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	return nil
+}
+
+// restartServeByPID reads the serve PID file and restarts the process.
+func restartServeByPID(home string) error {
+	pidFile := filepath.Join(home, ".diane", "serve.pid")
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		return fmt.Errorf("no PID file at %s (serve was not running or not managed by launchd)", pidFile)
+	}
+
+	pidStr := strings.TrimSpace(string(data))
+	pid, err := strconv.Atoi(pidStr)
+	if err != nil {
+		return fmt.Errorf("invalid PID in %s: %s", pidFile, pidStr)
+	}
+
+	// Send SIGTERM for graceful shutdown
+	term := exec.Command("kill", "-TERM", pidStr)
+	if err := term.Run(); err != nil {
+		return fmt.Errorf("failed to signal PID %d: %v", pid, err)
+	}
+
+	// Wait for process to exit
+	time.Sleep(2 * time.Second)
+
+	// Start fresh serve process
+	binary, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("cannot determine own binary path: %v", err)
+	}
+
+	serve := exec.Command(binary, "serve")
+	if err := serve.Start(); err != nil {
+		return fmt.Errorf("failed to start serve: %v", err)
+	}
+
+	time.Sleep(2 * time.Second)
+	return nil
 }

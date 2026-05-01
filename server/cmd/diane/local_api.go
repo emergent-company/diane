@@ -70,6 +70,7 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	mux.HandleFunc("/api/nodes", api.handleNodes)
 	mux.HandleFunc("/api/nodes/", api.handleNodeByID)
 	mux.HandleFunc("/api/schema", api.handleSchema)
+	mux.HandleFunc("/api/schema/objects/", api.handleSchemaObjects)
 	mux.HandleFunc("/api/providers", api.handleProjectProviders)
 	mux.HandleFunc("/api/status", api.handleStatus)
 	mux.HandleFunc("/api/stats", api.handleStats)
@@ -1591,7 +1592,8 @@ func (a *localAPIServer) handleProjectProviders(w http.ResponseWriter, r *http.R
 	})
 }
 
-// GET /api/stats/objects — graph object counts from the Memory Platform
+// GET /api/stats/objects — graph object counts from the Memory Platform,
+// covering all known schema types with their display names from the embedded schema.
 func (a *localAPIServer) handleGraphObjectStats(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -1599,15 +1601,61 @@ func (a *localAPIServer) handleGraphObjectStats(w http.ResponseWriter, r *http.R
 	}
 
 	ctx := context.Background()
-	stats, err := a.bridge.GetGraphObjectStats(ctx)
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("query graph objects: %v", err))
-		return
+
+	// Load schema types to get all type names + labels
+	nodeTypes, _, err := schema.LoadDefinitions()
+	typeNames := make([]string, len(nodeTypes))
+	typeLabel := make(map[string]string, len(nodeTypes))
+	if err == nil {
+		for i, nt := range nodeTypes {
+			typeNames[i] = nt.TypeName
+			typeLabel[nt.TypeName] = nt.Label
+		}
+	}
+
+	var byType []memory.TypeCount
+	var total int
+
+	if len(typeNames) > 0 {
+		// Use schema types for accurate per-type counts
+		counts, cErr := a.bridge.GetObjectCountsForSchema(ctx, typeNames)
+		if cErr != nil {
+			jsonError(w, http.StatusInternalServerError, fmt.Sprintf("query counts: %v", cErr))
+			return
+		}
+		byType = make([]memory.TypeCount, 0, len(counts))
+		typeTotal := 0
+		for _, tn := range typeNames {
+			c := counts[tn]
+			if c > 0 {
+				label := typeLabel[tn]
+				if label == "" {
+					label = tn
+				}
+				byType = append(byType, memory.TypeCount{TypeName: label, Count: c})
+				typeTotal += c
+			}
+		}
+		total = typeTotal
+
+		// Sort by count descending
+		sort.Slice(byType, func(i, j int) bool {
+			return byType[i].Count > byType[j].Count
+		})
+	} else {
+		// Fallback: use old method
+		stats, sErr := a.bridge.GetGraphObjectStats(ctx)
+		if sErr != nil {
+			jsonError(w, http.StatusInternalServerError, fmt.Sprintf("query graph objects: %v", sErr))
+			return
+		}
+		total = stats.Total
+		byType = stats.ByType
 	}
 
 	jsonResponse(w, map[string]any{
-		"total":   stats.Total,
-		"by_type": stats.ByType,
+		"total":   total,
+		"by_type": byType,
 	})
 }
 
@@ -1909,7 +1957,8 @@ type SchemaAPIResponse struct {
 	Relationships []schema.EnrichedRelationship `json:"relationships"`
 }
 
-// GET /api/schema — returns embedded graph schema definitions (object types + relationships).
+// GET /api/schema — returns embedded graph schema definitions (object types + relationships),
+// enriched with per-type object counts from the project's Memory Platform.
 func (a *localAPIServer) handleSchema(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -1920,11 +1969,87 @@ func (a *localAPIServer) handleSchema(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// Build relationship counts per type
+	relCountByType := make(map[string]int)
+	for _, rel := range rels {
+		relCountByType[rel.SourceType]++
+		relCountByType[rel.TargetType]++
+	}
+
+	// Query object counts from Memory Platform
+	typeNames := make([]string, len(nodeTypes))
+	for i, nt := range nodeTypes {
+		typeNames[i] = nt.TypeName
+	}
+	objCounts, _ := a.bridge.GetObjectCountsForSchema(context.Background(), typeNames)
+
+	// Enrich each type with counts
+	for i := range nodeTypes {
+		nodeTypes[i].ObjectCount = objCounts[nodeTypes[i].TypeName]
+		nodeTypes[i].RelationshipCount = relCountByType[nodeTypes[i].TypeName]
+	}
+
+	// Sort by object count descending for convenience
+	sort.Slice(nodeTypes, func(i, j int) bool {
+		return nodeTypes[i].ObjectCount > nodeTypes[j].ObjectCount
+	})
+
 	resp := SchemaAPIResponse{
 		NodeTypes:     nodeTypes,
 		Relationships: rels,
 	}
 	jsonResponse(w, resp)
+}
+
+// SchemaObjectsResponse is the JSON response for GET /api/schema/objects/{typeName}.
+type SchemaObjectsResponse struct {
+	TypeName string                      `json:"type_name"`
+	Total    int                         `json:"total"`
+	Objects  []memory.GraphObjectSummary `json:"objects"`
+}
+
+// GET /api/schema/objects/{typeName} — returns recent objects of a given schema type.
+// Supports ?limit=N to control the number of objects returned (default 20, max 50).
+func (a *localAPIServer) handleSchemaObjects(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	typeName := strings.TrimPrefix(r.URL.Path, "/api/schema/objects/")
+	if typeName == "" {
+		jsonError(w, http.StatusBadRequest, "type name required")
+		return
+	}
+
+	limit := 20
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 50 {
+			limit = parsed
+		}
+	}
+
+	objects, err := a.bridge.ListRecentObjectsByType(context.Background(), typeName, limit)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("list objects: %v", err))
+		return
+	}
+
+	// Get total count
+	total := len(objects)
+	if len(objects) == limit {
+		// Try to get a more accurate total count (best-effort)
+		if count, err := a.bridge.CountObjectsByType(context.Background(), typeName); err == nil {
+			total = count
+		}
+	}
+
+	jsonResponse(w, SchemaObjectsResponse{
+		TypeName: typeName,
+		Total:    total,
+		Objects:  objects,
+	})
 }
 
 // GetDefaultLocalAPIPort returns the default port for the local API.

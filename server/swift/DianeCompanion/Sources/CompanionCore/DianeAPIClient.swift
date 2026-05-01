@@ -255,6 +255,12 @@ final class DianeAPIClient: ObservableObject {
         return try JSONDecoder().decode(SchemaResponse.self, from: data)
     }
 
+    /// Fetch recent objects of a given schema type from the project's memory graph.
+    func fetchSchemaObjects(typeName: String, limit: Int = 20) async throws -> SchemaObjectsResponse {
+        let data = try await get("/api/schema/objects/\(typeName)?limit=\(limit)")
+        return try JSONDecoder().decode(SchemaObjectsResponse.self, from: data)
+    }
+
     // MARK: - Agent Definitions
 
     func fetchAgentDefs() async throws -> [AgentDef] {

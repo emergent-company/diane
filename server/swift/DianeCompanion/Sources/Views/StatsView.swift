@@ -47,6 +47,7 @@ struct StatsView: View {
 
                     if let gs = graphObjectStats {
                         graphObjectsSection(gs)
+                        topGraphTypesSection(gs)
                     }
 
                     if let pp = projectProviders, !pp.isEmpty {
@@ -214,6 +215,55 @@ struct StatsView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Top Graph Types
+
+    private func topGraphTypesSection(_ gs: GraphObjectStatsResponse) -> some View {
+        let top5 = gs.byType.prefix(5)
+        guard !top5.isEmpty else { return AnyView(EmptyView()) }
+
+        let maxCount = top5.map(\.count).max() ?? 1
+
+        return AnyView(VStack(alignment: .leading, spacing: Design.Spacing.sm) {
+            HStack {
+                Image(systemName: "trophy.fill")
+                    .foregroundStyle(.yellow)
+                Text("Top Graph Types")
+                    .font(.headline)
+                Spacer()
+            }
+            .padding(.top, Design.Spacing.sm)
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 240, maximum: 320), spacing: Design.Spacing.md)], spacing: Design.Spacing.sm) {
+                ForEach(Array(top5)) { tc in
+                    HStack(spacing: Design.Spacing.sm) {
+                        // Bar indicator
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(.cyan.opacity(0.4))
+                            .frame(width: CGFloat(tc.count) / CGFloat(maxCount) * 80, height: 20)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 3)
+                                    .fill(.cyan.opacity(0.2))
+                                    .frame(width: 80, height: 20)
+                                , alignment: .leading
+                            )
+
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(tc.typeName)
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .lineLimit(1)
+                            Text("\(tc.count)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        })
     }
 
     // MARK: - Project-Level Providers

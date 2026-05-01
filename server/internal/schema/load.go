@@ -17,11 +17,13 @@ type EnrichedProperty struct {
 // EnrichedSchemaType is the structured representation of a graph object type,
 // with its JSON schema parsed into individual properties.
 type EnrichedSchemaType struct {
-	TypeName    string             `json:"type_name"`
-	Label       string             `json:"label"`
-	Description string             `json:"description"`
-	Namespace   string             `json:"namespace,omitempty"`
-	Properties  []EnrichedProperty `json:"properties"`
+	TypeName           string             `json:"type_name"`
+	Label              string             `json:"label"`
+	Description        string             `json:"description"`
+	Namespace          string             `json:"namespace,omitempty"`
+	Properties         []EnrichedProperty `json:"properties"`
+	ObjectCount        int                `json:"object_count,omitempty"`
+	RelationshipCount  int                `json:"relationship_count,omitempty"`
 }
 
 // EnrichedRelationship is the structured representation of a relationship type.

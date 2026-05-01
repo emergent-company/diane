@@ -898,6 +898,78 @@ func (b *Bridge) GetGraphObjectStats(ctx context.Context) (*GraphObjectStats, er
 	}, nil
 }
 
+// GraphObjectSummary is a lightweight summary of a graph object for display.
+type GraphObjectSummary struct {
+	EntityID          string `json:"entity_id"`
+	Key               string `json:"key,omitempty"`
+	Type              string `json:"type"`
+	CreatedAt         string `json:"created_at"`
+	RelationshipCount int    `json:"relationship_count"`
+	Title             string `json:"title,omitempty"`
+	Status            string `json:"status,omitempty"`
+}
+
+// GetObjectCountsForSchema queries object counts for each schema type name.
+// Returns a map of type_name → count.
+func (b *Bridge) GetObjectCountsForSchema(ctx context.Context, typeNames []string) (map[string]int, error) {
+	counts := make(map[string]int, len(typeNames))
+	for _, tn := range typeNames {
+		count, err := b.client.Graph.CountObjects(ctx, &graph.CountObjectsOptions{
+			Type: tn,
+		})
+		if err != nil {
+			// Types not yet in the project schema — skip
+			continue
+		}
+		counts[tn] = count
+	}
+	return counts, nil
+}
+
+// ListRecentObjectsByType returns the most recently created objects of a given type.
+func (b *Bridge) ListRecentObjectsByType(ctx context.Context, typeName string, limit int) ([]GraphObjectSummary, error) {
+	resp, err := b.client.Graph.ListObjects(ctx, &graph.ListObjectsOptions{
+		Type:  typeName,
+		Limit: limit,
+		Order: "desc",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list objects by type %s: %w", typeName, err)
+	}
+
+	results := make([]GraphObjectSummary, 0, len(resp.Items))
+	for _, obj := range resp.Items {
+		s := GraphObjectSummary{
+			EntityID:          obj.EntityID,
+			Type:              obj.Type,
+			RelationshipCount: safeInt(obj.RelationshipCount),
+			Title:             safePropStr(obj.Properties, "title"),
+			Status:            safePropStr(obj.Properties, "status"),
+		}
+		s.CreatedAt = obj.CreatedAt.Format(time.RFC3339)
+		if obj.Key != nil {
+			s.Key = *obj.Key
+		}
+		results = append(results, s)
+	}
+	return results, nil
+}
+
+// safeInt dereferences an *int, returning 0 if nil.
+func safeInt(v *int) int {
+	if v == nil {
+		return 0
+	}
+	return *v
+}
+
+// CountObjectsByType returns the total count of objects for a given type.
+func (b *Bridge) CountObjectsByType(ctx context.Context, typeName string) (int, error) {
+	return b.client.Graph.CountObjects(ctx, &graph.CountObjectsOptions{
+		Type: typeName,
+	})
+}
+
 // ProviderStats holds aggregated metrics grouped by (provider, model).
 type ProviderStats struct {
 	ProviderName      string  `json:"provider_name"`

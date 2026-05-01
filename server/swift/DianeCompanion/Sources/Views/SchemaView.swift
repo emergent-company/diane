@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// A friendly visual overview of the Diane knowledge graph schema.
-/// Shows all object types and their relationships in a card-based layout.
+/// Shows all object types with object counts, filterable by search and namespace.
+/// Each type card links to a detail view with properties, relationships, and recent objects.
 struct SchemaView: View {
     @EnvironmentObject var dianeAPI: DianeAPIClient
 
@@ -17,52 +18,51 @@ struct SchemaView: View {
     ]
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Search + filter bar
-            searchFilterBar
-                .padding(.horizontal)
-                .padding(.top, Design.Spacing.sm)
+        NavigationStack {
+            VStack(spacing: 0) {
+                // Search + filter bar
+                searchFilterBar
+                    .padding(.horizontal)
+                    .padding(.top, Design.Spacing.sm)
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: Design.Spacing.lg) {
-                    if let err = error {
-                        ErrorBannerView(message: err) {
-                            Task { await load() }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Design.Spacing.lg) {
+                        if let err = error {
+                            ErrorBannerView(message: err) {
+                                Task { await load() }
+                            }
+                        }
+
+                        if isLoading && schema == nil {
+                            VStack(spacing: Design.Spacing.md) {
+                                ProgressView()
+                                Text("Loading schema…")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 60)
+                        } else if let s = schema {
+                            // Overview header
+                            overviewHeader(nodeCount: s.nodeTypes.count, relCount: s.relationships.count)
+
+                            // Object types grouped by namespace
+                            nodeTypesSection(schema: s)
+                        } else {
+                            EmptyStateView(
+                                title: "No Schema Loaded",
+                                icon: "square.grid.3x3",
+                                description: "Schema definitions are embedded in the diane binary. Ensure the server is running."
+                            )
+                            .padding(.top, 60)
                         }
                     }
-
-                    if isLoading && schema == nil {
-                        VStack(spacing: Design.Spacing.md) {
-                            ProgressView()
-                            Text("Loading schema…")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 60)
-                    } else if let s = schema {
-                        // Overview header
-                        overviewHeader(nodeCount: s.nodeTypes.count, relCount: s.relationships.count)
-
-                        // Object types grouped by namespace
-                        nodeTypesSection(schema: s)
-
-                        // Relationships section
-                        relationshipsSection(rels: s.relationships)
-                    } else {
-                        EmptyStateView(
-                            title: "No Schema Loaded",
-                            icon: "square.grid.3x3",
-                            description: "Schema definitions are embedded in the diane binary. Ensure the server is running."
-                        )
-                        .padding(.top, 60)
-                    }
+                    .padding()
                 }
-                .padding()
             }
+            .navigationTitle("Schema")
+            .task { await load() }
         }
-        .navigationTitle("Schema")
-        .task { await load() }
     }
 
     // MARK: - Search & Filter Bar
@@ -148,21 +148,28 @@ struct SchemaView: View {
 
         return ForEach(namespaceOrder, id: \.self) { ns in
             if let types = grouped[ns], !types.isEmpty {
-                nodeTypesGroup(namespace: ns, types: types)
+                nodeTypesGroup(namespace: ns, types: types, allRelationships: schema.relationships)
             }
         }
     }
 
-    private func nodeTypesGroup(namespace: String, types: [SchemaNodeType]) -> some View {
+    private func nodeTypesGroup(namespace: String, types: [SchemaNodeType], allRelationships: [SchemaRelationship]) -> some View {
         VStack(alignment: .leading, spacing: Design.Spacing.sm) {
             namespaceHeader(namespace)
 
             LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 320, maximum: 480), spacing: Design.Spacing.md)],
+                columns: [GridItem(.adaptive(minimum: 280, maximum: 380), spacing: Design.Spacing.md)],
                 spacing: Design.Spacing.md
             ) {
                 ForEach(types) { type in
-                    nodeTypeCard(type)
+                    NavigationLink(destination: SchemaTypeDetailView(
+                        type: type,
+                        allRelationships: allRelationships,
+                        dianeAPI: dianeAPI
+                    )) {
+                        nodeTypeCard(type)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
@@ -205,31 +212,50 @@ struct SchemaView: View {
                 Text(type.description)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(3)
+                    .lineLimit(2)
             }
 
-            // Properties count
-            if !type.properties.isEmpty {
-                Divider()
-                    .opacity(0.3)
+            Spacer(minLength: Design.Spacing.xs)
 
-                Text("\(type.properties.count) propert\(type.properties.count == 1 ? "y" : "ies")")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-
-                // First 5 properties shown inline
-                ForEach(type.properties.prefix(5)) { prop in
-                    propertyRow(prop)
+            // Stats row: object count + relationship count + property count
+            HStack(spacing: Design.Spacing.sm) {
+                // Object count
+                if type.objectCount > 0 {
+                    HStack(spacing: 2) {
+                        Image(systemName: "square.stack.3d.up")
+                            .font(.caption2)
+                        Text("\(type.objectCount)")
+                            .font(.caption2)
+                            .monospacedDigit()
+                    }
+                    .foregroundStyle(.cyan)
                 }
 
-                if type.properties.count > 5 {
-                    Text("+ \(type.properties.count - 5) more…")
+                // Relationship count
+                if type.relationshipCount > 0 {
+                    HStack(spacing: 2) {
+                        Image(systemName: "arrow.triangle.branch")
+                            .font(.caption2)
+                        Text("\(type.relationshipCount)")
+                            .font(.caption2)
+                            .monospacedDigit()
+                    }
+                    .foregroundStyle(.purple)
+                }
+
+                // Property count
+                HStack(spacing: 2) {
+                    Image(systemName: "list.bullet")
                         .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                    Text("\(type.properties.count) prop\(type.properties.count == 1 ? "" : "s")")
+                        .font(.caption2)
+                        .monospacedDigit()
                 }
+                .foregroundStyle(.secondary)
             }
         }
         .cardStyle(cornerRadius: Design.CornerRadius.medium)
+        .frame(minHeight: 120)
     }
 
     private func namespaceBadge(_ namespace: String?) -> some View {
@@ -242,143 +268,6 @@ struct SchemaView: View {
             .padding(.vertical, 2)
             .background(color.opacity(0.1))
             .cornerRadius(Design.CornerRadius.small)
-    }
-
-    // MARK: - Property Row
-
-    private func propertyRow(_ prop: SchemaProperty) -> some View {
-        HStack(spacing: Design.Spacing.xs) {
-            typeIcon(prop.type)
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .frame(width: 14)
-
-            Text(prop.name)
-                .font(.caption2)
-                .foregroundStyle(.primary)
-
-            Spacer()
-
-            if let enums = prop.enumValues, !enums.isEmpty {
-                let display = enums.count <= 3
-                    ? enums.joined(separator: ", ")
-                    : "\(enums.count) values"
-                Text(display)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .monospaced()
-            } else {
-                Text(prop.type)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .monospaced()
-            }
-        }
-        .help(prop.description)
-    }
-
-    private func typeIcon(_ type: String) -> some View {
-        switch type {
-        case "string":  return Image(systemName: "text.quote")
-        case "number":  return Image(systemName: "number")
-        case "integer": return Image(systemName: "number")
-        case "boolean": return Image(systemName: "checkmark.circle")
-        default:        return Image(systemName: "circle.dashed")
-        }
-    }
-
-    // MARK: - Relationships Section
-
-    private func relationshipsSection(rels: [SchemaRelationship]) -> some View {
-        let filtered = searchText.isEmpty ? rels : rels.filter { rel in
-            rel.name.localizedCaseInsensitiveContains(searchText)
-            || rel.label.localizedCaseInsensitiveContains(searchText)
-            || rel.sourceType.localizedCaseInsensitiveContains(searchText)
-            || rel.targetType.localizedCaseInsensitiveContains(searchText)
-        }
-        .filter { rel in
-            guard let ns = selectedNamespace else { return true }
-            let sourceGroup = typeNamespace(rel.sourceType)
-            let targetGroup = typeNamespace(rel.targetType)
-            return sourceGroup == ns || targetGroup == ns
-        }
-
-        return VStack(alignment: .leading, spacing: Design.Spacing.sm) {
-            HStack(spacing: Design.Spacing.xs) {
-                Image(systemName: "arrow.triangle.branch")
-                    .foregroundStyle(.purple)
-                    .font(.caption)
-                Text("Relationships")
-                    .font(.headline)
-                Spacer()
-                Text("\(filtered.count) of \(rels.count)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.top, Design.Spacing.sm)
-
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 280, maximum: 400), spacing: Design.Spacing.md)],
-                spacing: Design.Spacing.sm
-            ) {
-                ForEach(filtered) { rel in
-                    relationshipCard(rel)
-                }
-            }
-        }
-    }
-
-    private func relationshipCard(_ rel: SchemaRelationship) -> some View {
-        HStack(spacing: Design.Spacing.sm) {
-            // Source
-            typeBadge(rel.sourceType)
-
-            // Arrow and label
-            VStack(spacing: 2) {
-                Image(systemName: "arrow.right")
-                    .font(.caption2)
-                    .foregroundStyle(.purple)
-                Text(rel.label)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-
-            // Target
-            typeBadge(rel.targetType)
-        }
-        .padding(.horizontal, Design.Spacing.md)
-        .padding(.vertical, Design.Spacing.sm)
-        .background(Design.Surface.cardBackground)
-        .cornerRadius(Design.CornerRadius.medium)
-        .overlay(
-            RoundedRectangle(cornerRadius: Design.CornerRadius.medium)
-                .stroke(Design.Surface.border, lineWidth: 1)
-        )
-        .help(rel.description)
-    }
-
-    private func typeBadge(_ typeName: String) -> some View {
-        let color = typeNamespaceColor(typeName)
-        return Text(shortTypeName(typeName))
-            .font(.caption2)
-            .fontWeight(.medium)
-            .foregroundStyle(color)
-            .padding(.horizontal, Design.Padding.badgeH)
-            .padding(.vertical, Design.Padding.badgeV)
-            .background(color.opacity(0.1))
-            .cornerRadius(Design.CornerRadius.small)
-    }
-
-    private func shortTypeName(_ name: String) -> String {
-        // Shorten common prefixes for display
-        let prefixes = ["Calendar", "Financial", "Shopping"]
-        for prefix in prefixes {
-            if name.hasPrefix(prefix) {
-                return String(name.dropFirst(prefix.count))
-            }
-        }
-        return name
     }
 
     // MARK: - Type Namespace Resolution
@@ -395,11 +284,6 @@ struct SchemaView: View {
             return "system"
         }
         return "personal"
-    }
-
-    private func typeNamespaceColor(_ typeName: String) -> Color {
-        let ns = typeNamespace(typeName)
-        return namespaceColors[ns] ?? .secondary
     }
 
     // MARK: - Filtering

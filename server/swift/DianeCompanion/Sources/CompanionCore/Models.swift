@@ -1178,12 +1178,16 @@ public struct SchemaNodeType: Codable, Sendable, Identifiable {
     public let description: String
     public let namespace: String?
     public let properties: [SchemaProperty]
+    public let objectCount: Int
+    public let relationshipCount: Int
     
     public var id: String { typeName }
     
     enum CodingKeys: String, CodingKey {
         case typeName = "type_name"
         case label, description, namespace, properties
+        case objectCount = "object_count"
+        case relationshipCount = "relationship_count"
     }
 }
 
@@ -1212,6 +1216,39 @@ public struct SchemaResponse: Codable, Sendable {
     enum CodingKeys: String, CodingKey {
         case nodeTypes = "node_types"
         case relationships
+    }
+}
+
+/// Lightweight summary of a graph object, returned by GET /api/schema/objects/{typeName}.
+public struct SchemaObjectSummary: Codable, Sendable, Identifiable {
+    public let entityID: String
+    public let key: String?
+    public let type: String
+    public let createdAt: String
+    public let relationshipCount: Int
+    public let title: String?
+    public let status: String?
+    
+    public var id: String { entityID }
+    
+    enum CodingKeys: String, CodingKey {
+        case entityID = "entity_id"
+        case key, type
+        case createdAt = "created_at"
+        case relationshipCount = "relationship_count"
+        case title, status
+    }
+}
+
+/// Response from GET /api/schema/objects/{typeName}.
+public struct SchemaObjectsResponse: Codable, Sendable {
+    public let typeName: String
+    public let total: Int
+    public let objects: [SchemaObjectSummary]
+    
+    enum CodingKeys: String, CodingKey {
+        case typeName = "type_name"
+        case total, objects
     }
 }
 

@@ -23,6 +23,10 @@ final class APIServerManager: ObservableObject {
     /// Whether launchd is managing the serve process (preferred path)
     private var usingLaunchd = false
 
+    /// The expected diane version from the companion app bundle.
+    /// Used to detect stale serve processes after upgrade.
+    private var expectedVersion = ""
+
     // Circuit breaker state (for direct process fallback only)
     private var restartCount = 0
     private var firstRestartTime: Date? = nil
@@ -42,8 +46,11 @@ final class APIServerManager: ObservableObject {
     /// Whether old-plist cleanup has been performed this session
     private static var hasCleanedUpOldPlists = false
 
-    func configure(apiClient: DianeAPIClient) {
+    func configure(apiClient: DianeAPIClient, expectedVersion: String = "") {
         self.apiClient = apiClient
+        self.expectedVersion = expectedVersion.isEmpty
+            ? (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")
+            : expectedVersion
     }
 
     // MARK: - Public API
@@ -55,11 +62,44 @@ final class APIServerManager: ObservableObject {
 
         // Fast path: already reachable
         if await dianeAPI.checkReachability() {
-            AppLogger.shared.info("Local Diane API already running", category: "APIServer")
-            isRunning = true
-            lastError = nil
-            scheduleHealthCheck(dianeAPI: dianeAPI)
-            return
+            // Check if the running serve version matches the expected (bundled) version.
+            // After an upgrade, the companion app is new but diane serve may still be
+            // running the old binary — kickstart launchd to restart with the new one.
+            if !expectedVersion.isEmpty,
+               let status = try? await dianeAPI.fetchServerStatus(),
+               let runningVer = status.version {
+                let cleanRunning = runningVer.hasPrefix("v") ? String(runningVer.dropFirst()) : runningVer
+                let cleanExpected = expectedVersion.hasPrefix("v") ? String(expectedVersion.dropFirst()) : expectedVersion
+                if cleanRunning != cleanExpected {
+                    AppLogger.shared.info(
+                        "Serve version \(runningVer) differs from bundled \(expectedVersion) — restarting with launchd kickstart",
+                        category: "APIServer"
+                    )
+                    kickstartLaunchd()
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    if await dianeAPI.checkReachability() {
+                        AppLogger.shared.info("Local Diane API running after kickstart", category: "APIServer")
+                        isRunning = true
+                        lastError = nil
+                        usingLaunchd = true
+                        scheduleHealthCheck(dianeAPI: dianeAPI)
+                        return
+                    }
+                    AppLogger.shared.warning("Kickstart didn't bring serve back — falling through to full start", category: "APIServer")
+                } else {
+                    AppLogger.shared.info("Local Diane API already running", category: "APIServer")
+                    isRunning = true
+                    lastError = nil
+                    scheduleHealthCheck(dianeAPI: dianeAPI)
+                    return
+                }
+            } else {
+                AppLogger.shared.info("Local Diane API already running", category: "APIServer")
+                isRunning = true
+                lastError = nil
+                scheduleHealthCheck(dianeAPI: dianeAPI)
+                return
+            }
         }
 
         // Try launchd first — install plist + bootstrap if needed
