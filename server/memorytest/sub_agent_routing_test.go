@@ -2,9 +2,9 @@
 // against the live Memory Platform.
 //
 // Tests cover:
-//   - All 8 built-in agent definitions exist on MP (diane-default, diane-researcher,
+//   - All 9 built-in agent definitions exist on MP (diane-default, diane-researcher,
 //     diane-agent-creator, diane-schema-designer, diane-session-extractor,
-//     diane-codebase, diane-dreamer, diane-skill-monitor)
+//     diane-entity-extractor, diane-codebase, diane-dreamer, diane-skill-monitor)
 //   - Coordination tools (list_available_agents, spawn_agents) are configured
 //     on the orchestrator agent definitions
 //   - Runtime trigger verifies agents are discoverable via list_available_agents
@@ -26,6 +26,7 @@ var builtInAgentNames = []string{
 	"diane-agent-creator",
 	"diane-schema-designer",
 	"diane-session-extractor",
+	"diane-entity-extractor",
 	"diane-codebase",
 	"diane-dreamer",
 	"diane-skill-monitor",
