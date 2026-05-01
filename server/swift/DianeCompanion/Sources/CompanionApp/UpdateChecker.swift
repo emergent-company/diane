@@ -46,7 +46,10 @@ final class UpdateChecker: ObservableObject {
         isChecking = true
         defer { isChecking = false }
 
-        guard let url = URL(string: "https://api.github.com/repos/\(repoOwner)/\(repoName)/releases/latest") else { return }
+        // Fetch recent releases and pick the highest semver — don't rely on
+        // GitHub's /releases/latest endpoint which returns by publish date,
+        // not semver order.
+        guard let url = URL(string: "https://api.github.com/repos/\(repoOwner)/\(repoName)/releases?per_page=20") else { return }
 
         do {
             var request = URLRequest(url: url)
@@ -63,9 +66,14 @@ final class UpdateChecker: ObservableObject {
                 return
             }
 
-            let release = try JSONDecoder().decode(GitHubRelease.self, from: data)
-            releaseData = release
-            latestVersion = release.tagName
+            let releases = try JSONDecoder().decode([GitHubRelease].self, from: data)
+            guard let latest = releases.max(by: { a, b in isOlderVersion(a.tagName, than: b.tagName) }) else {
+                logError("UpdateChecker: No releases found", category: "Updates")
+                return
+            }
+
+            releaseData = latest
+            latestVersion = latest.tagName
 
             let installed = currentVersion ?? "0.0.0"
 
@@ -73,9 +81,9 @@ final class UpdateChecker: ObservableObject {
                 updateAvailable = true
                 logInfo("UpdateChecker: Update available (installed version \(installed) is dev/unknown).", category: "Updates")
             } else {
-                updateAvailable = isOlderVersion(installed, than: release.tagName)
+                updateAvailable = isOlderVersion(installed, than: latest.tagName)
                 if updateAvailable {
-                    logInfo("UpdateChecker: Update available: \(installed) -> \(release.tagName).", category: "Updates")
+                    logInfo("UpdateChecker: Update available: \(installed) -> \(latest.tagName).", category: "Updates")
                 } else {
                     logInfo("UpdateChecker: No update available. Current version: \(installed).", category: "Updates")
                 }
