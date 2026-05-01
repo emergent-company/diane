@@ -57,6 +57,7 @@ func main() {
 		fmt.Println("  doctor          Check connection with Memory Platform and run diagnostics")
 		fmt.Println("  monitor         Show bot status, sessions, recent activity")
 		fmt.Println("  nodes           List all connected MCP relay nodes")
+		fmt.Println("  version         Show CLI and companion app versions")
 		fmt.Println("  upgrade         Upgrade Diane to the latest version")
 		fmt.Println("  service         Manage the MCP relay as a service (start|stop|status|restart)")
 		fmt.Println("  mcp             Manage MCP servers (list, relay, serve)")
@@ -101,6 +102,8 @@ func main() {
 		cmdNodes()
 	case "serve":
 		cmdServe()
+	case "version":
+		cmdVersion()
 	case "upgrade":
 		cmdUpgrade()
 	case "service":
