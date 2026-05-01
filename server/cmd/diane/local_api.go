@@ -74,6 +74,7 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	mux.HandleFunc("/api/stats", api.handleStats)
 	mux.HandleFunc("/api/stats/providers", api.handleProviderStats)
 	mux.HandleFunc("/api/stats/objects", api.handleGraphObjectStats)
+	mux.HandleFunc("/api/chat/send", api.handleChatSend)
 
 	api.server = &http.Server{
 		Addr:    fmt.Sprintf("127.0.0.1:%d", port),
