@@ -397,10 +397,12 @@ final class APIServerManager: ObservableObject {
                     self.isRunning = false
 
                     // Report circuit breaker trip via ErrorReporter
+                    let crashCount = self.restartCount
+                    let crashWindow = Self.circuitBreakerWindow
                     DispatchQueue.global().async {
                         reportError(
                             title: "diane serve crash loop",
-                            body: "The diane serve process crashed \(self.restartCount) times in \(Self.circuitBreakerWindow)s and auto-restart has been stopped.\n\nExit code: \(exitCode)",
+                            body: "The diane serve process crashed \(crashCount) times in \(crashWindow)s and auto-restart has been stopped.\n\nExit code: \(exitCode)",
                             severity: "critical",
                             category: "APIServer",
                             labels: "serve"
