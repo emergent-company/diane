@@ -1,6 +1,14 @@
 package testharness
 
-import "time"
+import (
+	"context"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/graph"
+)
 
 // DefaultTestSuite returns the standard set of Diane integration tests.
 // Each test is a named function that uses the harness to interact with
@@ -14,6 +22,7 @@ func DefaultTestSuite() map[string]TestFunc {
 		"picker-display":              TestPickerDisplay,
 		"btw-todo":                    TestBTWTodo,
 		"unconfigured-channel-silent": TestUnconfiguredChannelSilent,
+		"memory-recall":               TestMemoryRecall,
 	}
 }
 
@@ -436,6 +445,212 @@ func TestUnconfiguredChannelSilent(h *TestHarness) Result {
 		hh.harness.logf("  ⚠️  Sending to test channel — will be handled if Diane is configured to listen")
 		hh.harness.logf("  ⚠️  Skipping assertion, marking as info-only")
 
+		return Pass()
+	})
+}
+
+// ── Memory Topics (for TestMemoryRecall) ──
+
+var recallTopics = []string{"dark mode", "utc+5", "bangladesh", "tailscale", "diane", "developer", "mcj-mini", "arm64"}
+
+// TestMemoryRecall is a full end-to-end test of Diane's memory + dreaming mechanism:
+// 1. Creates MemoryFacts about user mcj on Memory Platform
+// 2. Triggers diane-dreamer ad-hoc to process/consolidate memories
+// 3. Polls dreamer until completion
+// 4. Sends a Discord message asking "What do you know about mcj?"
+// 5. Waits for Diane's thread response
+// 6. Verifies the response contains remembered facts
+func TestMemoryRecall(h *TestHarness) Result {
+	return h.RunTest("memory-recall", func(hh *H) Result {
+		b := hh.Bridge()
+		if b == nil {
+			return Fail("memory bridge not configured — set MEMORY_API_KEY, MEMORY_SERVER_URL, MEMORY_PROJECT")
+		}
+
+		ctx := context.Background()
+		prefix := fmt.Sprintf("mr-%d", os.Getpid())
+
+		// ── Step 1: Create MemoryFacts about mcj ──
+		hh.harness.logf("  ── Step 1: Creating MemoryFacts about mcj")
+		gc := b.Client().Graph
+		projectID := os.Getenv("MEMORY_PROJECT")
+		if projectID == "" {
+			projectID = "diane-memory-test"
+		}
+		gc.SetContext("", projectID)
+
+		factDefs := []struct {
+			content    string
+			confidence float64
+			source     string
+		}{
+			{"mcj prefers dark mode in all applications and uses macOS dark theme", 0.92, "user_declared"},
+			{"mcj's timezone is UTC+5 (Bangladesh Standard Time)", 0.88, "inferred_from_session"},
+			{"mcj uses Tailscale for network connectivity across all devices", 0.85, "observed_behavior"},
+			{"mcj is the developer and maintainer of the Diane personal AI assistant", 0.99, "project_metadata"},
+			{"mcj's primary development machine is mcj-mini running macOS on arm64", 0.90, "system_info"},
+		}
+
+		var factIDs []string
+		for i, fd := range factDefs {
+			obj, err := gc.CreateObject(ctx, &graph.CreateObjectRequest{
+				Type: "MemoryFact",
+				Key:  strPtr(fmt.Sprintf("%s-fact-%d", prefix, i)),
+				Properties: map[string]any{
+					"confidence": fd.confidence,
+					"content":    fd.content,
+					"source":     fd.source,
+				},
+				Labels: []string{"memory-recall-test", prefix},
+			})
+			if err != nil {
+				hh.harness.logf("  ⚠️ CreateObject[%d] failed: %v", i, err)
+				continue
+			}
+			factIDs = append(factIDs, obj.EntityID)
+			hh.harness.logf("  ✅ MemoryFact[%d]: confidence=%.2f id=%s", i, fd.confidence, truncate(obj.EntityID, 12))
+		}
+		if len(factIDs) == 0 {
+			return Fail("failed to create any MemoryFacts")
+		}
+		hh.harness.logf("  → Created %d MemoryFacts", len(factIDs))
+
+		defer func() {
+			for _, id := range factIDs {
+				_ = gc.DeleteObject(ctx, id, nil)
+			}
+			hh.harness.logf("  🧹 Deleted %d MemoryFacts", len(factIDs))
+		}()
+
+		// ── Step 2: Trigger the dreamer ad-hoc ──
+		hh.harness.logf("  ── Step 2: Triggering diane-dreamer (ad-hoc)")
+		defs, err := b.ListAgentDefs(ctx)
+		if err != nil {
+			return Fail("ListAgentDefs: " + err.Error())
+		}
+		var dreamerDefID string
+		for _, d := range defs.Data {
+			if d.Name == "diane-dreamer" {
+				dreamerDefID = d.ID
+				break
+			}
+		}
+		if dreamerDefID == "" {
+			return Fail("diane-dreamer definition not found — run 'diane agent seed'")
+		}
+		hh.harness.logf("  ✅ Dreamer def: %s", dreamerDefID)
+
+		agent, err := b.CreateRuntimeAgent(ctx, fmt.Sprintf("%s-dreamer-%d", prefix, time.Now().UnixMilli()), dreamerDefID)
+		if err != nil {
+			return Fail("CreateRuntimeAgent: " + err.Error())
+		}
+		agentID := agent.Data.ID
+		hh.harness.logf("  ✅ Runtime agent: %s", truncate(agentID, 12))
+
+		defer func() {
+			cleanupCtx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer ccancel()
+			_ = b.Client().Agents.Delete(cleanupCtx, agentID)
+		}()
+
+		prompt := "Run a minimal dreaming diagnostic. Scan MemoryFacts with keys containing '" + prefix + "'. Analyze confidence levels and report what you find. Do NOT modify or delete any facts."
+		resp, err := b.TriggerAgentWithInput(ctx, agentID, prompt, "")
+		if err != nil {
+			return Fail("TriggerAgent: " + err.Error())
+		}
+		if resp.Error != nil && *resp.Error != "" {
+			return Fail("Trigger error: " + *resp.Error)
+		}
+		if resp.RunID == nil || *resp.RunID == "" {
+			return Fail("no run ID returned")
+		}
+		dreamerRunID := *resp.RunID
+		hh.harness.logf("  ✅ Dreamer triggered: %s", truncate(dreamerRunID, 12))
+
+		hh.harness.logf("  → Polling dreamer...")
+		pollDeadline := time.After(60 * time.Second)
+		pollTick := time.NewTicker(3 * time.Second)
+		defer pollTick.Stop()
+	pollLoop:
+		for {
+			select {
+			case <-pollDeadline:
+				hh.harness.logf("  ⚠️ Dreamer poll timeout")
+				break pollLoop
+			case <-pollTick.C:
+				runResp, err := b.GetProjectRun(ctx, dreamerRunID)
+				if err != nil {
+					continue
+				}
+				status := runResp.Data.Status
+				switch status {
+				case "completed", "success":
+					hh.harness.logf("  ✅ Dreamer completed!")
+					break pollLoop
+				case "failed", "error":
+					msg := ""
+					if runResp.Data.ErrorMessage != nil {
+						msg = *runResp.Data.ErrorMessage
+					}
+					hh.harness.logf("  ⚠️ Dreamer failed: %s", msg)
+					break pollLoop
+				default:
+					hh.harness.logf("  Poll: status=%s", status)
+				}
+			}
+		}
+
+		// ── Step 3: Ask Diane via Discord ──
+		hh.harness.logf("  ── Step 3: Asking Diane about mcj via Discord")
+		msgID := hh.Send("What do you know about user mcj? --test-memory-recall")
+		if msgID == "" {
+			return Fail("failed to send Discord message")
+		}
+
+		if !hh.ExpectReaction(msgID, "👀", DefaultReactionTimeout) {
+			return Fail("no 👀 reaction — Diane didn't see the message")
+		}
+		hh.harness.logf("  ✅ 👀 seen")
+
+		threadID, ok := hh.ExpectThread(msgID, DefaultThreadTimeout)
+		if !ok {
+			return Fail("no thread created")
+		}
+		defer hh.CleanupThread(threadID)
+		hh.harness.logf("  ✅ Thread created: %s", truncate(threadID, 12))
+
+		success := hh.ExpectFinalReaction(msgID, 180*time.Second)
+		if !success {
+			return Fail("❌ or timeout on parent message")
+		}
+		hh.harness.logf("  ✅ ✅ reaction")
+
+		respText, ok := hh.ExpectResponse(threadID, 180*time.Second)
+		if !ok {
+			return Fail("no response from Diane in thread")
+		}
+		if !hh.AssertNotEmpty(respText) {
+			return Fail("empty response")
+		}
+		hh.harness.logf("  📝 Diane's response (%d chars): %s", len(respText), truncate(respText, 200))
+
+		// ── Step 4: Verify Diane remembered the facts ──
+		hh.harness.logf("  ── Step 4: Verifying recall accuracy")
+		contentLower := strings.ToLower(respText)
+		factsFound := 0
+		for _, kw := range recallTopics {
+			if strings.Contains(contentLower, kw) {
+				hh.harness.logf("    ✅ recall contains: %q", kw)
+				factsFound++
+			} else {
+				hh.harness.logf("    ⚠️ recall missing: %q", kw)
+			}
+		}
+
+		if factsFound < 3 {
+			return Fail(fmt.Sprintf("RECALL WEAK: agent only mentioned %d/%d facts (threshold 3)", factsFound, len(recallTopics)))
+		}
+		hh.harness.logf("  🎯 RECALL PASSED: agent remembered %d/%d facts about mcj!", factsFound, len(recallTopics))
 		return Pass()
 	})
 }

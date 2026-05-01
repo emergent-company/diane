@@ -85,9 +85,12 @@ func main() {
 
 	// Create harness
 	h, err := testharness.New(testharness.Config{
-		BotToken:    *botToken,
-		ChannelID:   *channelID,
-		TargetBotID: *targetBotID,
+		BotToken:         *botToken,
+		ChannelID:        *channelID,
+		TargetBotID:      *targetBotID,
+		MemoryServerURL:  os.Getenv("MEMORY_SERVER_URL"),
+		MemoryAPIKey:     os.Getenv("MEMORY_API_KEY"),
+		MemoryProjectID:  os.Getenv("MEMORY_PROJECT"),
 	})
 	if err != nil {
 		log.Fatalf("Failed to create harness: %v", err)

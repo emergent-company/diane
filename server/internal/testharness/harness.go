@@ -54,6 +54,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Emergent-Comapny/diane/internal/memory"
 	"github.com/bwmarrin/discordgo"
 )
 
@@ -75,6 +76,15 @@ type Config struct {
 
 	// TargetBotID is the Discord user ID of the bot being tested (Diane).
 	TargetBotID string
+
+	// MemoryServerURL is the Memory Platform API server URL.
+	MemoryServerURL string
+
+	// MemoryAPIKey is the Memory Platform API key/token.
+	MemoryAPIKey string
+
+	// MemoryProjectID is the Memory Platform project ID.
+	MemoryProjectID string
 
 	// Logf is an optional logger. If nil, uses log.Printf.
 	Logf func(format string, args ...interface{})
@@ -152,7 +162,38 @@ type TestHarness struct {
 
 	done   chan struct{}
 	closed bool
+
+	// memoryBridge lazily created when a scenario calls Bridge()
+	memoryMu     sync.Mutex
+	memoryBridge *memory.Bridge
 }
+
+// Bridge returns a Memory Platform bridge, creating it lazily on first call.
+func (h *TestHarness) Bridge() *memory.Bridge {
+	h.memoryMu.Lock()
+	defer h.memoryMu.Unlock()
+	if h.memoryBridge != nil {
+		return h.memoryBridge
+	}
+	if h.config.MemoryServerURL == "" || h.config.MemoryAPIKey == "" || h.config.MemoryProjectID == "" {
+		return nil
+	}
+	b, err := memory.New(memory.Config{
+		ServerURL: h.config.MemoryServerURL,
+		APIKey:    h.config.MemoryAPIKey,
+		ProjectID: h.config.MemoryProjectID,
+	})
+	if err != nil {
+		h.logf("[HARNESS] Failed to create memory bridge: %v", err)
+		return nil
+	}
+	h.memoryBridge = b
+	h.logf("[HARNESS] Memory bridge created — project=%s", h.config.MemoryProjectID)
+	return b
+}
+
+// Bridge returns a memory bridge from the harness handle.
+func (hh *H) Bridge() *memory.Bridge { return hh.harness.Bridge() }
 
 // New creates and connects a test harness.
 func New(cfg Config) (*TestHarness, error) {
@@ -773,3 +814,5 @@ func findStr(s, substr string) int {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+func strPtr(s string) *string { return &s }
