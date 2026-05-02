@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/Emergent-Comapny/diane/internal/config"
@@ -19,6 +20,7 @@ func cmdMCPAdd(args []string) {
 	scope := fs.String("scope", "all", "Node scope (all, instance:<id>, slave:*, master:*)")
 	srvType := fs.String("type", "stdio", "Server type (stdio, http, streamable-http, sse)")
 	command := fs.String("command", "", "Command path (for stdio type)")
+	argsRaw := fs.String("args", "", "Command arguments, comma-separated (for stdio type)")
 	url := fs.String("url", "", "URL (for http/sse type)")
 	enabled := fs.Bool("enabled", true, "Enable on start")
 	timeout := fs.Int("timeout", 60, "Tool call timeout in seconds")
@@ -58,12 +60,21 @@ func cmdMCPAdd(args []string) {
 		}
 	}
 
+	// Parse --args (comma-separated)
+	var serverArgs []string
+	if *argsRaw != "" {
+		for _, a := range splitCommaPairs(*argsRaw) {
+			serverArgs = append(serverArgs, strings.TrimSpace(a))
+		}
+	}
+
 	// Build ServerConfig
 	server := mcpproxy.ServerConfig{
 		Name:    *name,
 		Enabled: *enabled,
 		Type:    *srvType,
 		Command: *command,
+		Args:    serverArgs,
 		URL:     *url,
 		Headers: headers,
 		Env:     env,
@@ -94,6 +105,9 @@ func cmdMCPAdd(args []string) {
 	fmt.Printf("   Type:   %s\n", *srvType)
 	if *command != "" {
 		fmt.Printf("   Cmd:    %s\n", *command)
+	}
+	if len(serverArgs) > 0 {
+		fmt.Printf("   Args:   %v\n", serverArgs)
 	}
 	if *url != "" {
 		fmt.Printf("   URL:    %s\n", *url)
