@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Emergent-Comapny/diane/internal/agents"
@@ -458,7 +459,22 @@ func cmdDoctor() {
 		fmt.Printf("✅ %d results\n", len(results))
 	}
 
-	// ── 10. Discord config ──
+	// ── 10. CLI vs App version match ──
+	fmt.Print("\n🔄 CLI / App version... ")
+	appVer := readAppVersion()
+	if appVer == "" {
+		fmt.Println("⏭️  Diane.app not installed")
+	} else {
+		cliVer := strings.TrimPrefix(Version, "v")
+		appVerClean := strings.TrimPrefix(appVer, "v")
+		if cliVer == appVerClean || (cliVer == "dev" && strings.HasPrefix(appVerClean, "dev")) {
+			fmt.Printf("✅ match (CLI=%s, App=%s)\n", Version, appVer)
+		} else {
+			fmt.Printf("❌ MISMATCH (CLI=%s, App=%s)\n", Version, appVer)
+		}
+	}
+
+	// ── 11. Discord config ──
 	fmt.Print("\n🤖 Discord bot... ")
 	if isSlave {
 		fmt.Println("⏭️  N/A (slave mode — master runs the bot)")

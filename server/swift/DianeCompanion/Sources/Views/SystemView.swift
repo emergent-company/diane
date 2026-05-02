@@ -260,6 +260,14 @@ struct SystemView: View {
 
             if let status = serverStatus {
                 infoRow(label: "Server Version", value: status.version ?? "—")
+                // CLI / App version match
+                let cliVersion = status.version ?? "—"
+                let appVersion = updateChecker.currentVersion ?? "—"
+                let versionMatch = cliVersion == appVersion || 
+                    (appVersion.hasPrefix("dev") && cliVersion.hasPrefix("vdev"))
+                infoRow(label: "CLI / App Match",
+                        value: versionMatch ? "✅ \(cliVersion) = \(appVersion)" : "⚠️ \(cliVersion) ≠ \(appVersion)",
+                        valueColor: versionMatch ? .green : .orange)
                 infoRow(label: "Project ID", value: status.projectID ?? "—")
                 infoRow(label: "Server URL", value: status.serverURL ?? "—")
                 if let started = status.startedAt {

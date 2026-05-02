@@ -2235,6 +2235,31 @@ func (a *localAPIServer) handleDoctor(w http.ResponseWriter, r *http.Request) {
 		"message": Version,
 	})
 
+	// 9. CLI / App version match
+	appVer := readAppVersion()
+	vmStatus := "ok"
+	vmMsg := "Diane.app not installed"
+	if appVer != "" {
+		cliVer := strings.TrimPrefix(Version, "v")
+		appVerClean := strings.TrimPrefix(appVer, "v")
+		if cliVer == appVerClean || (cliVer == "dev" && strings.HasPrefix(appVerClean, "dev")) {
+			vmStatus = "ok"
+			vmMsg = fmt.Sprintf("CLI=%s, App=%s — match", Version, appVer)
+		} else {
+			vmStatus = "warning"
+			vmMsg = fmt.Sprintf("CLI=%s, App=%s — MISMATCH", Version, appVer)
+		}
+	}
+	results = append(results, map[string]any{
+		"check":   "version_match",
+		"status":  vmStatus,
+		"message": vmMsg,
+		"details": map[string]any{
+			"cli_version": Version,
+			"app_version": appVer,
+		},
+	})
+
 	jsonResponse(w, map[string]any{
 		"ok":      sessionCRUD == "ok",
 		"version": Version,

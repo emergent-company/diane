@@ -8,6 +8,30 @@ import (
 	"strings"
 )
 
+// readAppVersion reads the CFBundleShortVersionString from Diane.app's Info.plist.
+// Returns empty string if the app bundle is not installed or cannot be read.
+func readAppVersion() string {
+	for _, appPath := range []string{
+		"/Applications/Diane.app",
+		filepath.Join(os.Getenv("HOME"), "Applications", "Diane.app"),
+	} {
+		plist := filepath.Join(appPath, "Contents", "Info.plist")
+		if _, err := os.Stat(plist); err != nil {
+			continue
+		}
+		out, err := exec.Command(
+			"/usr/libexec/PlistBuddy",
+			"-c", "Print CFBundleShortVersionString",
+			plist,
+		).Output()
+		if err == nil {
+			return strings.TrimSpace(string(out))
+		}
+		break
+	}
+	return ""
+}
+
 // cmdVersion prints the CLI version and companion app version (if installed).
 func cmdVersion() {
 	cliVer := Version
@@ -34,27 +58,20 @@ func cmdVersion() {
 	info := versionInfo{CLI: jsonVer}
 
 	// Check for companion app in standard locations
-	for _, appPath := range []string{
-		"/Applications/Diane.app",
-		filepath.Join(os.Getenv("HOME"), "Applications", "Diane.app"),
-	} {
-		plist := filepath.Join(appPath, "Contents", "Info.plist")
-		if _, err := os.Stat(plist); err != nil {
-			continue
+	if appVer := readAppVersion(); appVer != "" {
+		cleaned := strings.TrimPrefix(appVer, "v")
+		info.App = "v" + cleaned
+		// Find the app path
+		for _, appPath := range []string{
+			"/Applications/Diane.app",
+			filepath.Join(os.Getenv("HOME"), "Applications", "Diane.app"),
+		} {
+			plist := filepath.Join(appPath, "Contents", "Info.plist")
+			if _, err := os.Stat(plist); err == nil {
+				info.AppPath = appPath
+				break
+			}
 		}
-		// Use PlistBuddy — available on all macOS systems
-		out, err := exec.Command(
-			"/usr/libexec/PlistBuddy",
-			"-c", "Print CFBundleShortVersionString",
-			plist,
-		).Output()
-		if err == nil {
-			appVer := strings.TrimSpace(string(out))
-			appVer = strings.TrimPrefix(appVer, "v")
-			info.App = "v" + appVer
-			info.AppPath = appPath
-		}
-		break
 	}
 
 	if jsonOutput {

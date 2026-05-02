@@ -1323,6 +1323,7 @@ public struct DoctorCheckItem: Codable, Sendable, Identifiable {
         case "session_crud":    return "Session CRUD"
         case "memory_search":   return "Memory Search"
         case "server_version":  return "Server Version"
+        case "version_match":   return "CLI / App Version"
         default:                return check.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }
