@@ -139,13 +139,15 @@ struct MainWindowView: View {
 
 // MARK: - Previews
 
-#Preview("Configured + Connected") {
+private func makePreview(connected: Bool) -> some View {
     let config = ServerConfiguration()
     config.serverURL = "https://memory.example.com"
     config.apiKey = "emt_xxx"
-    let monitor = StatusMonitor.forPreviews(connectionState: .connected, isLocalReachable: true)
-
-    MainWindowView()
+    let monitor = StatusMonitor.forPreviews(
+        connectionState: connected ? .connected : .disconnected,
+        isLocalReachable: connected
+    )
+    return MainWindowView()
         .environmentObject(AppState())
         .environmentObject(EmergentAPIClient())
         .environmentObject(monitor)
@@ -153,18 +155,12 @@ struct MainWindowView: View {
         .frame(width: 800, height: 600)
 }
 
-#Preview("Configured + Disconnected") {
-    let config = ServerConfiguration()
-    config.serverURL = "https://memory.example.com"
-    config.apiKey = "emt_xxx"
-    let monitor = StatusMonitor.forPreviews(connectionState: .disconnected, isLocalReachable: false)
+#Preview("Configured + Connected") {
+    makePreview(connected: true)
+}
 
-    MainWindowView()
-        .environmentObject(AppState())
-        .environmentObject(EmergentAPIClient())
-        .environmentObject(monitor)
-        .environmentObject(config)
-        .frame(width: 800, height: 600)
+#Preview("Configured + Disconnected") {
+    makePreview(connected: false)
 }
 
 #Preview("Not Configured") {
