@@ -828,6 +828,131 @@ func (b *Bridge) ListNodeConfigs(ctx context.Context) ([]NodeConfig, error) {
 	return nodes, nil
 }
 
+// MCPProxyConfigType is the graph object type name for MCP proxy config objects.
+const MCPProxyConfigType = "MCPProxyConfig"
+
+// MCPProxyConfigRequest holds the config for an MCP proxy config in the graph.
+type MCPProxyConfigRequest struct {
+	Scope   string `json:"scope"`   // e.g. "all", "instance:tool", "slave:*"
+	Config  string `json:"config"`  // JSON string matching mcpproxy.ServerConfig
+	Version int    `json:"version"` // bump on each update
+}
+
+// UpsertMCPProxyConfig creates or updates an MCP proxy config in the graph.
+// Uses Key = scope for dedup so multiple versions of the same scope overwrite.
+func (b *Bridge) UpsertMCPProxyConfig(ctx context.Context, req *MCPProxyConfigRequest) error {
+	if req.Scope == "" {
+		return fmt.Errorf("scope is required")
+	}
+	if req.Config == "" {
+		return fmt.Errorf("config is required")
+	}
+
+	props := map[string]any{
+		"scope":   req.Scope,
+		"config":  req.Config,
+		"version": req.Version,
+	}
+
+	// Try to find existing by key (scope)
+	existing, err := b.client.Graph.ListObjects(ctx, &graph.ListObjectsOptions{
+		Type: MCPProxyConfigType,
+		Key:  req.Scope,
+	})
+	if err != nil {
+		return fmt.Errorf("list mcp proxy configs: %w", err)
+	}
+
+	if len(existing.Items) > 0 {
+		_, err = b.client.Graph.UpdateObject(ctx, existing.Items[0].EntityID, &graph.UpdateObjectRequest{
+			Properties: props,
+		})
+		if err != nil {
+			return fmt.Errorf("update mcp proxy config %s: %w", req.Scope, err)
+		}
+		return nil
+	}
+
+	key := req.Scope
+	_, err = b.client.Graph.CreateObject(ctx, &graph.CreateObjectRequest{
+		Type:       MCPProxyConfigType,
+		Key:        &key,
+		Properties: props,
+	})
+	if err != nil {
+		return fmt.Errorf("create mcp proxy config %s: %w", req.Scope, err)
+	}
+	return nil
+}
+
+// DeleteMCPProxyConfig removes an MCP proxy config from the graph by scope.
+func (b *Bridge) DeleteMCPProxyConfig(ctx context.Context, scope string) error {
+	existing, err := b.client.Graph.ListObjects(ctx, &graph.ListObjectsOptions{
+		Type: MCPProxyConfigType,
+		Key:  scope,
+	})
+	if err != nil {
+		return fmt.Errorf("list mcp proxy configs: %w", err)
+	}
+	if len(existing.Items) == 0 {
+		return fmt.Errorf("no MCP proxy config found for scope %q", scope)
+	}
+	return b.client.Graph.DeleteObject(ctx, existing.Items[0].EntityID, nil)
+}
+
+// MCPSecretType is the graph object type name for MCP secret objects.
+const MCPSecretType = "MCPSecret"
+
+// MCPSecretRequest holds a secret for MCP server authentication stored in the graph.
+type MCPSecretRequest struct {
+	Name  string `json:"name"`  // server name this secret belongs to
+	Scope string `json:"scope"` // scope targeting (same as MCPProxyConfig)
+	Value string `json:"value"` // the secret value (OAuth token, API key, etc.)
+}
+
+// UpsertMCPSecret creates or updates an MCP secret in the graph.
+// Uses a composite key: {scope}/{name} for dedup.
+func (b *Bridge) UpsertMCPSecret(ctx context.Context, req *MCPSecretRequest) error {
+	if req.Name == "" || req.Scope == "" {
+		return fmt.Errorf("name and scope are required")
+	}
+	key := req.Scope + "/" + req.Name
+
+	props := map[string]any{
+		"name":  req.Name,
+		"scope": req.Scope,
+		"value": req.Value,
+	}
+
+	existing, err := b.client.Graph.ListObjects(ctx, &graph.ListObjectsOptions{
+		Type: MCPSecretType,
+		Key:  key,
+	})
+	if err != nil {
+		return fmt.Errorf("list mcp secrets: %w", err)
+	}
+
+	if len(existing.Items) > 0 {
+		_, err = b.client.Graph.UpdateObject(ctx, existing.Items[0].EntityID, &graph.UpdateObjectRequest{
+			Properties: props,
+		})
+		if err != nil {
+			return fmt.Errorf("update mcp secret %s: %w", key, err)
+		}
+		return nil
+	}
+
+	_, err = b.client.Graph.CreateObject(ctx, &graph.CreateObjectRequest{
+		Type:       MCPSecretType,
+		Key:        &key,
+		Properties: props,
+	})
+	if err != nil {
+		return fmt.Errorf("create mcp secret %s: %w", key, err)
+	}
+	return nil
+}
+
 // ============================================================================
 // Graph Object Stats
 // ============================================================================

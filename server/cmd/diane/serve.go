@@ -146,6 +146,8 @@ func cmdServe() {
 
 			relayCfg := MCPRelayConfig{
 				RelayURL:     relayURL,
+				ServerURL:    pc.ServerURL,
+				ProjectID:    pc.ProjectID,
 				InstanceID:   instanceID,
 				ProjectToken: pc.Token,
 			}

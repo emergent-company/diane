@@ -52,6 +52,15 @@ type MCPRelayConfig struct {
 	// e.g., wss://memory.emergent-company.ai/mcp/relay
 	RelayURL string
 
+	// ServerURL is the Memory Platform HTTP endpoint for API calls.
+	// e.g., https://memory.emergent-company.ai
+	// Used for syncing config from the graph on config_changed notifications.
+	ServerURL string
+
+	// ProjectID is the Memory Platform project ID.
+	// Used for syncing config from the graph on config_changed notifications.
+	ProjectID string
+
 	// InstanceID is a unique identifier for this Diane instance.
 	// e.g., "laptop-mac", "server-linux", "companion-mac"
 	// Used by the agentic runner to route tool calls.
@@ -291,6 +300,21 @@ func (s *MCPSession) run() error {
 
 			case "ping":
 				s.sendWS(json.RawMessage(`{"type":"pong"}`))
+
+			case "config_changed":
+				log.Printf("[mcp-relay] Received config_changed notification — reloading MCP config from graph")
+				go func() {
+					syncConfigFromGraph(s.cfg.ServerURL, s.cfg.ProjectToken, s.cfg.ProjectID, s.cfg.InstanceID)
+					if s.proxy != nil {
+						if err := s.proxy.Reload(); err != nil {
+							log.Printf("[mcp-relay] Config reload failed: %v", err)
+						} else {
+							log.Printf("[mcp-relay] MCP config reloaded successfully")
+							// Re-register with updated tool list
+							s.sendRegister()
+						}
+					}
+				}()
 			}
 		}
 	}()
@@ -706,6 +730,8 @@ func runMCPRelay(args []string) {
 
 	relayCfg := MCPRelayConfig{
 		RelayURL:     relayURL,
+		ServerURL:    pc.ServerURL,
+		ProjectID:    pc.ProjectID,
 		InstanceID:   instanceID,
 		ProjectToken: pc.Token,
 	}

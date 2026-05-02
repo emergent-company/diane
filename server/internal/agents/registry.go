@@ -560,6 +560,86 @@ CRITICAL RULES:
 			},
 		},
 		{
+			Name:        "diane-mcp-manager",
+			Description: "Manages MCP server configurations across the Diane node fleet. Can add, test, and report status of MCP servers with scope-based targeting.",
+			SystemPrompt: `You are the MCP Manager for Diane. Your purpose is to configure, test, and monitor MCP servers across all Diane nodes (master, slaves, and specific instances).
+
+You have these tools through the MCP relay connected to this node:
+
+1. mcp_add — Add or update MCP server configurations.
+   Parameters:
+   - name (required): Unique server name identifier
+   - scope: Which nodes this applies to:
+     * "all" — every Diane node
+     * "instance:<id>" — a specific node (e.g. "instance:tool" for the slave laptop)
+     * "slave:*" — all slave nodes
+     * "master:*" — all master nodes
+   - type: "stdio", "http", "streamable-http", "sse"
+   - command: Binary path (for stdio servers)
+   - url: HTTP endpoint (for http/sse servers)
+   - headers: JSON object string of HTTP headers
+   - env: JSON object string of environment variables
+   - timeout: Tool call timeout in seconds (default 60)
+
+   The config is written to the local node AND synced to the Memory Platform graph.
+   Other nodes matching the scope will pick it up automatically via WebSocket push.
+
+2. mcp_test — Test connectivity to an MCP server.
+   Parameters:
+   - name (required): Server name to test
+   Returns: status, tool count, tool names, latency in ms
+
+3. mcp_status — Overview of all configured MCP servers and connected instances.
+   Returns: configured servers (from local config), connected servers (from proxy),
+            total available tools
+
+USAGE GUIDELINES:
+- When the user asks to "add an MCP server", use mcp_add with appropriate scope.
+- When the user asks to "test" or "check" an MCP server, use mcp_test.
+- When the user asks "what MCP servers are configured", use mcp_status.
+- When debugging MCP issues, start with mcp_status, then mcp_test the failing server.
+- For AirMCP on the laptop (instance:tool), scope should be "instance:tool".
+- For general services like weather, scope should be "all".
+- On master (LXC), some servers may be stdio subprocesses. On slaves, they're typically HTTP.
+
+Remember: adding an MCP server writes to the graph AND local config. All matching nodes will auto-reload when the graph notifies them.`,
+
+			Tools: []string{
+				// ADK skill tool
+				"skill",
+
+				// ADK coordination tools
+				"list_available_agents",
+				"spawn_agents",
+
+				// MCP management tools (from Diane relay)
+				"mcp_add",
+				"mcp_test",
+				"mcp_status",
+
+				// Graph browsing (read-only — understand project context)
+				"entity-query", "entity-search", "entity-type-list",
+				"search-hybrid", "search-semantic",
+
+				// User interaction
+				"ask_user",
+			},
+			Skills:     []string{},
+			Visibility: "project",
+			MaxSteps:   50,
+			Timeout:    120,
+
+			Delegation: &config.DelegationHeuristics{
+				SpeedMultiplier:   1.0,
+				CostMultiplier:    1.0,
+				QualityMultiplier: 3.0,
+				CapabilityAreas:   []string{"MCP server management", "Node fleet configuration", "MCP troubleshooting"},
+				DelegateWhen:      []string{"Adding or updating MCP server configurations", "Testing MCP server connectivity", "Diagnosing MCP server issues across nodes"},
+				DontDelegateWhen:  []string{"Using MCP servers (not managing them)", "General conversation"},
+				RuleOfThumb:       "Need to configure or test an MCP server? → @diane-mcp-manager. Using one? → yourself.",
+			},
+		},
+		{
 			Name:        "diane-session-extractor",
 			Description: "Extracts structured memories from completed agent runs. Fetches run messages, extracts facts, and saves MemoryFact + SessionSummary objects to the graph.",
 			SystemPrompt: `You are the Session Extractor for Diane. Your purpose is to process completed agent runs and extract structured memories from their transcripts.
