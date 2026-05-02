@@ -139,14 +139,18 @@ struct MainWindowView: View {
 
 // MARK: - Previews
 
-@MainActor
-private func makePreview(connected: Bool) -> some View {
-    let config = configuredPreview()
+#Preview("Configured + Connected") {
+    let config: ServerConfiguration = {
+        let c = ServerConfiguration()
+        c.serverURL = "https://memory.example.com"
+        c.apiKey = "emt_xxx"
+        return c
+    }()
     let monitor = StatusMonitor.forPreviews(
-        connectionState: connected ? .connected : .disconnected,
-        isLocalReachable: connected
+        connectionState: .connected,
+        isLocalReachable: true
     )
-    return MainWindowView()
+    MainWindowView()
         .environmentObject(AppState())
         .environmentObject(EmergentAPIClient())
         .environmentObject(monitor)
@@ -154,21 +158,23 @@ private func makePreview(connected: Bool) -> some View {
         .frame(width: 800, height: 600)
 }
 
-/// Creates a ServerConfiguration preset for previews, avoiding ViewBuilder-unsafe property assignments.
-@MainActor
-private func configuredPreview() -> ServerConfiguration {
-    let config = ServerConfiguration()
-    config.serverURL = "https://memory.example.com"
-    config.apiKey = "emt_xxx"
-    return config
-}
-
-#Preview("Configured + Connected") {
-    makePreview(connected: true)
-}
-
 #Preview("Configured + Disconnected") {
-    makePreview(connected: false)
+    let config: ServerConfiguration = {
+        let c = ServerConfiguration()
+        c.serverURL = "https://memory.example.com"
+        c.apiKey = "emt_xxx"
+        return c
+    }()
+    let monitor = StatusMonitor.forPreviews(
+        connectionState: .disconnected,
+        isLocalReachable: false
+    )
+    MainWindowView()
+        .environmentObject(AppState())
+        .environmentObject(EmergentAPIClient())
+        .environmentObject(monitor)
+        .environmentObject(config)
+        .frame(width: 800, height: 600)
 }
 
 #Preview("Not Configured") {
