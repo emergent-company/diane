@@ -292,6 +292,10 @@ func triggerExtractorDirect(ctx context.Context, b *memory.Bridge, defID, prefix
 
 	// Create runtime agent directly via REST API
 	runName := fmt.Sprintf("%s-extractor-%d", prefix, time.Now().UnixMilli())
+
+	// Pre-cleanup: delete any orphan extractor agents matching this prefix
+	cleanupTestAgentsByPrefix(ctx, prefix+"-extractor-", t)
+
 	createURL := fmt.Sprintf("%s/api/projects/%s/agents", bridgeTestServer, bridgeTestPID)
 	createBody := map[string]any{
 		"name":          runName,

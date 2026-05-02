@@ -106,6 +106,7 @@ func TestAgentTriggerRun(t *testing.T) {
 
 	// 2. Create a runtime agent (clean up afterwards)
 	runName := fmt.Sprintf("test-run-%d", time.Now().UnixMilli())
+	cleanupTestAgentsByPrefix(ctx, "test-run-", t)
 	agent, err := b.CreateRuntimeAgent(ctx, runName, defID)
 	if err != nil {
 		t.Fatalf("CreateRuntimeAgent: %v", err)

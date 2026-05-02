@@ -50,6 +50,12 @@ func TestDesign_DreamingProve(t *testing.T) {
 	t.Logf("")
 	t.Logf("### STEP 2: Store MemoryFacts about mcj")
 	prefix := fmt.Sprintf("dt-%d", os.Getpid())
+
+	// Pre-cleanup: delete any orphan agents from interrupted runs
+	cleanupTestAgentsByPrefix(ctx, "dt-", t)
+	cleanupTestAgentsByPrefix(ctx, prefix+"-dreamer-", t)
+	cleanupTestAgentsByPrefix(ctx, prefix+"-recall-", t)
+
 	facts := []struct {
 		content    string
 		confidence float64
@@ -447,6 +453,9 @@ func setupGC(t *testing.T, token string) (*graph.Client, func()) {
 func triggerDreamerViaBridge(ctx context.Context, b *memory.Bridge, defID, prefix string, t testing.TB) string {
 	t.Helper()
 	runName := fmt.Sprintf("%s-dreamer-%d", prefix, time.Now().UnixMilli())
+
+	// Pre-cleanup: delete any orphan dreamer agents matching this prefix
+	cleanupTestAgentsByPrefix(ctx, prefix+"-dreamer-", t)
 
 	agent, err := b.CreateRuntimeAgent(ctx, runName, defID)
 	if err != nil {

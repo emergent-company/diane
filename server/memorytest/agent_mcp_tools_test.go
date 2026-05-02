@@ -115,16 +115,30 @@ func TestAgentMCPTools(t *testing.T) {
 		t.Fatalf("CreateAgentDef: %v", err)
 	}
 	defID := created.Data.ID
-	t.Cleanup(func() { b.DeleteAgentDef(context.Background(), defID) })
+	t.Cleanup(func() {
+		cleanupCtx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer ccancel()
+		if err := b.DeleteAgentDef(cleanupCtx, defID); err != nil {
+			t.Logf("Cleanup: delete def %s: %v", defID[:12], err)
+		}
+	})
 	t.Logf("✅ Agent def: %s — tools: %v", defName, tools)
 
 	// ── Step 5: Trigger agent ──
-	agent, err := b.CreateRuntimeAgent(ctx, "test-mcp-run-"+fmt.Sprint(time.Now().UnixMilli()), defID)
+	runName := "test-mcp-run-" + fmt.Sprint(time.Now().UnixMilli())
+	cleanupTestAgentsByPrefix(ctx, "test-mcp-run-", t)
+	agent, err := b.CreateRuntimeAgent(ctx, runName, defID)
 	if err != nil {
 		t.Fatalf("CreateRuntimeAgent: %v", err)
 	}
 	agentID := agent.Data.ID
-	t.Cleanup(func() { b.Client().Agents.Delete(context.Background(), agentID) })
+	t.Cleanup(func() {
+		cleanupCtx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer ccancel()
+		if err := b.Client().Agents.Delete(cleanupCtx, agentID); err != nil {
+			t.Logf("Cleanup: delete agent %s: %v", agentID[:12], err)
+		}
+	})
 
 	resp, err := b.TriggerAgentWithInput(ctx, agentID,
 		"Call add_numbers with 79342 and 92837. Report the result.", "")

@@ -155,6 +155,7 @@ private func makePreview(connected: Bool) -> some View {
 }
 
 /// Creates a ServerConfiguration preset for previews, avoiding ViewBuilder-unsafe property assignments.
+@MainActor
 private func configuredPreview() -> ServerConfiguration {
     let config = ServerConfiguration()
     config.serverURL = "https://memory.example.com"

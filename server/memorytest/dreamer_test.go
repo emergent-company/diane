@@ -79,6 +79,7 @@ func TestAgentDreamer_TriggerAndRun(t *testing.T) {
 
 	// 2. Create a runtime agent
 	runName := fmt.Sprintf("dreamer-test-%d", time.Now().UnixMilli())
+	cleanupTestAgentsByPrefix(ctx, "dreamer-test-", t)
 	agent, err := b.CreateRuntimeAgent(ctx, runName, defID)
 	if err != nil {
 		t.Fatalf("CreateRuntimeAgent: %v", err)
@@ -176,6 +177,7 @@ func TestAgentDreamer_ScheduledCreation(t *testing.T) {
 
 	// 2. Create a scheduled runtime agent
 	agentName := fmt.Sprintf("dreamer-test-sched-%d", time.Now().UnixMilli())
+	cleanupTestAgentsByPrefix(ctx, "dreamer-test-sched-", t)
 	cronSchedule := "0 0 29 2 *" // Feb 29 — never fires
 	triggerPrompt := "Run the nightly forgetting curve and hallucination pipeline."
 

@@ -224,6 +224,8 @@ struct StatsView: View {
         guard !top5.isEmpty else { return AnyView(EmptyView()) }
 
         let maxCount = top5.map(\.count).max() ?? 1
+        let barMaxHeight: CGFloat = 60
+        let minBarHeight: CGFloat = 4
 
         return AnyView(VStack(alignment: .leading, spacing: Design.Spacing.sm) {
             HStack {
@@ -235,34 +237,42 @@ struct StatsView: View {
             }
             .padding(.top, Design.Spacing.sm)
 
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 240, maximum: 320), spacing: Design.Spacing.md)], spacing: Design.Spacing.sm) {
+            // Vertical bar chart
+            HStack(alignment: .bottom, spacing: Design.Spacing.lg) {
                 ForEach(Array(top5)) { tc in
-                    HStack(spacing: Design.Spacing.sm) {
-                        // Bar indicator
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(.cyan.opacity(0.4))
-                            .frame(width: CGFloat(tc.count) / CGFloat(maxCount) * 80, height: 20)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 3)
-                                    .fill(.cyan.opacity(0.2))
-                                    .frame(width: 80, height: 20)
-                                , alignment: .leading
-                            )
+                    VStack(spacing: 3) {
+                        // Count label above bar
+                        Text("\(tc.count)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
 
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(tc.typeName)
-                                .font(.caption)
-                                .fontWeight(.medium)
-                                .lineLimit(1)
-                            Text("\(tc.count)")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .monospacedDigit()
+                        // Vertical bar with background track
+                        ZStack(alignment: .bottom) {
+                            // Background track
+                            RoundedRectangle(cornerRadius: 3)
+                                .fill(.cyan.opacity(0.1))
+                                .frame(width: 20, height: barMaxHeight)
+
+                            // Filled portion
+                            RoundedRectangle(cornerRadius: 3)
+                                .fill(.cyan.opacity(0.5))
+                                .frame(
+                                    width: 20,
+                                    height: max(CGFloat(tc.count) / CGFloat(maxCount) * barMaxHeight, minBarHeight)
+                                )
                         }
+
+                        // Type name label at bottom
+                        Text(tc.typeName)
+                            .font(.caption2)
+                            .fontWeight(.medium)
+                            .lineLimit(1)
+                            .frame(width: 56)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         })
     }
 

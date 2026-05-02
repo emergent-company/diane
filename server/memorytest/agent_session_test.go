@@ -55,6 +55,7 @@ func TestAgentSession_Continuity(t *testing.T) {
 
 	// 2. Create a runtime agent
 	runName := fmt.Sprintf("t-session-%d", time.Now().UnixMilli())
+	cleanupTestAgentsByPrefix(ctx, "t-session-", t)
 	agent, err := b.CreateRuntimeAgent(ctx, runName, defID)
 	if err != nil {
 		t.Fatalf("CreateRuntimeAgent: %v", err)
@@ -176,6 +177,7 @@ func TestAgentSession_Isolation(t *testing.T) {
 
 	// Create runtime agent
 	runName := fmt.Sprintf("t-isolate-%d", time.Now().UnixMilli())
+	cleanupTestAgentsByPrefix(ctx, "t-isolate-", t)
 	agent, err := b.CreateRuntimeAgent(ctx, runName, defID)
 	if err != nil {
 		t.Fatalf("CreateRuntimeAgent: %v", err)
@@ -185,7 +187,9 @@ func TestAgentSession_Isolation(t *testing.T) {
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cleanupCancel()
-		_ = b.Client().Agents.Delete(cleanupCtx, agentID)
+		if err := b.Client().Agents.Delete(cleanupCtx, agentID); err != nil {
+			t.Logf("Cleanup: delete agent %s: %v", agentID[:12], err)
+		}
 	})
 
 	// Two different session IDs
@@ -284,6 +288,7 @@ func TestAgentSession_NoSessionId(t *testing.T) {
 	}
 
 	runName := fmt.Sprintf("t-nosess-%d", time.Now().UnixMilli())
+	cleanupTestAgentsByPrefix(ctx, "t-nosess-", t)
 	agent, err := b.CreateRuntimeAgent(ctx, runName, defID)
 	if err != nil {
 		t.Fatalf("CreateRuntimeAgent: %v", err)
@@ -293,7 +298,9 @@ func TestAgentSession_NoSessionId(t *testing.T) {
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cleanupCancel()
-		_ = b.Client().Agents.Delete(cleanupCtx, agentID)
+		if err := b.Client().Agents.Delete(cleanupCtx, agentID); err != nil {
+			t.Logf("Cleanup: delete agent %s: %v", agentID[:12], err)
+		}
 	})
 
 	// Two triggers with empty sessionId

@@ -328,6 +328,9 @@ func TestRunTrace_GetAgentRunsLimit(t *testing.T) {
 func createAgent(ctx context.Context, t *testing.T, b *memory.Bridge) (string, string) {
 	t.Helper()
 
+	// Pre-cleanup: delete any orphan agents from interrupted runs
+	cleanupTestAgentsByPrefix(ctx, "t-run-", t)
+
 	defs, err := b.ListAgentDefs(ctx)
 	if err != nil {
 		t.Fatalf("ListAgentDefs: %v", err)
@@ -353,7 +356,9 @@ func createAgent(ctx context.Context, t *testing.T, b *memory.Bridge) (string, s
 	t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = b.Client().Agents.Delete(cleanupCtx, agentID)
+		if err := b.Client().Agents.Delete(cleanupCtx, agentID); err != nil {
+			t.Logf("Cleanup: delete agent %s: %v", agentID[:12], err)
+		}
 	})
 
 	return defID, agentID
