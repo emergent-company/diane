@@ -139,6 +139,7 @@ struct MainWindowView: View {
 
 // MARK: - Previews
 
+@MainActor
 private func makePreview(connected: Bool) -> some View {
     let config = configuredPreview()
     let monitor = StatusMonitor.forPreviews(
