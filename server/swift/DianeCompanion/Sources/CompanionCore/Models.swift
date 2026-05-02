@@ -404,6 +404,7 @@ public struct ExtractionSummary: Codable, Sendable {
     public let objectsCreated: Int
     public let relationshipsCreated: Int
     public let objectsByType: [String: Int]?
+    public let objectIds: [String]?
     public let chunksProcessed: Int
     public let totalChunks: Int
     public let hasErrors: Bool

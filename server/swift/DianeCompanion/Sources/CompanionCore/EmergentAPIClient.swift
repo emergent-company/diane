@@ -355,6 +355,107 @@ final class EmergentAPIClient: ObservableObject {
         return (try? JSONDecoder().decode([DianeMessage].self, from: data)) ?? []
     }
     
+    // MARK: - Document Upload
+
+    /// Upload a file to the Emergent platform. The upload endpoint returns `name` instead of
+    /// `filename`, so we decode via a separate response type and map it to the standard Document.
+    func uploadDocument(fileURL: URL, projectID: String, autoExtract: Bool = true) async throws -> Document {
+        guard fileURL.startAccessingSecurityScopedResource() else {
+            throw EmergentAPIError.network("Cannot access file at \(fileURL.lastPathComponent)")
+        }
+        defer { fileURL.stopAccessingSecurityScopedResource() }
+
+        struct UploadResponse: Decodable {
+            let document: UploadDocument
+            let isDuplicate: Bool?
+        }
+        struct UploadDocument: Decodable {
+            let id: String
+            let name: String         // upload API returns "name", not "filename"
+            let mimeType: String?
+            let fileSizeBytes: Int?
+            let conversionStatus: String?
+            let storageKey: String?
+            let createdAt: String?
+        }
+
+        var req = try makeRequest(method: "POST", path: "/api/documents/upload")
+        req.setValue(projectID, forHTTPHeaderField: "X-Project-ID")
+
+        let boundary = "Boundary-\(UUID().uuidString)"
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+
+        var body = Data()
+        // autoExtract field
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"autoExtract\"\r\n\r\n".data(using: .utf8)!)
+        body.append("\(autoExtract)\r\n".data(using: .utf8)!)
+        // file field
+        let fileData = try Data(contentsOf: fileURL)
+        let filename = fileURL.lastPathComponent
+        let mime = mimeTypeForFile(filename)
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: \(mime)\r\n\r\n".data(using: .utf8)!)
+        body.append(fileData)
+        body.append("\r\n".data(using: .utf8)!)
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+        req.httpBody = body
+        req.setValue("\(body.count)", forHTTPHeaderField: "Content-Length")
+
+        let data = try await perform(req)
+        let uploadResp = try decode(UploadResponse.self, from: data)
+
+        return Document(
+            id: uploadResp.document.id,
+            projectId: projectID,
+            filename: uploadResp.document.name,
+            mimeType: uploadResp.document.mimeType,
+            fileHash: nil,
+            contentHash: nil,
+            sourceType: "upload",
+            conversionStatus: uploadResp.document.conversionStatus,
+            extractionStatus: nil,
+            processingStatus: nil,
+            storageKey: uploadResp.document.storageKey,
+            storageUrl: nil,
+            fileSizeBytes: uploadResp.document.fileSizeBytes,
+            syncVersion: nil,
+            chunks: nil,
+            embeddedChunks: nil,
+            totalChars: nil,
+            objectsCreated: nil,
+            relationshipsCreated: nil,
+            content: nil,
+            createdAt: uploadResp.document.createdAt,
+            updatedAt: nil
+        )
+    }
+
+    /// Guess a MIME type from file extension for upload.
+    private func mimeTypeForFile(_ filename: String) -> String {
+        let ext = (filename as NSString).pathExtension.lowercased()
+        switch ext {
+        case "pdf":           return "application/pdf"
+        case "docx", "doc":   return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        case "xlsx", "xls":   return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        case "pptx", "ppt":   return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        case "txt":           return "text/plain"
+        case "md":            return "text/markdown"
+        case "csv":           return "text/csv"
+        case "json":          return "application/json"
+        case "xml":           return "application/xml"
+        case "html", "htm":   return "text/html"
+        case "png":           return "image/png"
+        case "jpg", "jpeg":   return "image/jpeg"
+        case "gif":           return "image/gif"
+        case "webp":          return "image/webp"
+        case "rtf":           return "application/rtf"
+        default:              return "application/octet-stream"
+        }
+    }
+
     // MARK: - HTTP helpers
 
     private func get(_ path: String, projectID: String? = nil, orgID: String? = nil) async throws -> Data {

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Lists uploaded documents with extraction status.
+/// Lists uploaded documents with extraction status and upload capability.
 struct DocumentsView: View {
     @EnvironmentObject var apiClient: EmergentAPIClient
     @EnvironmentObject var serverConfig: ServerConfiguration
@@ -11,14 +11,67 @@ struct DocumentsView: View {
     @State private var searchText = ""
     @State private var selection: Document?
 
+    @State private var isUploading = false
+    @State private var uploadProgressMessage = ""
+    @State private var uploadError: String?
+    @State private var showUploadError = false
+
     var body: some View {
         NavigationSplitView {
             listContent
                 .navigationTitle("Documents")
+                .toolbar { uploadToolbar }
                 .task { await loadDocuments() }
                 .searchable(text: $searchText, prompt: "Search documents…")
+                .overlay { uploadingOverlay }
+                .alert("Upload Error", isPresented: $showUploadError, actions: {
+                    Button("OK") { uploadError = nil }
+                }, message: {
+                    Text(uploadError ?? "Unknown error")
+                })
         } detail: {
             detailContent
+        }
+    }
+
+    // MARK: - Upload Toolbar
+
+    @ToolbarContentBuilder
+    private var uploadToolbar: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                pickAndUploadFile()
+            } label: {
+                Label("Upload", systemImage: "plus")
+            }
+            .disabled(isUploading)
+            .help("Upload a document for extraction")
+        }
+    }
+
+    // MARK: - Upload Overlay
+
+    @ViewBuilder
+    private var uploadingOverlay: some View {
+        if isUploading {
+            ZStack {
+                Color.black.opacity(0.2)
+                    .ignoresSafeArea()
+
+                VStack(spacing: Design.Spacing.md) {
+                    ProgressView()
+                        .controlSize(.large)
+                    Text(uploadProgressMessage)
+                        .font(.headline)
+                    Text("Processing and extracting…")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(Design.Spacing.lg)
+                .background(.regularMaterial)
+                .cornerRadius(Design.CornerRadius.medium)
+                .shadow(radius: 8)
+            }
         }
     }
 
@@ -71,6 +124,58 @@ struct DocumentsView: View {
         return documents.filter {
             $0.filename.localizedCaseInsensitiveContains(searchText)
         }
+    }
+
+    /// Opens an NSOpenPanel for file selection, then uploads the chosen file.
+    private func pickAndUploadFile() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [
+            .pdf, .text, .plainText,
+            .init(filenameExtension: "md") ?? .plainText,
+            .init(filenameExtension: "docx") ?? .data,
+            .init(filenameExtension: "doc") ?? .data,
+            .init(filenameExtension: "csv") ?? .data,
+            .init(filenameExtension: "json") ?? .data,
+            .init(filenameExtension: "rtf") ?? .data,
+        ]
+        panel.message = "Select a document to upload and extract"
+        panel.prompt = "Upload"
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        Task { await performUpload(fileURL: url) }
+    }
+
+    /// Performs the actual upload and refreshes the list.
+    private func performUpload(fileURL: URL) async {
+        isUploading = true
+        uploadProgressMessage = "Uploading \(fileURL.lastPathComponent)…"
+
+        do {
+            let doc = try await apiClient.uploadDocument(
+                fileURL: fileURL,
+                projectID: serverConfig.projectID,
+                autoExtract: true
+            )
+            uploadProgressMessage = "Upload complete — refreshing list…"
+
+            // Wait a moment for processing to start, then refresh
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+            await loadDocuments()
+
+            // Auto-select the uploaded document
+            if let found = documents.first(where: { $0.id == doc.id }) {
+                selection = found
+            }
+        } catch {
+            uploadError = error.localizedDescription
+            showUploadError = true
+        }
+
+        isUploading = false
+        uploadProgressMessage = ""
     }
 
     private func loadDocuments() async {

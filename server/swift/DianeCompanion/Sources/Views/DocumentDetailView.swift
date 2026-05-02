@@ -291,17 +291,28 @@ struct DocumentDetailView: View {
                 documentID: document.id
             )
             extractionSummary = summary
-            // Load branch objects
-            let branch = "extraction/\(document.id)/\(summary.jobId)"
             isLoadingBranchObjects = true
-            let objects = try? await apiClient.fetchBranchObjects(
-                projectID: serverConfig.projectID,
-                branch: branch
-            )
-            // Filter to only objects from this extraction job
-            branchObjects = objects?.filter {
-                $0.properties?["_extraction_job_id"]?.stringValue == summary.jobId
-            } ?? []
+
+            // Prefer objectIds from extraction summary (always works, survives branch merge)
+            if let ids = summary.objectIds, !ids.isEmpty {
+                var objects: [GraphObject] = []
+                for objId in ids {
+                    if let obj = try? await apiClient.fetchObject(id: objId) {
+                        objects.append(obj)
+                    }
+                }
+                branchObjects = objects
+            } else {
+                // Fallback: try fetching from extraction branch (pre-v0.40.58 docs)
+                let branch = "extraction/\(document.id)/\(summary.jobId)"
+                let objects = try? await apiClient.fetchBranchObjects(
+                    projectID: serverConfig.projectID,
+                    branch: branch
+                )
+                branchObjects = objects?.filter {
+                    $0.properties?["_extraction_job_id"]?.stringValue == summary.jobId
+                } ?? []
+            }
             isLoadingBranchObjects = false
         } catch {
             extractionError = error.localizedDescription
