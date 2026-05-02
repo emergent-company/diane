@@ -129,7 +129,6 @@ final class StatusMonitor: ObservableObject {
 
 import SwiftUI
 
-#if DEBUG
 extension StatusMonitor {
     /// Create an instance pre-configured for preview canvases.
     /// Can only live in this file because `@Published private(set)` properties
@@ -144,4 +143,4 @@ extension StatusMonitor {
         return monitor
     }
 }
-#endif
+
