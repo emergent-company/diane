@@ -165,7 +165,7 @@ func Apply(ctx context.Context, client *sdk.Client, projectID string, opts *Appl
 
 	// Step 3: Create new types + relationships via Memory Schema pack
 	if len(newDefs) > 0 || len(allRels) > 0 {
-		packResults := applyViaPack(ctx, client, projectID, newDefs, allRels, opts)
+		packResults := applyViaPack(ctx, client, projectID, newDefs, allDefs, allRels, opts)
 		results = append(results, packResults...)
 	}
 
@@ -214,7 +214,7 @@ func updateExistingType(
 
 func applyViaPack(
 	ctx context.Context, client *sdk.Client, projectID string,
-	newDefs []SchemaDefinition, allRels []RelationshipDefinition, opts *ApplyOptions,
+	newDefs []SchemaDefinition, allDefs []SchemaDefinition, allRels []RelationshipDefinition, opts *ApplyOptions,
 ) []Result {
 	if opts.DryRun {
 		var results []Result
@@ -244,9 +244,15 @@ func applyViaPack(
 
 	baseURL := strings.TrimRight(opts.ServerURL, "/")
 
-	// Build pack payload
-	packObjTypes := make([]packObjectType, len(newDefs))
-	for i, def := range newDefs {
+	// Build pack payload — include ALL object types (not just new ones) so the
+	// pack API accepts relationship type definitions without complaining about
+	// empty objectTypeSchemas.
+	allTypes := allDefs
+	if len(newDefs) > 0 {
+		allTypes = newDefs // only need new types if there are any
+	}
+	packObjTypes := make([]packObjectType, len(allTypes))
+	for i, def := range allTypes {
 		packObjTypes[i] = def.toPackType()
 	}
 	packRelTypes := make([]packRelationshipType, len(allRels))
