@@ -39,6 +39,8 @@ func SeedToDB(d *db.DB) error {
 			tags = []string{"admin", "schema"}
 		case "diane-session-extractor":
 			tags = []string{"memory", "extraction"}
+		case "diane-graph-merger":
+			tags = []string{"graph", "merge", "extraction"}
 		}
 
 		tagsJSON, err := json.Marshal(tags)

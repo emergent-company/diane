@@ -15,8 +15,8 @@ import (
 
 func TestBuiltInAgentsCount(t *testing.T) {
 	list := agents.BuiltInAgents()
-	if len(list) != 9 {
-		t.Errorf("BuiltInAgents() returned %d agents, want 9", len(list))
+	if len(list) != 10 {
+		t.Errorf("BuiltInAgents() returned %d agents, want 10", len(list))
 	}
 }
 
@@ -40,6 +40,7 @@ func TestBuiltInAgentsNames(t *testing.T) {
 		"diane-codebase",
 		"diane-dreamer",
 		"diane-skill-monitor",
+		"diane-graph-merger",
 	}
 
 	for _, name := range expected {
