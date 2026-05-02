@@ -145,6 +145,17 @@ final class EmergentAPIClient: ObservableObject {
         return try decode(QueryResult.self, from: data)
     }
 
+    /// Fetch the extraction summary for a document.
+    func fetchExtractionSummary(projectID: String, documentID: String) async throws -> ExtractionSummary {
+        let data = try await get("/api/documents/\(documentID)/extraction-summary", projectID: projectID)
+        // Check for 404 "no extraction" response
+        if let err = try? JSONDecoder().decode(ExtractionSummaryError.self, from: data),
+           err.error?.code == "not_found" {
+            throw EmergentAPIError.notFound(err.error?.message ?? "No extraction completed")
+        }
+        return try decode(ExtractionSummary.self, from: data)
+    }
+
     // MARK: - Workers (uses /api/diagnostics — no dedicated workers endpoint)
 
     func fetchWorkers() async throws -> [Worker] {

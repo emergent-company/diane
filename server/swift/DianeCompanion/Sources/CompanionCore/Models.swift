@@ -329,7 +329,7 @@ public struct UserProfile: Codable, Sendable {
 // MARK: - Document
 
 /// A document stored in the Emergent platform.
-public struct Document: Identifiable, Codable, Sendable {
+public struct Document: Identifiable, Codable, Hashable, Sendable {
     public let id: String
     public let projectId: String?
     public let filename: String
@@ -339,6 +339,7 @@ public struct Document: Identifiable, Codable, Sendable {
     public let sourceType: String?
     public let conversionStatus: String?
     public let extractionStatus: String?
+    public let processingStatus: String?
     public let storageKey: String?
     public let storageUrl: String?
     public let fileSizeBytes: Int?
@@ -346,29 +347,60 @@ public struct Document: Identifiable, Codable, Sendable {
     public let chunks: Int?
     public let embeddedChunks: Int?
     public let totalChars: Int?
+    public let objectsCreated: Int?
+    public let relationshipsCreated: Int?
     public let content: String?
     public let createdAt: String?
     public let updatedAt: String?
 
     enum CodingKeys: String, CodingKey {
         case id, filename, content
-        case projectId        = "projectId"
-        case mimeType         = "mimeType"
-        case fileHash         = "fileHash"
-        case contentHash      = "contentHash"
-        case sourceType       = "source_type"
-        case conversionStatus = "conversionStatus"
-        case extractionStatus = "extractionStatus"
-        case storageKey       = "storageKey"
-        case storageUrl       = "storageUrl"
-        case fileSizeBytes    = "fileSizeBytes"
-        case syncVersion      = "syncVersion"
-        case chunks           = "chunks"
-        case embeddedChunks   = "embeddedChunks"
-        case totalChars       = "totalChars"
-        case createdAt        = "created_at"
-        case updatedAt        = "updated_at"
+        case projectId         = "projectId"
+        case mimeType          = "mimeType"
+        case fileHash          = "fileHash"
+        case contentHash       = "contentHash"
+        case sourceType        = "sourceType"
+        case conversionStatus  = "conversionStatus"
+        case extractionStatus  = "extractionStatus"
+        case processingStatus  = "processingStatus"
+        case storageKey        = "storageKey"
+        case storageUrl        = "storageUrl"
+        case fileSizeBytes     = "fileSizeBytes"
+        case syncVersion       = "syncVersion"
+        case chunks            = "chunks"
+        case embeddedChunks    = "embeddedChunks"
+        case totalChars        = "totalChars"
+        case objectsCreated    = "objectsCreated"
+        case relationshipsCreated = "relationshipsCreated"
+        case createdAt         = "createdAt"
+        case updatedAt         = "updatedAt"
     }
+}
+
+// MARK: - Extraction Summary
+
+/// Decoded from GET /api/documents/{id}/extraction-summary
+public struct ExtractionSummary: Codable, Sendable {
+    public let jobId: String
+    public let completedAt: String
+    public let objectsCreated: Int
+    public let relationshipsCreated: Int
+    public let objectsByType: [String: Int]?
+    public let chunksProcessed: Int
+    public let totalChunks: Int
+    public let hasErrors: Bool
+    public let errorSummary: String?
+}
+
+// MARK: - Extraction Summary Error (404 when no extraction done yet)
+
+public struct ExtractionSummaryError: Codable, Sendable {
+    public let error: ExtractionSummaryErrorDetail?
+}
+
+public struct ExtractionSummaryErrorDetail: Codable, Sendable {
+    public let code: String?
+    public let message: String?
 }
 
 // MARK: - Document Chunks

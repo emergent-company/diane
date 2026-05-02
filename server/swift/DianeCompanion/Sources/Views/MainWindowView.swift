@@ -64,6 +64,8 @@ struct MainWindowView: View {
             SessionsView()
         case .sessions:
             SessionsView()
+        case .documents:
+            DocumentsView()
         case .agents:
             AgentsView()
         case .schema:
