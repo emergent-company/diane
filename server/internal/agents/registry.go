@@ -643,27 +643,23 @@ Set key to a stable identifier (e.g., person name, company name, device hostname
 Add labels for discoverability: "extracted", "source_session:[session_id]".
 
 ## 6. RELATE
-After creating entities, wire relationships between them. **CRITICAL: always create INVERSE (bidirectional) edges so the graph is searchable from either direction.** For each relationship pair, make TWO entity-edges-create calls:
+After creating entities, wire relationships between them:
+- Person ──works_at──→ Company (if employer mentioned)
+- Person ──owns_device──→ Device (their machine)
+- Person ──uses_service──→ Service (platforms they use)
+- Person ──tracks_habit──→ Habit (routines they track)
+- Person ──member_of──→ Project (initiatives they participate in)
+- Task ──assigned_to──→ Person (who's responsible)
+- Task ──belongs_to_project──→ Project (parent initiative)
+- Place ──located_at──→ entity (meeting location)
+- Entity ──has_task──→ Task (follow-ups spawned by this entity)
 
-| Forward | Inverse | Example |
-|---------|---------|---------|
-| Person ──works_at──→ Company | Company ──has_employee──→ Person | mcj works at emergent-company |
-| Person ──owns_device──→ Device | Device ──owned_by──→ Person | mcj owns mcj-mini |
-| Person ──uses_service──→ Service | Service ──used_by──→ Person | mcj uses Tailscale |
-| Person ──tracks_habit──→ Habit | Habit ──tracked_by──→ Person | mcj tracks morning-run |
-| Person ──member_of──→ Project | Project ──has_member──→ Person | mcj in Diane project |
-| Task ──assigned_to──→ Person | Person ──assigned_task──→ Task | task assigned to mcj |
-| Task ──belongs_to_project──→ Project | Project ──has_task──→ Task | task belongs to Diane |
-| Place ──located_at──→ Entity | Entity ──has_location──→ Place | meeting at Blue Bottle |
-| Entity ──has_task──→ Task | Task ──for_entity──→ Entity | follow-up for this entity |
-| Person ──knows──→ Person | Person ──known_by──→ Person | mcj knows Bob |
-
-After wiring entities to each other, also wire provenance edges back to sources (these are one-directional, no inverse needed):
+After wiring entities to each other, also wire provenance edges back to sources:
 - MemoryFact ──yields──→ Entity (for each entity extracted from a MemoryFact)
 - Session ──mentions──→ Entity (for each entity extracted from a session)
 - Use the memory_fact_id or session_id you tracked as the source_id
 
-Use entity-edges-create(source_id, target_id, relationship_name) twice per pair — once for forward, once for inverse.
+Use entity-edges-create(source_id, target_id, relationship_name).
 
 ## 7. TRACK
 After processing, save/update a SkillMonitorCheckpoint entity.
