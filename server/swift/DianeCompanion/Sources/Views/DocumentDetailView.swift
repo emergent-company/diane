@@ -10,6 +10,8 @@ struct DocumentDetailView: View {
     @State private var extractionSummary: ExtractionSummary?
     @State private var extractionError: String?
     @State private var isLoadingExtraction = true
+    @State private var branchObjects: [GraphObject] = []
+    @State private var isLoadingBranchObjects = false
     @State private var showContent = false
 
     var body: some View {
@@ -69,6 +71,7 @@ struct DocumentDetailView: View {
             DetailRow(label: "Created", value: formattedDate(document.createdAt))
             DetailRow(label: "Conversion", value: document.conversionStatus ?? "-")
             DetailRow(label: "Extraction", value: document.extractionStatus ?? "-")
+            extractionBranchRow
 
             if let objs = document.objectsCreated, objs > 0 {
                 DetailRow(label: "Objects Created", value: "\(objs)")
@@ -113,6 +116,14 @@ struct DocumentDetailView: View {
                         .foregroundStyle(.tertiary)
                 }
             } else if let summary = extractionSummary {
+                // Branch name
+                if let jobId = extractionSummary?.jobId {
+                    let branch = "extraction/\(document.id)/\(jobId)"
+                    Label(branch, systemImage: "arrow.tree.branch")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 // Summary counts
                 HStack(spacing: Design.Spacing.lg) {
                     StatBadge(value: "\(summary.objectsCreated)", label: "Objects", icon: "cube.fill")
@@ -156,6 +167,50 @@ struct DocumentDetailView: View {
                     }
                 }
 
+                // Extracted objects list
+                if !branchObjects.isEmpty {
+                    Divider()
+                    Text("Extracted Objects (\(branchObjects.count))")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+
+                    LazyVStack(spacing: Design.Spacing.xs) {
+                        ForEach(branchObjects, id: \.id) { obj in
+                            HStack(spacing: 6) {
+                                Image(systemName: iconForObjectType(obj.type ?? ""))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 16)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(obj.displayName)
+                                        .font(.caption)
+                                        .fontWeight(.medium)
+                                    Text(obj.type ?? "")
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                }
+                                Spacer()
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Design.Surface.cardBackground.opacity(0.3))
+                            .cornerRadius(Design.CornerRadius.small)
+                        }
+                    }
+                } else if !isLoadingBranchObjects, extractionSummary != nil {
+                    Text("No extracted objects visible on this branch.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+
+                if isLoadingBranchObjects {
+                    HStack {
+                        ProgressView().controlSize(.small)
+                        Text("Loading objects…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 Text("Completed: \(formattedDate(summary.completedAt))")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
@@ -190,6 +245,14 @@ struct DocumentDetailView: View {
     }
 
     // MARK: - Helpers
+
+    @ViewBuilder
+    private var extractionBranchRow: some View {
+        if let summary = extractionSummary, !summary.jobId.isEmpty {
+            let branch = "extraction/\(document.id)/\(summary.jobId)"
+            DetailRow(label: "Branch", value: branch)
+        }
+    }
 
     @ViewBuilder
     private var extractionStatusBadge: some View {
@@ -228,6 +291,18 @@ struct DocumentDetailView: View {
                 documentID: document.id
             )
             extractionSummary = summary
+            // Load branch objects
+            let branch = "extraction/\(document.id)/\(summary.jobId)"
+            isLoadingBranchObjects = true
+            let objects = try? await apiClient.fetchBranchObjects(
+                projectID: serverConfig.projectID,
+                branch: branch
+            )
+            // Filter to only objects from this extraction job
+            branchObjects = objects?.filter {
+                $0.properties?["_extraction_job_id"]?.stringValue == summary.jobId
+            } ?? []
+            isLoadingBranchObjects = false
         } catch {
             extractionError = error.localizedDescription
         }

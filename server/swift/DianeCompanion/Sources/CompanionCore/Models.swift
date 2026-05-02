@@ -164,6 +164,14 @@ public struct GraphObject: Identifiable, Codable, Hashable, Sendable {
     public let properties: [String: AnyCodable]?
     public let createdAt: String?
 
+    /// Display name extracted from properties, falling back to type + id.
+    public var displayName: String {
+        if let name = properties?["name"]?.stringValue, !name.isEmpty {
+            return name
+        }
+        return "\(type ?? "?"): \(id.prefix(8))"
+    }
+
     enum CodingKeys: String, CodingKey {
         case id, type, score, properties
         case createdAt = "created_at"
@@ -178,6 +186,16 @@ public struct AnyCodable: Codable, @unchecked Sendable {
     public let value: Any
 
     public init(_ value: Any) { self.value = value }
+
+    /// Extract string value regardless of internal type.
+    public var stringValue: String? {
+        switch value {
+        case let s as String: return s
+        case let i as Int:    return String(i)
+        case let d as Double: return String(d)
+        default:              return nil
+        }
+    }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()

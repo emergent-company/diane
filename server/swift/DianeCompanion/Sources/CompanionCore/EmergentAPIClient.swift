@@ -156,6 +156,18 @@ final class EmergentAPIClient: ObservableObject {
         return try decode(ExtractionSummary.self, from: data)
     }
 
+    /// Fetch graph objects from a specific branch (e.g. "extraction/{docId}/{jobId}").
+    /// This is how extraction-created objects are isolated from the main graph.
+    func fetchBranchObjects(projectID: String, branch: String, limit: Int = 100) async throws -> [GraphObject] {
+        let encoded = branch.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? branch
+        let data = try await get("/api/graph/objects/search?branch=\(encoded)&limit=\(limit)", projectID: projectID)
+        struct Response: Decodable { let objects: [GraphObject]? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.objects {
+            return list
+        }
+        return (try? JSONDecoder().decode([GraphObject].self, from: data)) ?? []
+    }
+
     // MARK: - Workers (uses /api/diagnostics — no dedicated workers endpoint)
 
     func fetchWorkers() async throws -> [Worker] {
