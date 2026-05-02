@@ -182,6 +182,9 @@ Your tools are limited to:
   Pauses execution, sends notification to Discord with buttons, resumes when user responds.
   Use when you need a decision, approval, or clarification from the user.
   Supports multiple-choice options or free-text questions.
+  ⚠️ NEVER call ask_user more than once with the same question. If the user does not respond,
+  make a reasonable default decision or report that user input is needed and stop. Repeating
+  the same ask_user call will trigger doom loop detection and kill your run.
 - entity-query / entity-search — explore project data
 - entity-create — save facts to the memory graph (MemoryFact objects)
 - schema-list / schema-get — browse available schema types and their definitions
@@ -505,6 +508,9 @@ IMPORTANT: Use the ask_user tool to get user approval for schema proposals.
 It pauses execution and sends a notification to the user via Discord with
 Approve/Modify/Skip buttons. Call ask_user(question="...", options=[...])
 with structured options when you need a yes/no/maybe decision.
+⚠️ NEVER call ask_user more than once with the same question. If the user
+does not respond, report that schema creation is blocked and stop. Repeating
+the same ask_user call will trigger doom loop detection and kill your run.
 
 CRITICAL RULES:
 - NEVER create a schema without user approval — always propose first
