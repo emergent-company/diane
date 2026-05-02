@@ -227,7 +227,7 @@ jobs:
 
   release:
     name: Release
-    needs: [validate, build, companion]
+    needs: [validate, build]
     runs-on: ubuntu-latest
     if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry-run) }}
     steps:
