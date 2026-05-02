@@ -1,29 +1,25 @@
 import SwiftUI
 
 /// The main application window with a sidebar + content NavigationSplitView.
+/// When the server is not configured, shows the inline onboarding flow instead.
 struct MainWindowView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var apiClient: EmergentAPIClient
     @EnvironmentObject var statusMonitor: StatusMonitor
     @EnvironmentObject var serverConfig: ServerConfiguration
 
-    @Environment(\.openWindow) private var openWindow
-
     var body: some View {
-        if statusMonitor.isLocalAPIReachable {
-            mainContent
-                .onAppear {
-                    if serverConfig.serverURL.isEmpty {
-                        openWindow(id: "settings")
-                    }
-                }
+        if serverConfig.isConfigured {
+            if statusMonitor.isLocalAPIReachable {
+                mainContent
+            } else {
+                notConnectedView
+            }
         } else {
-            notConnectedView
-                .onAppear {
-                    if serverConfig.serverURL.isEmpty {
-                        openWindow(id: "settings")
-                    }
-                }
+            OnboardingView()
+                .environmentObject(statusMonitor)
+                .environmentObject(serverConfig)
+                .environmentObject(apiClient)
         }
     }
 
@@ -91,17 +87,19 @@ struct MainWindowView: View {
 
     private var notConnectedView: some View {
         VStack(spacing: 16) {
-            EmptyStateView(
-                title: "Not Connected to Server",
-                icon: "wifi.slash",
-                description: serverConfig.serverURL.isEmpty
-                    ? "No server URL configured. Open Settings to enter your server address and API key."
-                    : "Cannot reach \(serverConfig.serverURL). Check your connection and server settings.",
-                action: statusMonitor.isChecking ? nil : {
-                    statusMonitor.checkNow()
-                },
-                actionLabel: statusMonitor.isChecking ? nil : "Retry Connection"
-            )
+            Image(systemName: "wifi.slash")
+                .font(.system(size: 48))
+                .foregroundStyle(.secondary)
+
+            Text("Not Connected to Server")
+                .font(.title2)
+                .fontWeight(.semibold)
+
+            Text("Cannot reach \(serverConfig.serverURL). Check your connection and server settings.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 40)
 
             if statusMonitor.isChecking {
                 HStack(spacing: 8) {
@@ -112,19 +110,64 @@ struct MainWindowView: View {
                 }
             }
 
-            Button("Open Settings…") {
-                openWindow(id: "settings")
+            HStack(spacing: 12) {
+                Button(action: { statusMonitor.checkNow() }) {
+                    Label("Retry", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .disabled(statusMonitor.isChecking)
+
+                Button(action: { resetToOnboarding() }) {
+                    Label("Change Server", systemImage: "gearshape")
+                }
+                .buttonStyle(.bordered)
             }
-            .buttonStyle(.bordered)
-            .disabled(statusMonitor.isChecking)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Actions
+
+    private func resetToOnboarding() {
+        serverConfig.serverURL = ""
+        serverConfig.apiKey = ""
+        // Don't clear projectID — may be useful to keep
+        statusMonitor.configure(from: serverConfig)
+        apiClient.configure(serverURL: "", apiKey: "")
     }
 }
 
 // MARK: - Previews
 
-#Preview {
+#Preview("Configured + Connected") {
+    let config = ServerConfiguration()
+    config.serverURL = "https://memory.example.com"
+    config.apiKey = "emt_xxx"
+    let monitor = StatusMonitor.forPreviews(connectionState: .connected, isLocalReachable: true)
+
+    return MainWindowView()
+        .environmentObject(AppState())
+        .environmentObject(EmergentAPIClient())
+        .environmentObject(monitor)
+        .environmentObject(config)
+        .frame(width: 800, height: 600)
+}
+
+#Preview("Configured + Disconnected") {
+    let config = ServerConfiguration()
+    config.serverURL = "https://memory.example.com"
+    config.apiKey = "emt_xxx"
+    let monitor = StatusMonitor.forPreviews(connectionState: .disconnected, isLocalReachable: false)
+
+    return MainWindowView()
+        .environmentObject(AppState())
+        .environmentObject(EmergentAPIClient())
+        .environmentObject(monitor)
+        .environmentObject(config)
+        .frame(width: 800, height: 600)
+}
+
+#Preview("Not Configured") {
     MainWindowView()
         .environmentObject(AppState())
         .environmentObject(EmergentAPIClient())

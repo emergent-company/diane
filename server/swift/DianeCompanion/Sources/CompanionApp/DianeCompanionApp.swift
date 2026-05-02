@@ -30,7 +30,8 @@ struct DianeCompanionApp: App {
     }
 
     var body: some Scene {
-        // Main application window
+        // Main application window — shows onboarding when not configured,
+        // or full sidebar + content when configured and connected.
         Window("Diane", id: "main") {
             MainWindowView()
                 .environmentObject(appState)
@@ -60,16 +61,6 @@ struct DianeCompanionApp: App {
                 .symbolRenderingMode(.hierarchical)
         }
         .menuBarExtraStyle(.window)
-
-        // Dedicated settings window
-        Window("Diane Settings", id: "settings") {
-            SettingsView()
-                .environmentObject(statusMonitor)
-                .environmentObject(serverConfig)
-                .environmentObject(apiClient)
-        }
-        .windowResizability(.contentSize)
-        .defaultPosition(.center)
     }
 
     @MainActor
