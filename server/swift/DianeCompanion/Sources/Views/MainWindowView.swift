@@ -140,9 +140,7 @@ struct MainWindowView: View {
 // MARK: - Previews
 
 private func makePreview(connected: Bool) -> some View {
-    let config = ServerConfiguration()
-    config.serverURL = "https://memory.example.com"
-    config.apiKey = "emt_xxx"
+    let config = configuredPreview()
     let monitor = StatusMonitor.forPreviews(
         connectionState: connected ? .connected : .disconnected,
         isLocalReachable: connected
@@ -153,6 +151,14 @@ private func makePreview(connected: Bool) -> some View {
         .environmentObject(monitor)
         .environmentObject(config)
         .frame(width: 800, height: 600)
+}
+
+/// Creates a ServerConfiguration preset for previews, avoiding ViewBuilder-unsafe property assignments.
+private func configuredPreview() -> ServerConfiguration {
+    let config = ServerConfiguration()
+    config.serverURL = "https://memory.example.com"
+    config.apiKey = "emt_xxx"
+    return config
 }
 
 #Preview("Configured + Connected") {
