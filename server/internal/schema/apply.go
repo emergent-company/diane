@@ -67,11 +67,12 @@ type packObjectType struct {
 
 // packRelationshipType is the format the Memory Schema pack API expects for relationship types.
 type packRelationshipType struct {
-	Name        string `json:"name"`
-	Label       string `json:"label,omitempty"`
-	Description string `json:"description,omitempty"`
-	SourceType  string `json:"sourceType,omitempty"`
-	TargetType  string `json:"targetType,omitempty"`
+	Name         string `json:"name"`
+	Label        string `json:"label,omitempty"`
+	InverseLabel string `json:"inverseLabel,omitempty"`
+	Description  string `json:"description,omitempty"`
+	SourceType   string `json:"sourceType,omitempty"`
+	TargetType   string `json:"targetType,omitempty"`
 }
 
 // packPayload is the complete Memory Schema pack request body.
@@ -251,7 +252,8 @@ func applyViaPack(
 	packRelTypes := make([]packRelationshipType, len(allRels))
 	for i, rel := range allRels {
 		packRelTypes[i] = packRelationshipType{
-			Name: rel.Name, Label: rel.Label, Description: rel.Description,
+			Name: rel.Name, Label: rel.Label, InverseLabel: rel.InverseLabel,
+			Description: rel.Description,
 			SourceType: rel.SourceType, TargetType: rel.TargetType,
 		}
 	}
