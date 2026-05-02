@@ -517,11 +517,9 @@ struct SessionsView: View {
 
         // Thinking placeholder — animated indicator while agent is generating
         if message.id.hasPrefix("thinking-") {
-            return AnyView(thinkingBubble)
-        }
-
-        return AnyView(
-        VStack(alignment: isUser ? .trailing : .leading, spacing: Design.Spacing.xs) {
+            thinkingBubble
+        } else {
+            VStack(alignment: isUser ? .trailing : .leading, spacing: Design.Spacing.xs) {
             // Role label + sequence
             HStack(spacing: Design.Spacing.xs) {
                 if !isUser {
@@ -587,7 +585,7 @@ struct SessionsView: View {
         }
         .padding(.vertical, Design.Spacing.xs)
         .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
-        )
+    }
     }
 
     private var thinkingBubble: some View {

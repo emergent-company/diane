@@ -145,7 +145,7 @@ struct MainWindowView: View {
     config.apiKey = "emt_xxx"
     let monitor = StatusMonitor.forPreviews(connectionState: .connected, isLocalReachable: true)
 
-    return MainWindowView()
+    MainWindowView()
         .environmentObject(AppState())
         .environmentObject(EmergentAPIClient())
         .environmentObject(monitor)
@@ -159,7 +159,7 @@ struct MainWindowView: View {
     config.apiKey = "emt_xxx"
     let monitor = StatusMonitor.forPreviews(connectionState: .disconnected, isLocalReachable: false)
 
-    return MainWindowView()
+    MainWindowView()
         .environmentObject(AppState())
         .environmentObject(EmergentAPIClient())
         .environmentObject(monitor)
