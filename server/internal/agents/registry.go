@@ -266,6 +266,9 @@ func buildAgentList() []BuiltInAgent {
 				// Session todo management
 				"todo_read",
 				"todo_update",
+
+				// MCP relay tools (node-provided, glob patterns)
+				"*github*",
 			},
 			Skills:     []string{"diane-coding"},
 			Visibility: "project",
