@@ -285,6 +285,7 @@ func (s *MCPSession) run() error {
 
 				// For tools/call, strip the instance ID prefix from the tool name
 				// so the shared handler sees the unprefixed name (e.g., github_search_repositories).
+				// This is a safety measure in case the MP relay forwards the prefixed name.
 				if req.Method == "tools/call" && req.Params != nil {
 					var params struct {
 						Name      string                 `json:"name"`
@@ -355,11 +356,9 @@ func (s *MCPSession) sendRegister() {
 		if err != nil {
 			log.Printf("[mcp-relay] Failed to list proxied tools: %v", err)
 		} else if proxiedTools != nil {
-			// Prefix proxied tool names with instance ID for multi-node dedup.
-			// This prevents collisions when multiple nodes register the same
-			// MCP server (e.g., github). The agent definition glob pattern
-			// (*github*) still matches because * matches any substring.
-			prefixTools(proxiedTools, s.cfg.InstanceID+"_")
+			// Tools are registered as-is (no instance ID prefix).
+			// The MP relay server handles node disambiguation via the
+			// instance_id field in the RegisterFrame.
 			tools = append(tools, proxiedTools...)
 		}
 	}
@@ -398,7 +397,6 @@ func (s *MCPSession) startToolWatch() {
 				if s.proxy != nil {
 					proxiedTools, err := s.proxy.ListAllTools()
 					if err == nil && proxiedTools != nil {
-						prefixTools(proxiedTools, s.cfg.InstanceID+"_")
 						tools = append(tools, proxiedTools...)
 					}
 				}
