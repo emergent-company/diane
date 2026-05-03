@@ -227,7 +227,7 @@ jobs:
 
   release:
     name: Release
-    needs: [validate, build]
+    needs: [validate, build, companion]
     runs-on: ubuntu-latest
     if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry-run) }}
     steps:
@@ -238,6 +238,16 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+
+      - name: Verify DMG artifact exists
+        run: |
+          if ! ls dist/Diane-*.dmg 2>/dev/null; then
+            echo "❌ DMG artifact not found in downloaded artifacts"
+            echo "   The companion build must have failed or produced no DMG."
+            echo "   Release blocked — fix the companion build first."
+            exit 1
+          fi
+          echo "✅ DMG artifact found"
 
       - name: Generate checksums
         run: |
