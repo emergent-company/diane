@@ -23,6 +23,7 @@ func DefaultTestSuite() map[string]TestFunc {
 		"btw-todo":                    TestBTWTodo,
 		"unconfigured-channel-silent": TestUnconfiguredChannelSilent,
 		"memory-recall":               TestMemoryRecall,
+		"github-tools-list":           TestGitHubToolsList,
 	}
 }
 
@@ -651,6 +652,57 @@ func TestMemoryRecall(h *TestHarness) Result {
 			return Fail(fmt.Sprintf("RECALL WEAK: agent only mentioned %d/%d facts (threshold 3)", factsFound, len(recallTopics)))
 		}
 		hh.harness.logf("  🎯 RECALL PASSED: agent remembered %d/%d facts about mcj!", factsFound, len(recallTopics))
+		return Pass()
+	})
+}
+
+// TestGitHubToolsList verifies the agent has access to GitHub MCP tools.
+func TestGitHubToolsList(h *TestHarness) Result {
+	return h.RunTest("github-tools-list", func(hh *H) Result {
+		msgID := hh.Send("What GitHub tools do you have access to? List them all by name.")
+		if msgID == "" {
+			return Fail("failed to send message")
+		}
+
+		if !hh.ExpectReaction(msgID, "👀", DefaultReactionTimeout) {
+			return Fail("no 👀 reaction — Diane didn't see the message")
+		}
+
+		threadID, ok := hh.ExpectThread(msgID, DefaultThreadTimeout)
+		if !ok {
+			return Fail("no thread created")
+		}
+		defer hh.CleanupThread(threadID)
+
+		if !hh.ExpectFinalReaction(msgID, 120*time.Second) {
+			return Fail("no ✅ reaction (timeout)")
+		}
+
+		response, ok := hh.ExpectResponse(threadID, DefaultResponseTimeout)
+		if !ok || response == "" {
+			return Fail("no response in thread")
+		}
+
+		hh.harness.logf("Response preview: %s", response[:min(len(response), 300)])
+
+		lower := strings.ToLower(response)
+		githubTools := []string{"github_repo_list", "github_issue_list", "github_pr_list",
+			"github_pr_create", "github_file_read", "github_branch_list", "github_commit_list"}
+		found := 0
+		for _, tool := range githubTools {
+			if strings.Contains(lower, tool) {
+				found++
+				hh.harness.logf("  ✓ agent mentioned: %s", tool)
+			}
+		}
+
+		if found == 0 {
+			hh.harness.logf("Agent did NOT mention expected GitHub tools")
+			hh.harness.logf("Full response: %s", response)
+			return Fail("agent did not list GitHub tools — *github* whitelist may be missing")
+		}
+
+		hh.harness.logf("Agent mentioned %d/%d GitHub tools — *github* whitelist is working!", found, len(githubTools))
 		return Pass()
 	})
 }
