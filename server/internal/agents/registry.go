@@ -269,6 +269,7 @@ func buildAgentList() []BuiltInAgent {
 
 				// MCP relay tools (node-provided, glob patterns)
 				"*github*",
+				"*infakt*",
 			},
 			Skills:     []string{"diane-coding"},
 			Visibility: "project",
@@ -653,40 +654,55 @@ Remember: adding an MCP server writes to the graph AND local config. All matchin
 			Description: "Extracts structured memories from graph sessions. Reads session messages, extracts facts, saves MemoryFact objects, and marks sessions as extracted.",
 			SystemPrompt: `You are the Session Extractor for Diane. Your purpose is to process graph sessions and extract structured memories from their messages.
 
-You run on schedule or when triggered. For each unprocessed or updated session:
-1. Read session messages using session-get-messages(sessionId)
-2. Identify key facts: user preferences, decisions, action items, entities, relationships
-3. Use memory_save to persist each fact as a MemoryFact with memory_tier=2, category="extracted"
-4. Mark the session as processed using entity-update to set extracted_at and extracted_message_count on the session object
+When triggered, ALWAYS follow these steps exactly:
 
-State tracking:
-- Check session properties for extracted_at and extracted_message_count
-- If session.message_count > extracted_message_count, re-extract (new messages added)
-- Only process sessions that need extraction
+## Step 1: Find target sessions
+Use entity-query(type_name=Session) to find sessions with a matching label if specified.
+Check each session's properties: if extracted_message_count >= message_count, skip it (already processed).
 
-Your tools:
-- session-get-messages — read messages from a graph session
-- memory_save — save extracted facts
-- entity-update — update session properties to track extraction state
-- entity-query — find sessions that need processing
-- search-hybrid / search-semantic — check for existing facts before saving duplicates
-- entity-create — create SessionSummary objects
+## Step 2: Read session's messages
+For each unprocessed session, call entity-query with its ID and include_relationships=true:
+  entity-query(ids=[sessionId], type_name=Session, include_relationships=true)
 
-Be thorough. Every session produces useful facts about user preferences,
-relationships, decisions, and plans.`,
+This returns the session along with its has_message relationship targets (message IDs).
+NOTE: session-get-messages tool is currently unavailable — use entity-query to get relationships instead.
+
+From the response, find the entity with type=Session and collect all has_message relationship dst_id values.
+Then fetch each message by its ID:
+  entity-query(type_name=Message, ids=[msgId1, msgId2, ...])
+
+Read the returned message content and identify atomic facts about:
+- Events with dates/locations
+- Preferences, personality traits, identity
+- Relationships between people
+- Decisions and plans
+- Actions taken
+
+## Step 3: Save facts
+For EACH atomic fact you find, call memory_save with:
+- fact: the atomic fact as a self-contained sentence
+- category: "extracted"
+- memory_tier: 2
+- source_session: the session ID
+
+Save ALL facts you find. Do not skip any.
+
+## Step 4: Mark session as processed
+After saving all facts from a session, call entity-update(entity_id=<sessionId>, properties={extracted_at: "<now>", extracted_message_count: <count>})
+
+Be thorough. Every session contains multiple useful facts about user preferences,
+relationships, decisions, and plans. Extract them all.`,
 
 			Tools: []string{
-				// Session inspection
-				"session-get-messages",
-
 				// Memory operations
 				"memory_save",
 
 				// Graph operations
 				"entity-create", "entity-update", "entity-query",
 
-				// Semantic search (check for duplicates)
-				"search-hybrid", "search-semantic",
+				// NOTE: session-get-messages and search-hybrid are currently
+				// broken in the ADK runtime (emergent.memory#267). Use entity-query
+				// with include_relationships to read session messages instead.
 			},
 			Skills:     []string{"diane-memory"},
 			Visibility: "project",
