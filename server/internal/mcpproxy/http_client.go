@@ -95,7 +95,7 @@ func (c *HTTPMCPClient) sendRequest(method string, params json.RawMessage) (json
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("Accept", "application/json, text/event-stream")
 
 	// Add static headers (e.g., Authorization, X-API-Key)
 	for k, v := range c.Headers {
