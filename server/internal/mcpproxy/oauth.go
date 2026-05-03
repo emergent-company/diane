@@ -185,8 +185,9 @@ func AuthenticateDeviceFlow(serverName string, oauth *OAuthConfig) (string, erro
 	return tokenResp.AccessToken, nil
 }
 
-// requestDeviceCode sends a POST request to the device authorization endpoint
-// and returns the device code response.
+
+// pollForToken polls the token endpoint until authorization is granted or expires.
+
 func requestDeviceCode(oauth *OAuthConfig) (*DeviceAuthResponse, error) {
 	form := url.Values{}
 	form.Set("client_id", oauth.ClientID)
@@ -194,19 +195,13 @@ func requestDeviceCode(oauth *OAuthConfig) (*DeviceAuthResponse, error) {
 		form.Set("scope", strings.Join(oauth.Scopes, " "))
 	}
 
-	resp, err := http.PostForm(oauth.DeviceAuthURL, form)
+	body, httpStatus, err := postFormWithJSONAccept(oauth.DeviceAuthURL, form)
 	if err != nil {
 		return nil, fmt.Errorf("device auth request failed: %w", err)
 	}
-	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read device auth response: %w", err)
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("device auth endpoint returned HTTP %d: %s", resp.StatusCode, string(body))
+	if httpStatus < 200 || httpStatus >= 300 {
+		return nil, fmt.Errorf("device auth endpoint returned HTTP %d: %s", httpStatus, string(body))
 	}
 
 	var deviceResp DeviceAuthResponse
@@ -226,9 +221,7 @@ func requestDeviceCode(oauth *OAuthConfig) (*DeviceAuthResponse, error) {
 	return &deviceResp, nil
 }
 
-// pollForToken polls the token endpoint until authorization is granted or expires.
 func pollForToken(oauth *OAuthConfig, deviceResp *DeviceAuthResponse) (*TokenResponse, error) {
-	httpClient := &http.Client{}
 
 	for {
 		time.Sleep(time.Duration(deviceResp.Interval) * time.Second)
@@ -238,18 +231,16 @@ func pollForToken(oauth *OAuthConfig, deviceResp *DeviceAuthResponse) (*TokenRes
 		form.Set("device_code", deviceResp.DeviceCode)
 		form.Set("grant_type", "urn:ietf:params:oauth:grant-type:device_code")
 
-		resp, err := httpClient.PostForm(oauth.TokenURL, form)
+		body, httpStatus, err := postFormWithJSONAccept(oauth.TokenURL, form)
 		if err != nil {
 			return nil, fmt.Errorf("token poll request failed: %w", err)
 		}
 
-		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
 		if err != nil {
 			return nil, fmt.Errorf("failed to read token response: %w", err)
 		}
 
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		if httpStatus >= 200 && httpStatus < 300 {
 			// Check for success
 			var tokenResp TokenResponse
 			if err := json.Unmarshal(body, &tokenResp); err != nil {
@@ -299,7 +290,7 @@ func pollForToken(oauth *OAuthConfig, deviceResp *DeviceAuthResponse) (*TokenRes
 					return nil, fmt.Errorf("token endpoint error: %s", errResp.Error)
 				}
 			}
-			return nil, fmt.Errorf("token endpoint returned HTTP %d: %s", resp.StatusCode, string(body))
+			return nil, fmt.Errorf("token endpoint returned HTTP %d: %s", httpStatus, string(body))
 		}
 	}
 }
@@ -357,7 +348,6 @@ func DynamicClientRegistration(registrationURL string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("registration request failed: %w", err)
 	}
-	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -417,7 +407,6 @@ func ExchangeCodeForTokens(tokenURL, clientID, code, redirectURI, verifier strin
 	if err != nil {
 		return nil, fmt.Errorf("token exchange request failed: %w", err)
 	}
-	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -468,7 +457,6 @@ func RefreshTokens(tokenURL, clientID, refreshToken string) (*StoredTokens, erro
 	if err != nil {
 		return nil, fmt.Errorf("token refresh request failed: %w", err)
 	}
-	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -756,4 +744,144 @@ func authenticateAuthCodeFlowStdin(serverName string, oauth *OAuthConfig, verifi
 
 	fmt.Fprintf(os.Stderr, "✅ OAuth authorization complete for %s\n", serverName)
 	return stored.AccessToken, nil
+}
+
+
+// postFormWithJSONAccept posts form-encoded data with an Accept: application/json header.
+// Some providers (e.g. GitHub) return form-encoded data by default and require this header
+// to return JSON. Returns the response body and HTTP status code.
+func postFormWithJSONAccept(targetURL string, form url.Values) ([]byte, int, error) {
+	req, err := http.NewRequest("POST", targetURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, 0, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("POST request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	return body, resp.StatusCode, nil
+}
+
+// GetDeviceCode requests a device code from the authorization server.
+func GetDeviceCode(oauth *OAuthConfig) (*DeviceAuthResponse, error) {
+	if oauth == nil {
+		return nil, fmt.Errorf("OAuthConfig is nil")
+	}
+	if oauth.ClientID == "" {
+		return nil, fmt.Errorf("OAuthConfig.ClientID is required")
+	}
+	if oauth.DeviceAuthURL == "" {
+		return nil, fmt.Errorf("OAuthConfig.DeviceAuthURL is required")
+	}
+	return requestDeviceCode(oauth)
+}
+
+// AuthenticateDeviceFlowWithResponse polls for a token using an existing device code
+// and saves the token when obtained.
+func AuthenticateDeviceFlowWithResponse(serverName string, oauth *OAuthConfig, deviceResp *DeviceAuthResponse) (string, error) {
+	if oauth.TokenURL == "" {
+		return "", fmt.Errorf("OAuthConfig.TokenURL is required")
+	}
+
+	tokenResp, err := pollForToken(oauth, deviceResp)
+	if err != nil {
+		return "", fmt.Errorf("device authorization failed: %w", err)
+	}
+
+	stored := &StoredTokens{
+		AccessToken: tokenResp.AccessToken,
+		Scope:       tokenResp.Scope,
+	}
+	if tokenResp.RefreshToken != "" {
+		stored.RefreshToken = tokenResp.RefreshToken
+	}
+	if tokenResp.ExpiresIn > 0 {
+		stored.ExpiresAt = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+	}
+	if err := SaveTokens(serverName, stored); err != nil {
+		log.Printf("Warning: failed to save OAuth tokens for %s: %v", serverName, err)
+	}
+	return tokenResp.AccessToken, nil
+}
+
+// PollAndSaveToken polls the token endpoint for the given device code and saves
+// the token when authorization is granted. Runs for up to maxPolls * interval seconds.
+func PollAndSaveToken(serverName string, oauth *OAuthConfig, deviceResp *DeviceAuthResponse, maxPolls int) error {
+	for i := 0; i < maxPolls; i++ {
+		time.Sleep(time.Duration(deviceResp.Interval) * time.Second)
+
+		form := url.Values{}
+		form.Set("client_id", oauth.ClientID)
+		form.Set("device_code", deviceResp.DeviceCode)
+		form.Set("grant_type", "urn:ietf:params:oauth:grant-type:device_code")
+
+		body, httpStatus, err := postFormWithJSONAccept(oauth.TokenURL, form)
+		if err != nil {
+			continue
+		}
+
+		if httpStatus >= 200 && httpStatus < 300 {
+			var tokenResp TokenResponse
+			if err := json.Unmarshal(body, &tokenResp); err != nil {
+				continue
+			}
+			if tokenResp.AccessToken != "" {
+				stored := &StoredTokens{
+					AccessToken: tokenResp.AccessToken,
+					Scope:       tokenResp.Scope,
+				}
+				if tokenResp.RefreshToken != "" {
+					stored.RefreshToken = tokenResp.RefreshToken
+				}
+				if tokenResp.ExpiresIn > 0 {
+					stored.ExpiresAt = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+				}
+				return SaveTokens(serverName, stored)
+			}
+			var errResp tokenErrorResponse
+			if json.Unmarshal(body, &errResp) == nil {
+				switch errResp.Error {
+				case "authorization_pending":
+					continue
+				case "slow_down":
+					deviceResp.Interval += 5
+					continue
+				case "expired_token":
+					return fmt.Errorf("device code expired")
+				case "access_denied":
+					return fmt.Errorf("authorization denied by user")
+				default:
+					return fmt.Errorf("token error: %s", errResp.Error)
+				}
+			}
+		} else {
+			var errResp tokenErrorResponse
+			if json.Unmarshal(body, &errResp) == nil && errResp.Error != "" {
+				switch errResp.Error {
+				case "authorization_pending":
+					continue
+				case "slow_down":
+					deviceResp.Interval += 5
+					continue
+				case "expired_token":
+					return fmt.Errorf("device code expired")
+				case "access_denied":
+					return fmt.Errorf("authorization denied by user")
+				default:
+					return fmt.Errorf("token error: %s", errResp.Error)
+				}
+			}
+		}
+	}
+	return fmt.Errorf("authentication timed out after %d polls", maxPolls)
 }

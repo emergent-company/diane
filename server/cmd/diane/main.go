@@ -117,6 +117,8 @@ func main() {
 			fmt.Println("Commands:")
 			fmt.Println("  add             Add or update an MCP server config (writes to graph + local)")
 			fmt.Println("  auth            Authenticate an MCP server via OAuth (--server required)")
+			fmt.Println("    status        Check OAuth token status (--server optional)")
+			fmt.Println("    --background  Non-blocking: print code, spawn poller, exit")
 			fmt.Println("  list            List configured MCP servers (and tools with --tools)")
 			fmt.Println("  reload          Send reload signal to running relay")
 			fmt.Println("  relay           Connect MCP server to Memory Platform relay")
