@@ -284,6 +284,24 @@ func (s *MCPSession) run() error {
 					continue
 				}
 
+				// For tools/call, strip the instance ID prefix from the tool name
+				// so the shared handler sees the unprefixed name (e.g., github_search_repositories).
+				if req.Method == "tools/call" && req.Params != nil {
+					var params struct {
+						Name      string                 `json:"name"`
+						Arguments map[string]interface{} `json:"arguments,omitempty"`
+					}
+					if err := json.Unmarshal(req.Params, &params); err == nil {
+						prefix := s.cfg.InstanceID + "_"
+						if strings.HasPrefix(params.Name, prefix) {
+							params.Name = strings.TrimPrefix(params.Name, prefix)
+							if newParams, err := json.Marshal(params); err == nil {
+								req.Params = newParams
+							}
+						}
+					}
+				}
+
 				// Handle in-process via shared handler
 				resp := handleMCPServeRequest(req, s.proxy)
 				resp.JSONRPC = "2.0"
@@ -338,6 +356,11 @@ func (s *MCPSession) sendRegister() {
 		if err != nil {
 			log.Printf("[mcp-relay] Failed to list proxied tools: %v", err)
 		} else if proxiedTools != nil {
+			// Prefix proxied tool names with instance ID for multi-node dedup.
+			// This prevents collisions when multiple nodes register the same
+			// MCP server (e.g., github). The agent definition glob pattern
+			// (*github*) still matches because * matches any substring.
+			prefixTools(proxiedTools, s.cfg.InstanceID+"_")
 			tools = append(tools, proxiedTools...)
 		}
 	}
@@ -376,6 +399,7 @@ func (s *MCPSession) startToolWatch() {
 				if s.proxy != nil {
 					proxiedTools, err := s.proxy.ListAllTools()
 					if err == nil && proxiedTools != nil {
+						prefixTools(proxiedTools, s.cfg.InstanceID+"_")
 						tools = append(tools, proxiedTools...)
 					}
 				}
@@ -732,6 +756,15 @@ func getPropInt(obj map[string]interface{}, key string) int {
 	}
 	v, _ := props[key].(float64)
 	return int(v)
+}
+
+// prefixTools prepends a prefix to the "name" field of each tool in place.
+func prefixTools(tools []map[string]interface{}, prefix string) {
+	for _, tool := range tools {
+		if name, ok := tool["name"].(string); ok {
+			tool["name"] = prefix + name
+		}
+	}
 }
 
 // mergeProxyConfigs merges multiple scored MCP proxy configs into one.
