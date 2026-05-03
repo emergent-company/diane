@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"sync"
 )
 
@@ -53,28 +51,19 @@ type Config struct {
 // Proxy manages multiple MCP clients
 type Proxy struct {
 	clients    map[string]Client
-	config     *Config
-	configPath string // Store config path for reload
 	mu         sync.RWMutex
 	notifyChan chan string // Aggregated notifications channel
 }
 
-// NewProxy creates a new MCP proxy
-func NewProxy(configPath string) (*Proxy, error) {
-	config, err := LoadConfig(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load config: %w", err)
-	}
-
+// NewProxy creates a new MCP proxy from a list of server configs.
+func NewProxy(servers []ServerConfig) (*Proxy, error) {
 	proxy := &Proxy{
 		clients:    make(map[string]Client),
-		config:     config,
-		configPath: configPath,
 		notifyChan: make(chan string, 10), // Buffered channel for notifications
 	}
 
 	// Start enabled MCP servers
-	for _, server := range config.Servers {
+	for _, server := range servers {
 		if !server.Enabled {
 			continue
 		}
@@ -214,21 +203,16 @@ func (p *Proxy) NotificationChan() <-chan string {
 	return p.notifyChan
 }
 
-// Reload reloads the MCP configuration and starts/stops servers as needed
-func (p *Proxy) Reload() error {
-	log.Printf("Reloading MCP configuration from %s", p.configPath)
-
-	newConfig, err := LoadConfig(p.configPath)
-	if err != nil {
-		return fmt.Errorf("failed to load new config: %w", err)
-	}
+// Reload replaces the full server list, stopping removed servers and starting new ones.
+func (p *Proxy) Reload(servers []ServerConfig) error {
+	log.Printf("Reloading MCP configuration with %d servers", len(servers))
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	// Build map of new enabled servers
 	newServers := make(map[string]ServerConfig)
-	for _, s := range newConfig.Servers {
+	for _, s := range servers {
 		if !s.Enabled {
 			continue
 		}
@@ -258,8 +242,6 @@ func (p *Proxy) Reload() error {
 			}
 		}
 	}
-
-	p.config = newConfig
 
 	// Send notification that tools changed
 	select {
@@ -332,24 +314,22 @@ func (p *Proxy) Close() error {
 	return nil
 }
 
-// LoadConfig loads the MCP proxy configuration.
-// Returns an error if the file does not exist or contains invalid JSON.
-func LoadConfig(configPath string) (*Config, error) {
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return nil, err
+// MergeServerConfigs merges multiple ServerConfig lists, deduplicating by name.
+// Later entries with the same name override earlier ones.
+func MergeServerConfigs(lists ...[]ServerConfig) []ServerConfig {
+	byName := make(map[string]ServerConfig)
+	order := make([]string, 0)
+	for _, list := range lists {
+		for _, s := range list {
+			if _, exists := byName[s.Name]; !exists {
+				order = append(order, s.Name)
+			}
+			byName[s.Name] = s
+		}
 	}
-
-	var config Config
-	if err := json.Unmarshal(data, &config); err != nil {
-		return nil, err
+	result := make([]ServerConfig, len(order))
+	for i, name := range order {
+		result[i] = byName[name]
 	}
-
-	return &config, nil
-}
-
-// GetDefaultConfigPath returns the default config path
-func GetDefaultConfigPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".diane", "mcp-servers.json")
+	return result
 }

@@ -8,6 +8,8 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Emergent-Comapny/diane/internal/config"
@@ -75,43 +77,58 @@ func cmdMCPAuth(args []string) {
 		fmt.Printf("🔐 Authenticating MCP server: %s\n\n", *serverName)
 	}
 
-	deviceResp, err := mcpproxy.GetDeviceCode(oauth)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("\n🔐 Device Authorization Required for %s\n", *serverName)
-	fmt.Printf("   Visit: %s\n", deviceResp.VerificationURI)
-	fmt.Printf("   Code:  %s\n\n", deviceResp.UserCode)
-
-	if *background {
-		binPath, err := os.Executable()
+	// Determine flow type: device flow or auth code flow
+	if oauth.DeviceAuthURL != "" {
+		// Device flow (e.g., GitHub Copilot)
+		deviceResp, err := mcpproxy.GetDeviceCode(oauth)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "❌ Cannot determine binary path: %v\n", err)
+			fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 			os.Exit(1)
 		}
-		child := exec.Command(binPath, "mcp", "auth", "_poll",
-			"--server", *serverName,
-			"--device-code", deviceResp.DeviceCode,
-		)
-		child.Stdout = nil
-		child.Stderr = nil
-		if err := child.Start(); err != nil {
-			fmt.Fprintf(os.Stderr, "❌ Failed to start background poller: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("   Background poller started (PID %d)\n", child.Process.Pid)
-		fmt.Printf("   ✅ Visit the URL and enter the code — token will be saved automatically.\n")
-		return
-	}
 
-	token, err := mcpproxy.AuthenticateDeviceFlowWithResponse(*serverName, oauth, deviceResp)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Authentication failed: %v\n", err)
+		fmt.Printf("\n🔐 Device Authorization Required for %s\n", *serverName)
+		fmt.Printf("   Visit: %s\n", deviceResp.VerificationURI)
+		fmt.Printf("   Code:  %s\n\n", deviceResp.UserCode)
+
+		if *background {
+			binPath, err := os.Executable()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "❌ Cannot determine binary path: %v\n", err)
+				os.Exit(1)
+			}
+			child := exec.Command(binPath, "mcp", "auth", "_poll",
+				"--server", *serverName,
+				"--device-code", deviceResp.DeviceCode,
+			)
+			child.Stdout = nil
+			child.Stderr = nil
+			if err := child.Start(); err != nil {
+				fmt.Fprintf(os.Stderr, "❌ Failed to start background poller: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("   Background poller started (PID %d)\n", child.Process.Pid)
+			fmt.Printf("   ✅ Visit the URL and enter the code — token will be saved automatically.\n")
+			return
+		}
+
+		token, err := mcpproxy.AuthenticateDeviceFlowWithResponse(*serverName, oauth, deviceResp)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Authentication failed: %v\n", err)
+			os.Exit(1)
+		}
+		_ = token
+	} else if oauth.AuthorizationURL != "" {
+		// Auth code flow (e.g., infakt)
+		token, err := mcpproxy.AuthenticateAuthCodeFlow(*serverName, oauth)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Authentication failed: %v\n", err)
+			os.Exit(1)
+		}
+		_ = token
+	} else {
+		fmt.Fprintf(os.Stderr, "Error: no OAuth flow configured for server %q (need device_auth_url or authorization_url)\n", *serverName)
 		os.Exit(1)
 	}
-	_ = token
 
 	// Sync token to MP graph so other nodes can pull it
 	if err := syncTokenToGraph(*serverName, ""); err != nil {
@@ -212,12 +229,47 @@ func cmdMCPAuthPoll(args []string) {
 }
 
 func loadMCPConfig() *mcpproxy.Config {
-	configPath := mcpproxy.GetDefaultConfigPath()
-	cfg, err := mcpproxy.LoadConfig(configPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error loading MCP config: %v\n", err)
-		os.Exit(1)
+	// Check if we have a discovered OAuth config for this server
+	// that wasn't registered via 'diane mcp add' (common for HTTP MCP servers
+	// like infakt where the relay auto-discovers OAuth endpoints).
+	cfg := &mcpproxy.Config{
+		Servers: []mcpproxy.ServerConfig{},
 	}
+
+	// Scan for discovered OAuth configs in ~/.diane/secrets/*-oauth-config.json
+	secretDir := filepath.Join(os.Getenv("HOME"), ".diane", "secrets")
+	entries, err := os.ReadDir(secretDir)
+	if err == nil {
+		for _, entry := range entries {
+			name := entry.Name()
+			if !strings.HasSuffix(name, "-oauth-config.json") || name == "test-server-oauth-config.json" {
+				continue
+			}
+			serverName := strings.TrimSuffix(name, "-oauth-config.json")
+			if serverName == "" {
+				continue
+			}
+			discovered := mcpproxy.LoadDiscoveredConfig(serverName)
+			if discovered == nil {
+				continue
+			}
+			// If registration URL available but no client_id, auto-register
+			if discovered.ClientID == "" && discovered.RegistrationURL != "" {
+				log.Printf("[mcp-auth] No client_id for %s, attempting dynamic registration...", serverName)
+				if clientID, regErr := mcpproxy.DynamicClientRegistration(discovered.RegistrationURL); regErr == nil {
+					discovered.ClientID = clientID
+					mcpproxy.SaveDiscoveredConfig(serverName, discovered)
+					log.Printf("[mcp-auth] Registered client_id=%s for %s", clientID, serverName)
+				}
+			}
+			cfg.Servers = append(cfg.Servers, mcpproxy.ServerConfig{
+				Name:  serverName,
+				Type:  "http",
+				OAuth: discovered,
+			})
+		}
+	}
+
 	return cfg
 }
 

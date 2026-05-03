@@ -125,7 +125,7 @@ func upsertNodeConfigInGraph(pc *config.ProjectConfig, instanceID string) {
 	}
 }
 
-func cmdMCPRelay(cfg MCPRelayConfig) {
+func cmdMCPRelay(cfg MCPRelayConfig, servers []mcpproxy.ServerConfig) {
 	// Resolve defaults
 	if cfg.ReconnectDelay == 0 {
 		cfg.ReconnectDelay = 5 * time.Second
@@ -134,9 +134,8 @@ func cmdMCPRelay(cfg MCPRelayConfig) {
 	log.Printf("[mcp-relay] Starting relay for instance: %s", cfg.InstanceID)
 	log.Printf("[mcp-relay] Relay server: %s", cfg.RelayURL)
 
-	// Create MCP proxy in-process (no subprocess)
-	configPath := mcpproxy.GetDefaultConfigPath()
-	proxy, err := mcpproxy.NewProxy(configPath)
+	// Create MCP proxy in-process with initial server configs (no subprocess)
+	proxy, err := mcpproxy.NewProxy(servers)
 	if err != nil {
 		log.Printf("[mcp-relay] Warning: failed to create MCP proxy: %v", err)
 	}
@@ -323,9 +322,9 @@ func (s *MCPSession) run() error {
 			case "config_changed":
 				log.Printf("[mcp-relay] Received config_changed notification — reloading MCP config from graph")
 				go func() {
-					syncConfigFromGraph(s.cfg.ServerURL, s.cfg.ProjectToken, s.cfg.ProjectID, s.cfg.InstanceID)
-					if s.proxy != nil {
-						if err := s.proxy.Reload(); err != nil {
+					servers := syncConfigFromGraph(s.cfg.ServerURL, s.cfg.ProjectToken, s.cfg.ProjectID, s.cfg.InstanceID)
+					if s.proxy != nil && servers != nil {
+						if err := s.proxy.Reload(servers); err != nil {
 							log.Printf("[mcp-relay] Config reload failed: %v", err)
 						} else {
 							log.Printf("[mcp-relay] MCP config reloaded successfully")
@@ -432,6 +431,19 @@ func (s *MCPSession) sendWS(msg json.RawMessage) {
 	}
 }
 
+// reloadFromGraph syncs MCP proxy config from the graph and reloads the proxy.
+func (s *MCPSession) reloadFromGraph() {
+	servers := syncConfigFromGraph(s.cfg.ServerURL, s.cfg.ProjectToken, s.cfg.ProjectID, s.cfg.InstanceID)
+	if s.proxy != nil && servers != nil {
+		if err := s.proxy.Reload(servers); err != nil {
+			log.Printf("[mcp-relay] Config reload failed: %v", err)
+		} else {
+			log.Printf("[mcp-relay] MCP config reloaded successfully")
+			s.sendRegister()
+		}
+	}
+}
+
 // RelayFrame is the wire format for WS messages.
 type RelayFrame struct {
 	Type    string          `json:"type"`
@@ -457,26 +469,26 @@ type scoredConfig struct {
 	score   int // higher = more specific match
 }
 
-// syncConfigFromGraph pulls MCP proxy config and secrets from the MP graph
-// before starting the relay. This lets one node define config centrally
-// and other nodes auto-pull it without SSH or shared filesystem.
-func syncConfigFromGraph(serverURL, token, projectID, instanceID string) {
+// syncConfigFromGraph pulls MCP proxy config and secrets from the MP graph.
+// Returns the merged server configs, or nil if none were found.
+func syncConfigFromGraph(serverURL, token, projectID, instanceID string) []mcpproxy.ServerConfig {
 	// Try memory CLI first (works on master where it's installed)
 	memoryCLI := findMemoryCLI()
 	if memoryCLI != "" {
-		syncConfigFromGraphViaCLI(memoryCLI, serverURL, token, projectID, instanceID)
-		return
+		return syncConfigFromGraphViaCLI(memoryCLI, serverURL, token, projectID, instanceID)
 	}
 
 	// Fall back to SDK bridge (works everywhere the relay can connect to MP)
-	syncConfigFromGraphViaSDK(serverURL, token, projectID, instanceID)
+	return syncConfigFromGraphViaSDK(serverURL, token, projectID, instanceID)
 }
 
 // syncConfigFromGraphViaCLI uses the memory CLI to sync MCP config and secrets.
-func syncConfigFromGraphViaCLI(memoryCLI, serverURL, token, projectID, instanceID string) {
+func syncConfigFromGraphViaCLI(memoryCLI, serverURL, token, projectID, instanceID string) []mcpproxy.ServerConfig {
 	dianeDir := filepath.Join(os.Getenv("HOME"), ".diane")
 	os.MkdirAll(dianeDir, 0755)
 	os.MkdirAll(filepath.Join(dianeDir, "secrets"), 0755)
+
+	var servers []mcpproxy.ServerConfig
 
 	// ── Query MCPProxyConfig objects ──
 	configs, err := queryGraphObjects(memoryCLI, serverURL, token, projectID, "MCPProxyConfig")
@@ -496,14 +508,8 @@ func syncConfigFromGraphViaCLI(memoryCLI, serverURL, token, projectID, instanceI
 		}
 
 		if len(matched) > 0 {
-			// Merge configs (highest score wins on conflict)
-			mergedConfig := mergeProxyConfigsWithLocal(matched, dianeDir)
-			configPath := filepath.Join(dianeDir, "mcp-servers.json")
-			if err := os.WriteFile(configPath, []byte(mergedConfig), 0644); err != nil {
-				log.Printf("[mcp-relay] Failed to write mcp-servers.json: %v", err)
-			} else {
-				log.Printf("[mcp-relay] Synced MCP proxy config from graph (%d matching, merged to %s)", len(matched), configPath)
-			}
+			servers = mergeProxyConfigs(matched)
+			log.Printf("[mcp-relay] Synced MCP proxy config from graph (%d matching, %d servers)", len(matched), len(servers))
 		} else {
 			log.Printf("[mcp-relay] No MCPProxyConfig objects found for scope matching '%s'", instanceID)
 		}
@@ -536,11 +542,13 @@ func syncConfigFromGraphViaCLI(memoryCLI, serverURL, token, projectID, instanceI
 			log.Printf("[mcp-relay] Synced %d secrets from graph to %s/secrets/", written, dianeDir)
 		}
 	}
+
+	return servers
 }
 
 // syncConfigFromGraphViaSDK uses the SDK bridge to sync MCP config and secrets.
 // This works without the memory CLI installed.
-func syncConfigFromGraphViaSDK(serverURL, token, projectID, instanceID string) {
+func syncConfigFromGraphViaSDK(serverURL, token, projectID, instanceID string) []mcpproxy.ServerConfig {
 	dianeDir := filepath.Join(os.Getenv("HOME"), ".diane")
 	os.MkdirAll(dianeDir, 0755)
 	os.MkdirAll(filepath.Join(dianeDir, "secrets"), 0755)
@@ -567,11 +575,13 @@ func syncConfigFromGraphViaSDK(serverURL, token, projectID, instanceID string) {
 	})
 	if err != nil {
 		log.Printf("[mcp-relay] Failed to create bridge for graph sync: %v", err)
-		return
+		return nil
 	}
 	defer bridge.Close()
 
 	client := bridge.Client()
+
+	var servers []mcpproxy.ServerConfig
 
 	// ── Query MCPProxyConfig objects ──
 	configResp, err := client.Graph.ListObjects(ctx, &graph.ListObjectsOptions{
@@ -595,15 +605,8 @@ func syncConfigFromGraphViaSDK(serverURL, token, projectID, instanceID string) {
 			}
 		}
 		if len(matched) > 0 {
-			mergedConfig := mergeProxyConfigsWithLocal(matched, dianeDir)
-			if mergedConfig != "" {
-				configPath := filepath.Join(dianeDir, "mcp-servers.json")
-				if err := os.WriteFile(configPath, []byte(mergedConfig), 0644); err != nil {
-					log.Printf("[mcp-relay] Failed to write mcp-servers.json: %v", err)
-				} else {
-					log.Printf("[mcp-relay] Synced MCP proxy config via SDK (%d matching)", len(matched))
-				}
-			}
+			servers = mergeProxyConfigs(matched)
+			log.Printf("[mcp-relay] Synced MCP proxy config via SDK (%d matching, %d servers)", len(matched), len(servers))
 		} else {
 			log.Printf("[mcp-relay] No MCPProxyConfig objects found via SDK for scope matching '%s'", instanceID)
 		}
@@ -641,6 +644,8 @@ func syncConfigFromGraphViaSDK(serverURL, token, projectID, instanceID string) {
 			log.Printf("[mcp-relay] Synced %d secrets from graph via SDK to %s/secrets/", written, dianeDir)
 		}
 	}
+
+	return servers
 }
 
 // getPropAnyString extracts a string from a map[string]any (the SDK type).
@@ -769,31 +774,24 @@ func prefixTools(tools []map[string]interface{}, prefix string) {
 
 // mergeProxyConfigs merges multiple scored MCP proxy configs into one.
 // Higher-scored configs override lower-scored ones at the server level.
-func mergeProxyConfigs(configs []scoredConfig) string {
+func mergeProxyConfigs(configs []scoredConfig) []mcpproxy.ServerConfig {
 	if len(configs) == 0 {
-		return `{"servers":[]}`
+		return nil
 	}
 	if len(configs) == 1 {
-		return configs[0].config
+		var cfg mcpproxy.Config
+		if err := json.Unmarshal([]byte(configs[0].config), &cfg); err != nil {
+			var single mcpproxy.ServerConfig
+			if err2 := json.Unmarshal([]byte(configs[0].config), &single); err2 == nil && single.Name != "" {
+				return []mcpproxy.ServerConfig{single}
+			}
+			return nil
+		}
+		return cfg.Servers
 	}
 
 	// Parse all configs and merge servers
-	type serverDef struct {
-		Name    string            `json:"name"`
-		Enabled bool              `json:"enabled"`
-		Type    string            `json:"type"`
-		Command string            `json:"command"`
-		Args    []string          `json:"args"`
-		Env     map[string]string `json:"env"`
-		URL     string            `json:"url,omitempty"`
-		Headers map[string]string `json:"headers,omitempty"`
-		Timeout int               `json:"timeout,omitempty"`
-	}
-	type proxyCfg struct {
-		Servers []serverDef `json:"servers"`
-	}
-
-	merged := proxyCfg{Servers: []serverDef{}}
+	merged := mcpproxy.Config{Servers: []mcpproxy.ServerConfig{}}
 	seen := map[string]int{} // server name → index in merged.Servers
 
 	// Sort by score ascending so higher scores override lower
@@ -802,10 +800,10 @@ func mergeProxyConfigs(configs []scoredConfig) string {
 	})
 
 	for _, sc := range configs {
-		var cfg proxyCfg
+		var cfg mcpproxy.Config
 		if err := json.Unmarshal([]byte(sc.config), &cfg); err != nil {
 			// Try as a single server config (not wrapped in {"servers":[...]})
-			var single serverDef
+			var single mcpproxy.ServerConfig
 			if err2 := json.Unmarshal([]byte(sc.config), &single); err2 == nil && single.Name != "" {
 				cfg.Servers = append(cfg.Servers, single)
 			} else {
@@ -822,91 +820,10 @@ func mergeProxyConfigs(configs []scoredConfig) string {
 		}
 	}
 
-	data, err := json.MarshalIndent(merged, "", "  ")
-	if err != nil {
-		log.Printf("[mcp-relay] Failed to marshal merged config: %v", err)
-		return `{"servers":[]}`
-	}
-	return string(data)
+	return merged.Servers
 }
 
-// mergeProxyConfigsWithLocal merges graph-synced MCP proxy configs with the
-// existing local config. Graph servers override local servers, but local
-// servers not in the graph result are preserved.
-func mergeProxyConfigsWithLocal(configs []scoredConfig, dianeDir string) string {
-	merged := mergeProxyConfigs(configs)
-	if merged == "" || merged == `{"servers":[]}` {
-		// Nothing useful from graph — preserve local config
-		localPath := filepath.Join(dianeDir, "mcp-servers.json")
-		if data, err := os.ReadFile(localPath); err == nil {
-			return string(data)
-		}
-		return merged
-	}
 
-	// Parse merged graph config
-	var graphCfg struct {
-		Servers []struct {
-			Name string `json:"name"`
-		} `json:"servers"`
-	}
-	if err := json.Unmarshal([]byte(merged), &graphCfg); err != nil {
-		return merged
-	}
-
-	// Build set of graph server names
-	graphNames := make(map[string]bool)
-	for _, s := range graphCfg.Servers {
-		graphNames[s.Name] = true
-	}
-
-	// Read local config
-	localPath := filepath.Join(dianeDir, "mcp-servers.json")
-	localData, err := os.ReadFile(localPath)
-	if err != nil {
-		return merged // no local config, just use graph
-	}
-
-	type serverDef struct {
-		Name    string            `json:"name"`
-		Enabled bool              `json:"enabled"`
-		Type    string            `json:"type"`
-		Command string            `json:"command"`
-		Args    []string          `json:"args"`
-		Env     map[string]string `json:"env"`
-		URL     string            `json:"url,omitempty"`
-		Headers map[string]string `json:"headers,omitempty"`
-		Timeout int               `json:"timeout,omitempty"`
-	}
-	type proxyCfg struct {
-		Servers []serverDef `json:"servers"`
-	}
-
-	var localCfg proxyCfg
-	if err := json.Unmarshal(localData, &localCfg); err != nil {
-		return merged
-	}
-
-	// Parse graph config fully
-	var fullGraphCfg proxyCfg
-	json.Unmarshal([]byte(merged), &fullGraphCfg)
-
-	// Build final list: graph servers first, then local servers not in graph
-	seen := make(map[string]bool)
-	var result proxyCfg
-	for _, s := range fullGraphCfg.Servers {
-		seen[s.Name] = true
-		result.Servers = append(result.Servers, s)
-	}
-	for _, s := range localCfg.Servers {
-		if !seen[s.Name] {
-			result.Servers = append(result.Servers, s)
-		}
-	}
-
-	data, _ := json.Marshal(result)
-	return string(data)
-}
 
 // generateInstanceID creates a random instance ID like "diane-a4fd".
 func generateInstanceID() string {
@@ -1002,10 +919,10 @@ func runMCPRelay(args []string) {
 
 	// Sync MCP proxy config and secrets from the MP graph
 	// This lets one node define config centrally and other nodes auto-pull it
-	syncConfigFromGraph(pc.ServerURL, pc.Token, pc.ProjectID, instanceID)
+	servers := syncConfigFromGraph(pc.ServerURL, pc.Token, pc.ProjectID, instanceID)
 
 	// Register this node's config in the graph so other nodes can discover it
 	upsertNodeConfigInGraph(pc, instanceID)
 
-	cmdMCPRelay(relayCfg)
+	cmdMCPRelay(relayCfg, servers)
 }

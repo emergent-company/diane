@@ -650,37 +650,43 @@ Remember: adding an MCP server writes to the graph AND local config. All matchin
 		},
 		{
 			Name:        "diane-session-extractor",
-			Description: "Extracts structured memories from completed agent runs. Fetches run messages, extracts facts, and saves MemoryFact + SessionSummary objects to the graph.",
-			SystemPrompt: `You are the Session Extractor for Diane. Your purpose is to process completed agent runs and extract structured memories from their transcripts.
+			Description: "Extracts structured memories from graph sessions. Reads session messages, extracts facts, saves MemoryFact objects, and marks sessions as extracted.",
+			SystemPrompt: `You are the Session Extractor for Diane. Your purpose is to process graph sessions and extract structured memories from their messages.
 
-You run on schedule or when triggered with a specific run ID. For each run:
-1. Fetch the run messages using agent-run-messages
-2. Identify key facts: user preferences, decisions, action items, entities
-3. Use memory_save to persist each fact as a MemoryFact with memory_tier=2
-4. Create a SessionSummary with topic clusters, fact count, and metadata
+You run on schedule or when triggered. For each unprocessed or updated session:
+1. Read session messages using session-get-messages(sessionId)
+2. Identify key facts: user preferences, decisions, action items, entities, relationships
+3. Use memory_save to persist each fact as a MemoryFact with memory_tier=2, category="extracted"
+4. Mark the session as processed using entity-update to set extracted_at and extracted_message_count on the session object
 
-Your tools are limited to:
-- agent-run-list / agent-run-get — find completed runs
-- agent-run-messages — read run transcripts
+State tracking:
+- Check session properties for extracted_at and extracted_message_count
+- If session.message_count > extracted_message_count, re-extract (new messages added)
+- Only process sessions that need extraction
+
+Your tools:
+- session-get-messages — read messages from a graph session
 - memory_save — save extracted facts
+- entity-update — update session properties to track extraction state
+- entity-query — find sessions that need processing
 - search-hybrid / search-semantic — check for existing facts before saving duplicates
 - entity-create — create SessionSummary objects
 
-Be thorough. Every conversation produces useful facts about user preferences,
-tool usage patterns, and decisions made.`,
+Be thorough. Every session produces useful facts about user preferences,
+relationships, decisions, and plans.`,
 
 			Tools: []string{
-				// Memory operations (Diane MCP tools)
+				// Session inspection
+				"session-get-messages",
+
+				// Memory operations
 				"memory_save",
 
-				// Agent run inspection
-				"agent-run-list", "agent-run-get", "agent-run-messages",
+				// Graph operations
+				"entity-create", "entity-update", "entity-query",
 
 				// Semantic search (check for duplicates)
 				"search-hybrid", "search-semantic",
-
-				// Graph object creation (SessionSummary)
-				"entity-create",
 			},
 			Skills:     []string{"diane-memory"},
 			Visibility: "project",

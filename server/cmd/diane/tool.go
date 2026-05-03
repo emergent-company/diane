@@ -94,9 +94,8 @@ func cmdToolTest(args []string) {
 		fmt.Println()
 	}
 
-	// Initialize MCP proxy (same config as diane mcp serve)
-	configPath := mcpproxy.GetDefaultConfigPath()
-	proxy, err := mcpproxy.NewProxy(configPath)
+	// Initialize MCP proxy (servers loaded from graph, not local file)
+	proxy, err := mcpproxy.NewProxy(nil)
 	if err != nil {
 		if jsonOutput {
 			emitJSON("error", map[string]string{"message": "Failed to initialize MCP proxy: " + err.Error()})

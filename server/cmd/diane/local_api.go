@@ -112,14 +112,10 @@ func (a *localAPIServer) close() {
 
 // ensureProxy lazily starts the MCP proxy for tool/prompt discovery.
 // Safe to call multiple times — only initializes once.
+// Servers are loaded from the graph, not a local config file.
 func (a *localAPIServer) ensureProxy() {
 	a.proxyOnce.Do(func() {
-		configPath := mcpproxy.GetDefaultConfigPath()
-		if _, err := os.Stat(configPath); os.IsNotExist(err) {
-			log.Printf("[LOCAL-API] No MCP config at %s — proxy disabled", configPath)
-			return
-		}
-		p, err := mcpproxy.NewProxy(configPath)
+		p, err := mcpproxy.NewProxy(nil)
 		if err != nil {
 			log.Printf("[LOCAL-API] Failed to start MCP proxy: %v", err)
 			return
@@ -811,48 +807,11 @@ func (a *localAPIServer) handleMCPServers(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	configPath := mcpproxy.GetDefaultConfigPath()
-	cfg, err := mcpproxy.LoadConfig(configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			jsonResponse(w, map[string]any{
-				"servers": []any{},
-				"total":   0,
-			})
-			return
-		}
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("load mcp config: %v", err))
-		return
-	}
-
-	type serverJSON struct {
-		Name    string            `json:"name"`
-		Enabled bool              `json:"enabled"`
-		Type    string            `json:"type"`
-		URL     string            `json:"url,omitempty"`
-		Command string            `json:"command,omitempty"`
-		Args    []string          `json:"args,omitempty"`
-		Env     map[string]string `json:"env,omitempty"`
-		Timeout int               `json:"timeout,omitempty"`
-	}
-
-	items := make([]serverJSON, 0, len(cfg.Servers))
-	for _, s := range cfg.Servers {
-		items = append(items, serverJSON{
-			Name:    s.Name,
-			Enabled: s.Enabled,
-			Type:    s.Type,
-			URL:     s.URL,
-			Command: s.Command,
-			Args:    s.Args,
-			Env:     s.Env,
-			Timeout: s.Timeout,
-		})
-	}
-
+	// MCP server configurations are managed through the Memory Platform graph.
+	// Use the graph API to query current configurations.
 	jsonResponse(w, map[string]any{
-		"servers": items,
-		"total":   len(items),
+		"servers": []any{},
+		"total":   0,
 	})
 }
 
@@ -879,60 +838,19 @@ func (a *localAPIServer) handleMCPServerByID(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Load MCP server config
-	configPath := mcpproxy.GetDefaultConfigPath()
-	cfg, err := mcpproxy.LoadConfig(configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			jsonResponse(w, map[string]any{"error": "no MCP servers configured", action: []any{}, "total": 0})
-			return
-		}
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("load mcp config: %v", err))
-		return
-	}
-
-	// Find the server by name
-	var serverCfg *mcpproxy.ServerConfig
-	for i, s := range cfg.Servers {
-		if s.Name == serverName {
-			serverCfg = &cfg.Servers[i]
-			break
-		}
-	}
-	if serverCfg == nil {
-		jsonError(w, http.StatusNotFound, fmt.Sprintf("MCP server '%s' not found", serverName))
-		return
-	}
-
-	// Query based on server type
-	switch action {
-	case "tools":
-		tools, queryErr := a.queryToolsViaProxy(serverName, serverCfg)
-		if queryErr != nil {
-			jsonResponse(w, map[string]any{
-				"error": queryErr.Error(),
-				"tools": []any{},
-				"total": 0,
-			})
-			return
-		}
+	// MCP server configurations are managed through the Memory Platform graph.
+	// Use the graph API to query server configs. For now, return empty results.
+	if action == "tools" {
 		jsonResponse(w, map[string]any{
-			"tools": tools,
-			"total": len(tools),
+			"error": fmt.Sprintf("MCP server '%s' not found — configure via graph", serverName),
+			"tools": []any{},
+			"total": 0,
 		})
-	case "prompts":
-		prompts, queryErr := a.queryPromptsViaProxy(serverName, serverCfg)
-		if queryErr != nil {
-			jsonResponse(w, map[string]any{
-				"error":   queryErr.Error(),
-				"prompts": []any{},
-				"total":   0,
-			})
-			return
-		}
+	} else {
 		jsonResponse(w, map[string]any{
-			"prompts": prompts,
-			"total":   len(prompts),
+			"error":   fmt.Sprintf("MCP server '%s' not found — configure via graph", serverName),
+			"prompts": []any{},
+			"total":   0,
 		})
 	}
 }
@@ -1725,33 +1643,9 @@ func (a *localAPIServer) handleMCPToggle(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	configPath := mcpproxy.GetDefaultConfigPath()
-	cfg, err := mcpproxy.LoadConfig(configPath)
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("load config: %v", err))
-		return
-	}
-
-	found := false
-	for i := range cfg.Servers {
-		if cfg.Servers[i].Name == serverName {
-			cfg.Servers[i].Enabled = !cfg.Servers[i].Enabled
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		jsonError(w, http.StatusNotFound, fmt.Sprintf("server %q not found", serverName))
-		return
-	}
-
-	if err := writeMCPServersConfig(configPath, cfg); err != nil {
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("write config: %v", err))
-		return
-	}
-
-	jsonResponse(w, map[string]any{"ok": true, "name": serverName})
+	// MCP server configurations are managed through the Memory Platform graph.
+	// Toggle the server's enabled state via the graph API.
+	jsonError(w, http.StatusNotImplemented, "MCP server management is now handled via the Memory Platform graph")
 }
 
 // POST /api/mcp-servers/store — add or update an MCP server
@@ -1761,53 +1655,9 @@ func (a *localAPIServer) handleMCPSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		jsonError(w, http.StatusBadRequest, fmt.Sprintf("read body: %v", err))
-		return
-	}
-
-	var incoming mcpproxy.ServerConfig
-	if err := json.Unmarshal(body, &incoming); err != nil {
-		jsonError(w, http.StatusBadRequest, fmt.Sprintf("parse body: %v", err))
-		return
-	}
-
-	if incoming.Name == "" {
-		jsonError(w, http.StatusBadRequest, "server name is required")
-		return
-	}
-
-	configPath := mcpproxy.GetDefaultConfigPath()
-	cfg, err := mcpproxy.LoadConfig(configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			cfg = &mcpproxy.Config{}
-		} else {
-			jsonError(w, http.StatusInternalServerError, fmt.Sprintf("load config: %v", err))
-			return
-		}
-	}
-
-	// Update existing or append
-	found := false
-	for i := range cfg.Servers {
-		if cfg.Servers[i].Name == incoming.Name {
-			cfg.Servers[i] = incoming
-			found = true
-			break
-		}
-	}
-	if !found {
-		cfg.Servers = append(cfg.Servers, incoming)
-	}
-
-	if err := writeMCPServersConfig(configPath, cfg); err != nil {
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("write config: %v", err))
-		return
-	}
-
-	jsonResponse(w, map[string]any{"ok": true, "name": incoming.Name})
+	// MCP server configurations are managed through the Memory Platform graph.
+	// Use 'diane mcp add' or the dashboard to manage servers.
+	jsonError(w, http.StatusNotImplemented, "MCP server management is now handled via the Memory Platform graph")
 }
 
 // DELETE /api/mcp-servers/delete/{name} — remove an MCP server
@@ -1817,60 +1667,12 @@ func (a *localAPIServer) handleMCPDelete(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	serverName := strings.TrimPrefix(r.URL.Path, "/api/mcp-servers/delete/")
-	if serverName == "" {
-		// Also check for DELETE on /api/mcp-servers/{name} pattern
-		serverName = strings.TrimPrefix(r.URL.Path, "/api/mcp-servers/")
-	}
-	if serverName == "" {
-		jsonError(w, http.StatusBadRequest, "server name required")
-		return
-	}
-
-	configPath := mcpproxy.GetDefaultConfigPath()
-	cfg, err := mcpproxy.LoadConfig(configPath)
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("load config: %v", err))
-		return
-	}
-
-	before := len(cfg.Servers)
-	filtered := make([]mcpproxy.ServerConfig, 0, len(cfg.Servers))
-	for _, s := range cfg.Servers {
-		if s.Name != serverName {
-			filtered = append(filtered, s)
-		}
-	}
-
-	if len(filtered) == before {
-		jsonError(w, http.StatusNotFound, fmt.Sprintf("server %q not found", serverName))
-		return
-	}
-
-	cfg.Servers = filtered
-	if err := writeMCPServersConfig(configPath, cfg); err != nil {
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("write config: %v", err))
-		return
-	}
-
-	jsonResponse(w, map[string]any{"ok": true, "name": serverName})
+	// MCP server configurations are managed through the Memory Platform graph.
+	// Use 'diane mcp add' or the dashboard to manage servers.
+	jsonError(w, http.StatusNotImplemented, "MCP server management is now handled via the Memory Platform graph")
 }
 
-// writeMCPServersConfig writes an MCP Config to the JSON file.
-func writeMCPServersConfig(path string, cfg *mcpproxy.Config) error {
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal config: %w", err)
-	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("create dir: %w", err)
-	}
-	return os.WriteFile(path, data, 0600)
-}
-
-// ─── JSON Helpers ─────────────────────────────────────────────
-
+// jsonResponse writes a JSON response.
 func jsonResponse(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data)

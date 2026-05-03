@@ -89,8 +89,6 @@ func cmdMCPAdd(args []string) {
 	}
 
 	if jsonOutput {
-		// Just write to local config file in JSON mode
-		writeLocalConfig(name, &server)
 		emitJSON("ok", map[string]interface{}{
 			"message": fmt.Sprintf("Added MCP server %q with scope %q", *name, *scope),
 			"name":    *name,
@@ -99,7 +97,7 @@ func cmdMCPAdd(args []string) {
 		return
 	}
 
-	// Normal mode: write to graph and local config
+	// Write to MP graph
 	fmt.Printf("📦 Adding MCP server: %s\n", *name)
 	fmt.Printf("   Scope:  %s\n", *scope)
 	fmt.Printf("   Type:   %s\n", *srvType)
@@ -113,21 +111,18 @@ func cmdMCPAdd(args []string) {
 		fmt.Printf("   URL:    %s\n", *url)
 	}
 
-	// 1. Write to local config so it takes effect immediately
-	writeLocalConfig(name, &server)
-
-	// 2. Upsert to MP graph so other nodes can sync
+	// Upsert to MP graph
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Failed to load config for graph sync: %v\n", err)
-		fmt.Println("   (server added locally only)")
-		osExit(0)
+		fmt.Println("   (server not added)")
+		osExit(1)
 	}
 	pc := cfg.Active()
 	if pc == nil || pc.Token == "" {
 		fmt.Fprintf(os.Stderr, "⚠️  No active project config for graph sync\n")
-		fmt.Println("   (server added locally only)")
-		osExit(0)
+		fmt.Println("   (server not added)")
+		osExit(1)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -142,8 +137,8 @@ func cmdMCPAdd(args []string) {
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Failed to connect to MP: %v\n", err)
-		fmt.Println("   (server added locally only)")
-		osExit(0)
+		fmt.Println("   (server not added)")
+		osExit(1)
 	}
 	defer bridge.Close()
 
@@ -154,8 +149,8 @@ func cmdMCPAdd(args []string) {
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Failed to sync to graph: %v\n", err)
-		fmt.Println("   (server added locally only)")
-		osExit(0)
+		fmt.Println("   (server not added)")
+		osExit(1)
 	}
 
 	fmt.Println("✅ Synced to Memory Platform graph")
@@ -164,37 +159,6 @@ func cmdMCPAdd(args []string) {
 	fmt.Println("  - All nodes matching scope will pick this up on next sync")
 	fmt.Println("  - Run 'diane mcp reload' to reload local relay immediately")
 	fmt.Println("  - Run 'diane mcp auth --server <name>' if OAuth is needed")
-}
-
-// writeLocalConfig adds or updates an MCP server in the local config file.
-func writeLocalConfig(name *string, server *mcpproxy.ServerConfig) {
-	configPath := mcpproxy.GetDefaultConfigPath()
-	cfg, err := mcpproxy.LoadConfig(configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			cfg = &mcpproxy.Config{}
-		} else {
-			fmt.Fprintf(os.Stderr, "⚠️  Failed to load local config: %v\n", err)
-			return
-		}
-	}
-
-	// Update existing or append
-	found := false
-	for i := range cfg.Servers {
-		if cfg.Servers[i].Name == *name {
-			cfg.Servers[i] = *server
-			found = true
-			break
-		}
-	}
-	if !found {
-		cfg.Servers = append(cfg.Servers, *server)
-	}
-
-	if err := writeMCPServersConfig(configPath, cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Failed to write local config: %v\n", err)
-	}
 }
 
 // splitCommaPairs splits a comma-separated string, trimming whitespace.

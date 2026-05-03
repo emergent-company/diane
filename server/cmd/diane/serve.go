@@ -158,7 +158,7 @@ func cmdServe() {
 			// Register this node's config in the graph
 			upsertNodeConfigInGraph(pc, instanceID)
 
-			cmdMCPRelay(relayCfg)
+			cmdMCPRelay(relayCfg, nil)
 			errCh <- nil // relay exited cleanly
 		}()
 	}
