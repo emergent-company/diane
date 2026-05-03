@@ -156,15 +156,20 @@ func (c *HTTPMCPClient) sendRequest(method string, params json.RawMessage) (json
 		return nil, fmt.Errorf("failed to read %s response: %w", method, err)
 	}
 
-	// Handle SSE (Server-Sent Events) responses — GitHub MCP server returns SSE
-	ct := resp.Header.Get("Content-Type")
-	if strings.HasPrefix(ct, "text/event-stream") {
+	// Handle SSE (Server-Sent Events) responses — GitHub MCP server returns SSE.
+	// Try extraction if body looks like SSE format (starts with "event:").
+	// This works regardless of Content-Type header (some GitHub endpoints don't set it).
+	rawBody := body
+	if bytes.HasPrefix(bytes.TrimSpace(body), []byte("event:")) {
 		body = extractSSEData(body)
 	}
 
 	var mcpResp MCPResponse
 	if err := json.Unmarshal(body, &mcpResp); err != nil {
-		return nil, fmt.Errorf("failed to parse %s response: %w (body: %s)", method, err, string(body))
+		if string(body) != string(rawBody) {
+			return nil, fmt.Errorf("failed to parse %s response: %w (extracted: %s, raw: %s)", method, err, string(body[:min(len(body), 200)]), string(rawBody[:min(len(rawBody), 200)]))
+		}
+		return nil, fmt.Errorf("failed to parse %s response: %w (body: %s)", method, err, string(body[:min(len(body), 200)]))
 	}
 
 	if mcpResp.Error != nil {
@@ -476,6 +481,9 @@ func (c *HTTPMCPClient) Close() error {
 // Returns the raw JSON body if no SSE format is found (passthrough).
 func extractSSEData(body []byte) []byte {
 	scanner := bufio.NewScanner(bytes.NewReader(body))
+	// Increase scanner buffer to handle large SSE data lines (e.g., GitHub tools/list 
+	// with base64-encoded icons can be 100KB+ per data line)
+	scanner.Buffer(make([]byte, 0, 512*1024), 512*1024)
 	var dataLines []string
 	for scanner.Scan() {
 		line := scanner.Text()
