@@ -15,6 +15,7 @@ import (
 	"github.com/Emergent-Comapny/diane/internal/config"
 	"github.com/Emergent-Comapny/diane/internal/mcpproxy"
 	"github.com/Emergent-Comapny/diane/internal/memory"
+	"github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/graph"
 )
 
 var osExit = os.Exit
@@ -228,49 +229,152 @@ func cmdMCPAuthPoll(args []string) {
 	}
 }
 
+// loadMCPConfig builds the list of MCP server configs from multiple sources:
+//  1. Locally discovered OAuth configs (~/.diane/secrets/*-oauth-config.json)
+//  2. MCPProxyConfig objects from the MP graph (with dynamic OAuth discovery)
 func loadMCPConfig() *mcpproxy.Config {
-	// Check if we have a discovered OAuth config for this server
-	// that wasn't registered via 'diane mcp add' (common for HTTP MCP servers
-	// like infakt where the relay auto-discovers OAuth endpoints).
 	cfg := &mcpproxy.Config{
 		Servers: []mcpproxy.ServerConfig{},
 	}
 
-	// Scan for discovered OAuth configs in ~/.diane/secrets/*-oauth-config.json
-	secretDir := filepath.Join(os.Getenv("HOME"), ".diane", "secrets")
-	entries, err := os.ReadDir(secretDir)
-	if err == nil {
-		for _, entry := range entries {
-			name := entry.Name()
-			if !strings.HasSuffix(name, "-oauth-config.json") || name == "test-server-oauth-config.json" {
-				continue
-			}
-			serverName := strings.TrimSuffix(name, "-oauth-config.json")
-			if serverName == "" {
-				continue
-			}
-			discovered := mcpproxy.LoadDiscoveredConfig(serverName)
-			if discovered == nil {
-				continue
-			}
-			// If registration URL available but no client_id, auto-register
-			if discovered.ClientID == "" && discovered.RegistrationURL != "" {
-				log.Printf("[mcp-auth] No client_id for %s, attempting dynamic registration...", serverName)
-				if clientID, regErr := mcpproxy.DynamicClientRegistration(discovered.RegistrationURL); regErr == nil {
-					discovered.ClientID = clientID
-					mcpproxy.SaveDiscoveredConfig(serverName, discovered)
-					log.Printf("[mcp-auth] Registered client_id=%s for %s", clientID, serverName)
-				}
-			}
-			cfg.Servers = append(cfg.Servers, mcpproxy.ServerConfig{
-				Name:  serverName,
-				Type:  "http",
-				OAuth: discovered,
-			})
-		}
-	}
+	// 1. Scan for locally discovered OAuth configs in ~/.diane/secrets/*-oauth-config.json
+	cfg.Servers = append(cfg.Servers, loadDiscoveredOAuthConfigs()...)
+
+	// 2. Query MCPProxyConfig from the MP graph for this instance
+	cfg.Servers = append(cfg.Servers, loadGraphMCPConfigs()...)
 
 	return cfg
+}
+
+// loadDiscoveredOAuthConfigs scans ~/.diane/secrets/*-oauth-config.json for
+// OAuth configs discovered by the relay (not registered via 'diane mcp add').
+func loadDiscoveredOAuthConfigs() []mcpproxy.ServerConfig {
+	var servers []mcpproxy.ServerConfig
+	secretDir := filepath.Join(os.Getenv("HOME"), ".diane", "secrets")
+	entries, err := os.ReadDir(secretDir)
+	if err != nil {
+		return nil
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, "-oauth-config.json") || name == "test-server-oauth-config.json" {
+			continue
+		}
+		serverName := strings.TrimSuffix(name, "-oauth-config.json")
+		if serverName == "" {
+			continue
+		}
+		discovered := mcpproxy.LoadDiscoveredConfig(serverName)
+		if discovered == nil {
+			continue
+		}
+		// If registration URL available but no client_id, auto-register
+		if discovered.ClientID == "" && discovered.RegistrationURL != "" {
+			log.Printf("[mcp-auth] No client_id for %s, attempting dynamic registration...", serverName)
+			if clientID, regErr := mcpproxy.DynamicClientRegistration(discovered.RegistrationURL); regErr == nil {
+				discovered.ClientID = clientID
+				mcpproxy.SaveDiscoveredConfig(serverName, discovered)
+				log.Printf("[mcp-auth] Registered client_id=%s for %s", clientID, serverName)
+			}
+		}
+		servers = append(servers, mcpproxy.ServerConfig{
+			Name:  serverName,
+			Type:  "http",
+			OAuth: discovered,
+		})
+	}
+	return servers
+}
+
+// loadGraphMCPConfigs queries the MP graph for MCPProxyConfig objects matching
+// this instance's scope, so 'diane mcp auth' works from any node (not just
+// the one that originally registered the server).
+func loadGraphMCPConfigs() []mcpproxy.ServerConfig {
+	graphCfg, err := config.Load()
+	if err != nil {
+		return nil
+	}
+	pc := graphCfg.Active()
+	if pc == nil || pc.Token == "" || pc.ServerURL == "" || pc.ProjectID == "" {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	bridge, err := memory.New(memory.Config{
+		ServerURL:         pc.ServerURL,
+		APIKey:            pc.Token,
+		ProjectID:         pc.ProjectID,
+		OrgID:             pc.OrgID,
+		HTTPClientTimeout: 10 * time.Second,
+	})
+	if err != nil {
+		return nil
+	}
+	defer bridge.Close()
+
+	client := bridge.Client()
+	resp, err := client.Graph.ListObjects(ctx, &graph.ListObjectsOptions{
+		Type:  "MCPProxyConfig",
+		Limit: 100,
+	})
+	if err != nil || resp == nil {
+		return nil
+	}
+
+	instanceID := pc.InstanceID
+	if instanceID == "" {
+		hostname, _ := os.Hostname()
+		instanceID = hostname
+	}
+
+	var servers []mcpproxy.ServerConfig
+	seen := make(map[string]bool) // deduplicate by server name
+	for _, obj := range resp.Items {
+		if obj == nil || obj.Properties == nil {
+			continue
+		}
+		scope, _ := obj.Properties["scope"].(string)
+		cfgStr, _ := obj.Properties["config"].(string)
+		if scope == "" || cfgStr == "" {
+			continue
+		}
+		// Check if this scope matches our instance
+		if scopeMatchScore(scope, instanceID) <= 0 {
+			continue
+		}
+		// Deserialize the config JSON into a ServerConfig
+		var sc mcpproxy.ServerConfig
+		if err := json.Unmarshal([]byte(cfgStr), &sc); err != nil {
+			continue
+		}
+		if sc.Name == "" {
+			continue
+		}
+		// Skip duplicates (multiple scopes can match the same server)
+		if seen[sc.Name] {
+			continue
+		}
+		seen[sc.Name] = true
+		// If no OAuth config, try dynamic discovery at auth time
+		if sc.OAuth == nil {
+			discovered, discErr := mcpproxy.DiscoverOAuthEndpoints(sc.Name, sc.URL)
+			if discErr != nil {
+				continue
+			}
+			sc.OAuth = discovered
+		}
+		// If discovered OAuth has a registration URL but no client_id, register dynamically
+		if sc.OAuth.ClientID == "" && sc.OAuth.RegistrationURL != "" {
+			if clientID, regErr := mcpproxy.DynamicClientRegistration(sc.OAuth.RegistrationURL); regErr == nil {
+				sc.OAuth.ClientID = clientID
+				mcpproxy.SaveDiscoveredConfig(sc.Name, sc.OAuth)
+			}
+		}
+		servers = append(servers, sc)
+	}
+	return servers
 }
 
 func findMCPServer(cfg *mcpproxy.Config, name string) *mcpproxy.ServerConfig {

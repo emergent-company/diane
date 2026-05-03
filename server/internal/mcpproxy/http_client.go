@@ -239,6 +239,103 @@ type WWWAuthenticate struct {
 	ResourceMetadata string // URL for OAuth protected resource metadata
 }
 
+// DiscoverOAuthEndpoints probes an HTTP MCP server URL to discover its OAuth 2.0
+// endpoints. It makes a POST request (like an MCP tools/list call), catches the 401,
+// parses the WWW-Authenticate header, and follows the OAuth metadata discovery chain:
+//  1. Parse www-authenticate header → get resource_metadata URL
+//  2. Fetch resource_metadata → get authorization_servers
+//  3. Fetch auth server's .well-known/oauth-authorization-server → get endpoints
+//
+// Returns the discovered OAuthConfig, or an error if discovery fails.
+// The discovered config is also saved locally for future use.
+func DiscoverOAuthEndpoints(serverName, serverURL string) (*OAuthConfig, error) {
+	// Make a probe POST request to trigger 401
+	probePayload := `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`
+	httpClient := &http.Client{Timeout: 15 * time.Second}
+	resp, err := httpClient.Post(serverURL, "application/json", bytes.NewReader([]byte(probePayload)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to probe OAuth server %s: %w", serverURL, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		return nil, fmt.Errorf("unexpected response from %s: HTTP %d (expected 401)", serverURL, resp.StatusCode)
+	}
+
+	// Parse WWW-Authenticate header
+	authHeader := resp.Header.Get("www-authenticate")
+	if authHeader == "" {
+		return nil, fmt.Errorf("no www-authenticate header in 401 response from %s", serverURL)
+	}
+
+	wwwAuth := parseWWWAuthenticate(authHeader)
+	if wwwAuth.ResourceMetadata == "" {
+		return nil, fmt.Errorf("no resource_metadata in www-authenticate header from %s", serverURL)
+	}
+
+	// Fetch the resource metadata to get the authorization server URL
+	metaResp, err := httpClient.Get(wwwAuth.ResourceMetadata)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch OAuth resource metadata from %s: %w", wwwAuth.ResourceMetadata, err)
+	}
+	defer metaResp.Body.Close()
+
+	var metadata struct {
+		Resource            string   `json:"resource"`
+		AuthorizationServer []string `json:"authorization_servers"`
+	}
+	if err := json.NewDecoder(metaResp.Body).Decode(&metadata); err != nil {
+		return nil, fmt.Errorf("failed to parse resource metadata: %w", err)
+	}
+	if len(metadata.AuthorizationServer) == 0 {
+		return nil, fmt.Errorf("no authorization_servers in resource metadata")
+	}
+
+	authServer := metadata.AuthorizationServer[0]
+	if !strings.HasPrefix(authServer, "http") {
+		return nil, fmt.Errorf("invalid authorization server URL: %s", authServer)
+	}
+
+	// Fetch the OAuth authorization server metadata
+	wellKnownURL := strings.TrimRight(authServer, "/") + "/.well-known/oauth-authorization-server"
+	oauthResp, err := httpClient.Get(wellKnownURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch OAuth server metadata from %s: %w", wellKnownURL, err)
+	}
+	defer oauthResp.Body.Close()
+
+	var oauthMeta struct {
+		AuthorizationEndpoint string   `json:"authorization_endpoint"`
+		TokenEndpoint         string   `json:"token_endpoint"`
+		RegistrationEndpoint  *string  `json:"registration_endpoint,omitempty"`
+		ScopesSupported       []string `json:"scopes_supported,omitempty"`
+	}
+	if err := json.NewDecoder(oauthResp.Body).Decode(&oauthMeta); err != nil {
+		return nil, fmt.Errorf("failed to parse OAuth server metadata: %w", err)
+	}
+	if oauthMeta.AuthorizationEndpoint == "" || oauthMeta.TokenEndpoint == "" {
+		return nil, fmt.Errorf("incomplete OAuth server metadata: missing authorization or token endpoint at %s", wellKnownURL)
+	}
+
+	cfg := &OAuthConfig{
+		AuthorizationURL: oauthMeta.AuthorizationEndpoint,
+		TokenURL:         oauthMeta.TokenEndpoint,
+		Scopes:           oauthMeta.ScopesSupported,
+	}
+	if oauthMeta.RegistrationEndpoint != nil {
+		cfg.RegistrationURL = *oauthMeta.RegistrationEndpoint
+	}
+
+	// Save locally for future use
+	if err := SaveDiscoveredConfig(serverName, cfg); err != nil {
+		log.Printf("[OAuth] Warning: failed to save discovered config for %s: %v", serverName, err)
+	}
+
+	log.Printf("[OAuth] Discovered OAuth endpoints for %s: authorize=%s token=%s",
+		serverName, cfg.AuthorizationURL, cfg.TokenURL)
+	return cfg, nil
+}
+
 // discoverOAuthFromHeader parses the WWW-Authenticate header from a 401 response.
 // It follows the OAuth metadata discovery chain:
 // 1. Parse www-authenticate header → get resource_metadata URL
