@@ -43,6 +43,7 @@ import (
 	"github.com/Emergent-Comapny/diane/internal/config"
 	"github.com/Emergent-Comapny/diane/internal/mcpproxy"
 	"github.com/Emergent-Comapny/diane/internal/memory"
+	"github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/graph"
 	"github.com/gorilla/websocket"
 )
 
@@ -436,12 +437,19 @@ type scoredConfig struct {
 // before starting the relay. This lets one node define config centrally
 // and other nodes auto-pull it without SSH or shared filesystem.
 func syncConfigFromGraph(serverURL, token, projectID, instanceID string) {
+	// Try memory CLI first (works on master where it's installed)
 	memoryCLI := findMemoryCLI()
-	if memoryCLI == "" {
-		log.Printf("[mcp-relay] memory CLI not found, skipping graph config sync")
+	if memoryCLI != "" {
+		syncConfigFromGraphViaCLI(memoryCLI, serverURL, token, projectID, instanceID)
 		return
 	}
 
+	// Fall back to SDK bridge (works everywhere the relay can connect to MP)
+	syncConfigFromGraphViaSDK(serverURL, token, projectID, instanceID)
+}
+
+// syncConfigFromGraphViaCLI uses the memory CLI to sync MCP config and secrets.
+func syncConfigFromGraphViaCLI(memoryCLI, serverURL, token, projectID, instanceID string) {
 	dianeDir := filepath.Join(os.Getenv("HOME"), ".diane")
 	os.MkdirAll(dianeDir, 0755)
 	os.MkdirAll(filepath.Join(dianeDir, "secrets"), 0755)
@@ -465,9 +473,9 @@ func syncConfigFromGraph(serverURL, token, projectID, instanceID string) {
 
 		if len(matched) > 0 {
 			// Merge configs (highest score wins on conflict)
-			merged := mergeProxyConfigs(matched)
+			mergedConfig := mergeProxyConfigsWithLocal(matched, dianeDir)
 			configPath := filepath.Join(dianeDir, "mcp-servers.json")
-			if err := os.WriteFile(configPath, []byte(merged), 0644); err != nil {
+			if err := os.WriteFile(configPath, []byte(mergedConfig), 0644); err != nil {
 				log.Printf("[mcp-relay] Failed to write mcp-servers.json: %v", err)
 			} else {
 				log.Printf("[mcp-relay] Synced MCP proxy config from graph (%d matching, merged to %s)", len(matched), configPath)
@@ -504,6 +512,137 @@ func syncConfigFromGraph(serverURL, token, projectID, instanceID string) {
 			log.Printf("[mcp-relay] Synced %d secrets from graph to %s/secrets/", written, dianeDir)
 		}
 	}
+}
+
+// syncConfigFromGraphViaSDK uses the SDK bridge to sync MCP config and secrets.
+// This works without the memory CLI installed.
+func syncConfigFromGraphViaSDK(serverURL, token, projectID, instanceID string) {
+	dianeDir := filepath.Join(os.Getenv("HOME"), ".diane")
+	os.MkdirAll(dianeDir, 0755)
+	os.MkdirAll(filepath.Join(dianeDir, "secrets"), 0755)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// Load full config to get OrgID
+	cfg, err := config.Load()
+	var orgID string
+	if err == nil {
+		pc := cfg.Active()
+		if pc != nil {
+			orgID = pc.OrgID
+		}
+	}
+
+	bridge, err := memory.New(memory.Config{
+		ServerURL:         serverURL,
+		APIKey:            token,
+		ProjectID:         projectID,
+		OrgID:             orgID,
+		HTTPClientTimeout: 15 * time.Second,
+	})
+	if err != nil {
+		log.Printf("[mcp-relay] Failed to create bridge for graph sync: %v", err)
+		return
+	}
+	defer bridge.Close()
+
+	client := bridge.Client()
+
+	// ── Query MCPProxyConfig objects ──
+	configResp, err := client.Graph.ListObjects(ctx, &graph.ListObjectsOptions{
+		Type:  "MCPProxyConfig",
+		Limit: 100,
+	})
+	if err != nil {
+		log.Printf("[mcp-relay] Failed to query MCPProxyConfig via SDK: %v", err)
+	} else if configResp != nil {
+		var matched []scoredConfig
+		for _, obj := range configResp.Items {
+			if obj == nil || obj.Properties == nil {
+				continue
+			}
+			scope := getPropAnyString(obj.Properties, "scope")
+			cfgStr := getPropAnyString(obj.Properties, "config")
+			ver := getPropAnyInt(obj.Properties, "version")
+			score := scopeMatchScore(scope, instanceID)
+			if score > 0 && cfgStr != "" {
+				matched = append(matched, scoredConfig{config: cfgStr, version: ver, score: score})
+			}
+		}
+		if len(matched) > 0 {
+			mergedConfig := mergeProxyConfigsWithLocal(matched, dianeDir)
+			if mergedConfig != "" {
+				configPath := filepath.Join(dianeDir, "mcp-servers.json")
+				if err := os.WriteFile(configPath, []byte(mergedConfig), 0644); err != nil {
+					log.Printf("[mcp-relay] Failed to write mcp-servers.json: %v", err)
+				} else {
+					log.Printf("[mcp-relay] Synced MCP proxy config via SDK (%d matching)", len(matched))
+				}
+			}
+		} else {
+			log.Printf("[mcp-relay] No MCPProxyConfig objects found via SDK for scope matching '%s'", instanceID)
+		}
+	}
+
+	// ── Query MCPSecret objects ──
+	secretResp, err := client.Graph.ListObjects(ctx, &graph.ListObjectsOptions{
+		Type:  "MCPSecret",
+		Limit: 100,
+	})
+	if err != nil {
+		log.Printf("[mcp-relay] Failed to query MCPSecret via SDK: %v", err)
+	} else if secretResp != nil {
+		written := 0
+		for _, obj := range secretResp.Items {
+			if obj == nil || obj.Properties == nil {
+				continue
+			}
+			scope := getPropAnyString(obj.Properties, "scope")
+			name := getPropAnyString(obj.Properties, "name")
+			value := getPropAnyString(obj.Properties, "value")
+			if scopeMatchScore(scope, instanceID) > 0 && name != "" && value != "" {
+				secretPath := filepath.Join(dianeDir, "secrets", name)
+				if !strings.HasSuffix(name, ".json") && !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
+					secretPath += ".json"
+				}
+				if err := os.WriteFile(secretPath, []byte(value), 0600); err != nil {
+					log.Printf("[mcp-relay] Failed to write secret %s: %v", name, err)
+				} else {
+					written++
+				}
+			}
+		}
+		if written > 0 {
+			log.Printf("[mcp-relay] Synced %d secrets from graph via SDK to %s/secrets/", written, dianeDir)
+		}
+	}
+}
+
+// getPropAnyString extracts a string from a map[string]any (the SDK type).
+func getPropAnyString(props map[string]any, key string) string {
+	if v, ok := props[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+// getPropAnyInt extracts an int from a map[string]any.
+func getPropAnyInt(props map[string]any, key string) int {
+	if v, ok := props[key]; ok {
+		switch n := v.(type) {
+		case int:
+			return n
+		case float64:
+			return int(n)
+		case json.Number:
+			i, _ := n.Int64()
+			return int(i)
+		}
+	}
+	return 0
 }
 
 // findMemoryCLI locates the memory CLI binary.
@@ -561,10 +700,15 @@ func scopeMatchScore(scope, instanceID string) int {
 	if scope == "" || scope == "all" {
 		return 1
 	}
-	if scope == instanceID {
+	// Strip "instance:" prefix from scope for comparison
+	scopeID := scope
+	if strings.HasPrefix(scope, "instance:") {
+		scopeID = strings.TrimPrefix(scope, "instance:")
+	}
+	if scopeID == instanceID {
 		return 3
 	}
-	if strings.HasPrefix(instanceID, scope) || strings.HasPrefix(scope, instanceID) {
+	if strings.HasPrefix(instanceID, scopeID) || strings.HasPrefix(scopeID, instanceID) {
 		return 2
 	}
 	return 0
@@ -608,6 +752,9 @@ func mergeProxyConfigs(configs []scoredConfig) string {
 		Command string            `json:"command"`
 		Args    []string          `json:"args"`
 		Env     map[string]string `json:"env"`
+		URL     string            `json:"url,omitempty"`
+		Headers map[string]string `json:"headers,omitempty"`
+		Timeout int               `json:"timeout,omitempty"`
 	}
 	type proxyCfg struct {
 		Servers []serverDef `json:"servers"`
@@ -624,7 +771,13 @@ func mergeProxyConfigs(configs []scoredConfig) string {
 	for _, sc := range configs {
 		var cfg proxyCfg
 		if err := json.Unmarshal([]byte(sc.config), &cfg); err != nil {
-			continue
+			// Try as a single server config (not wrapped in {"servers":[...]})
+			var single serverDef
+			if err2 := json.Unmarshal([]byte(sc.config), &single); err2 == nil && single.Name != "" {
+				cfg.Servers = append(cfg.Servers, single)
+			} else {
+				continue
+			}
 		}
 		for _, s := range cfg.Servers {
 			if idx, ok := seen[s.Name]; ok {
@@ -641,6 +794,84 @@ func mergeProxyConfigs(configs []scoredConfig) string {
 		log.Printf("[mcp-relay] Failed to marshal merged config: %v", err)
 		return `{"servers":[]}`
 	}
+	return string(data)
+}
+
+// mergeProxyConfigsWithLocal merges graph-synced MCP proxy configs with the
+// existing local config. Graph servers override local servers, but local
+// servers not in the graph result are preserved.
+func mergeProxyConfigsWithLocal(configs []scoredConfig, dianeDir string) string {
+	merged := mergeProxyConfigs(configs)
+	if merged == "" || merged == `{"servers":[]}` {
+		// Nothing useful from graph — preserve local config
+		localPath := filepath.Join(dianeDir, "mcp-servers.json")
+		if data, err := os.ReadFile(localPath); err == nil {
+			return string(data)
+		}
+		return merged
+	}
+
+	// Parse merged graph config
+	var graphCfg struct {
+		Servers []struct {
+			Name string `json:"name"`
+		} `json:"servers"`
+	}
+	if err := json.Unmarshal([]byte(merged), &graphCfg); err != nil {
+		return merged
+	}
+
+	// Build set of graph server names
+	graphNames := make(map[string]bool)
+	for _, s := range graphCfg.Servers {
+		graphNames[s.Name] = true
+	}
+
+	// Read local config
+	localPath := filepath.Join(dianeDir, "mcp-servers.json")
+	localData, err := os.ReadFile(localPath)
+	if err != nil {
+		return merged // no local config, just use graph
+	}
+
+	type serverDef struct {
+		Name    string            `json:"name"`
+		Enabled bool              `json:"enabled"`
+		Type    string            `json:"type"`
+		Command string            `json:"command"`
+		Args    []string          `json:"args"`
+		Env     map[string]string `json:"env"`
+		URL     string            `json:"url,omitempty"`
+		Headers map[string]string `json:"headers,omitempty"`
+		Timeout int               `json:"timeout,omitempty"`
+	}
+	type proxyCfg struct {
+		Servers []serverDef `json:"servers"`
+	}
+
+	var localCfg proxyCfg
+	if err := json.Unmarshal(localData, &localCfg); err != nil {
+		return merged
+	}
+
+	// Parse graph config fully
+	var fullGraphCfg proxyCfg
+	json.Unmarshal([]byte(merged), &fullGraphCfg)
+
+	// Build final list: graph servers first, then local servers not in graph
+	seen := make(map[string]bool)
+	var result proxyCfg
+	for _, s := range fullGraphCfg.Servers {
+		seen[s.Name] = true
+		result.Servers = append(result.Servers, s)
+	}
+	for _, s := range localCfg.Servers {
+		if !seen[s.Name] {
+			result.Servers = append(result.Servers, s)
+		}
+	}
+
+	data, _ := json.Marshal(result)
 	return string(data)
 }
 

@@ -1,13 +1,18 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"time"
 
+	"github.com/Emergent-Comapny/diane/internal/config"
 	"github.com/Emergent-Comapny/diane/internal/mcpproxy"
+	"github.com/Emergent-Comapny/diane/internal/memory"
 )
 
 var osExit = os.Exit
@@ -49,6 +54,12 @@ func cmdMCPAuth(args []string) {
 				fmt.Printf(" (expires %s)", tokens.ExpiresAt.Format(time.RFC3339))
 			}
 			fmt.Println()
+			fmt.Printf("   Syncing token to MP graph...")
+			if err := syncTokenToGraph(*serverName, ""); err != nil {
+				fmt.Printf(" ⚠️  %v\n", err)
+			} else {
+				fmt.Println(" ✅")
+			}
 			return
 		}
 		fmt.Fprintf(os.Stderr, "Error: no OAuth configuration for server %q\n", *serverName)
@@ -101,6 +112,11 @@ func cmdMCPAuth(args []string) {
 		os.Exit(1)
 	}
 	_ = token
+
+	// Sync token to MP graph so other nodes can pull it
+	if err := syncTokenToGraph(*serverName, ""); err != nil {
+		fmt.Printf("⚠️  Token saved locally, but graph sync failed: %v\n", err)
+	}
 
 	fmt.Printf("\n✅ Successfully authenticated %s\n", *serverName)
 	fmt.Printf("   Token saved to: %s\n", mcpproxy.TokenPath(*serverName))
@@ -189,6 +205,10 @@ func cmdMCPAuthPoll(args []string) {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		os.Exit(1)
 	}
+	// Sync token to MP graph
+	if err := syncTokenToGraph(*serverName, ""); err != nil {
+		log.Printf("⚠️ Token synced locally but graph sync failed: %v", err)
+	}
 }
 
 func loadMCPConfig() *mcpproxy.Config {
@@ -208,4 +228,69 @@ func findMCPServer(cfg *mcpproxy.Config, name string) *mcpproxy.ServerConfig {
 		}
 	}
 	return nil
+}
+
+// syncTokenToGraph syncs an OAuth token to the MP graph as an MCPSecret
+// so that other nodes matching the scope can pull it automatically.
+func syncTokenToGraph(serverName, scope string) error {
+	tokens, err := mcpproxy.LoadTokens(serverName)
+	if err != nil {
+		return fmt.Errorf("load token: %w", err)
+	}
+	if tokens.AccessToken == "" {
+		return fmt.Errorf("no token found for %s", serverName)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	pc := cfg.Active()
+	if pc == nil || pc.Token == "" {
+		return fmt.Errorf("no active project config")
+	}
+
+	if scope == "" {
+		scope = "instance:" + getInstanceID()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	value, _ := json.Marshal(tokens)
+
+	bridge, err := memory.New(memory.Config{
+		ServerURL:         pc.ServerURL,
+		APIKey:            pc.Token,
+		ProjectID:         pc.ProjectID,
+		OrgID:             pc.OrgID,
+		HTTPClientTimeout: 15 * time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("connect to MP: %w", err)
+	}
+	defer bridge.Close()
+
+	if err := bridge.UpsertMCPSecret(ctx, &memory.MCPSecretRequest{
+		Name:  serverName + ".json",
+		Scope: scope,
+		Value: string(value),
+	}); err != nil {
+		return fmt.Errorf("upsert mcp secret: %w", err)
+	}
+
+	return nil
+}
+
+// getInstanceID returns the instance ID from config or hostname.
+func getInstanceID() string {
+	cfg, err := config.Load()
+	if err == nil {
+		pc := cfg.Active()
+		if pc != nil && pc.InstanceID != "" {
+			return pc.InstanceID
+		}
+	}
+	hostname, _ := os.Hostname()
+	return hostname
 }

@@ -156,9 +156,15 @@ func (c *HTTPMCPClient) sendRequest(method string, params json.RawMessage) (json
 		return nil, fmt.Errorf("failed to read %s response: %w", method, err)
 	}
 
+	// Handle SSE (Server-Sent Events) responses — GitHub MCP server returns SSE
+	ct := resp.Header.Get("Content-Type")
+	if strings.HasPrefix(ct, "text/event-stream") {
+		body = extractSSEData(body)
+	}
+
 	var mcpResp MCPResponse
 	if err := json.Unmarshal(body, &mcpResp); err != nil {
-		return nil, fmt.Errorf("failed to parse %s response: %w", method, err)
+		return nil, fmt.Errorf("failed to parse %s response: %w (body: %s)", method, err, string(body))
 	}
 
 	if mcpResp.Error != nil {
@@ -459,4 +465,33 @@ func (c *HTTPMCPClient) SetToken(token string) {
 // Close is a no-op for HTTP clients (no subprocess to kill).
 func (c *HTTPMCPClient) Close() error {
 	return nil
+}
+
+// extractSSEData extracts the JSON payload from an SSE (Server-Sent Events)
+// response body. SSE format is:
+//
+//	event: message
+//	data: {"jsonrpc":"2.0",...}
+//
+// Returns the raw JSON body if no SSE format is found (passthrough).
+func extractSSEData(body []byte) []byte {
+	scanner := bufio.NewScanner(bytes.NewReader(body))
+	var dataLines []string
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "data:") {
+			// data: {"json":...} — extract the JSON part
+			dataStr := strings.TrimSpace(line[5:])
+			dataLines = append(dataLines, dataStr)
+		}
+	}
+	if len(dataLines) == 0 {
+		return body
+	}
+	// If there's only one data line, return it directly
+	if len(dataLines) == 1 {
+		return []byte(dataLines[0])
+	}
+	// Multiple data lines — join them (used for streaming text)
+	return []byte(strings.Join(dataLines, "\n"))
 }
