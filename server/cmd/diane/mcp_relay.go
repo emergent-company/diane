@@ -22,6 +22,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -719,13 +720,29 @@ func queryGraphObjects(memoryCLI, serverURL, token, projectID, objectType string
 		return nil, fmt.Errorf("%s: %s", err, string(out))
 	}
 
+	// memory CLI may append non-JSON content (e.g., version update notices)
+	// after the JSON output. Strip everything after the last '}'.
+	if idx := bytes.LastIndex(out, []byte("}")); idx >= 0 && idx < len(out)-1 {
+		out = out[:idx+1]
+	}
+
 	var objects []map[string]interface{}
 	if err := json.Unmarshal(out, &objects); err != nil {
-		// Try single object response
+		// Try single object response (may be wrapped in {"items": [...]})
 		var single map[string]interface{}
 		if err2 := json.Unmarshal(out, &single); err2 == nil {
-			// Wrap single object in array
-			objects = []map[string]interface{}{single}
+			// Check for {"items": [...]} wrapper format used by memory CLI
+			if items, ok := single["items"].([]interface{}); ok {
+				for _, item := range items {
+					if itemMap, ok := item.(map[string]interface{}); ok {
+						objects = append(objects, itemMap)
+					}
+				}
+			}
+			// If no items wrapper, wrap single object in array
+			if len(objects) == 0 {
+				objects = []map[string]interface{}{single}
+			}
 		} else {
 			return nil, fmt.Errorf("parse %s list: %w", objectType, err)
 		}

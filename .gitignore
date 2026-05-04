@@ -32,3 +32,6 @@ logs/
 .env.local
 server/diane-test
 server/swift/DianeCompanion/build/
+diane-darwin-arm64
+diane-linux-amd64
+run-relay.sh

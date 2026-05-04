@@ -559,8 +559,9 @@ func cmdAgentSync(name string) {
 }
 
 func doAgentSync(name string, cfg *config.Config, pc *config.ProjectConfig) {
-	// First seed built-in agents (ensure immutable agents are up to date)
+	// First seed built-in agents with graph tool configs (ensure immutable agents are up to date)
 	seedCtx, seedCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer seedCancel()
 	seedBridge, err := memory.New(memory.Config{
 		ServerURL: pc.ServerURL,
 		APIKey:    pc.Token,
@@ -568,10 +569,23 @@ func doAgentSync(name string, cfg *config.Config, pc *config.ProjectConfig) {
 	})
 	if err == nil {
 		fmt.Print("📦 Seeding built-in agents... ")
-		if err := agents.SeedBuiltInAgents(seedCtx, seedBridge.Client()); err != nil {
-			fmt.Printf("⚠️  %v\n", err)
+
+		// Read graph tool configs
+		configs, cfgErr := agents.ReadAgentToolConfigs(seedCtx, seedBridge.Client().Graph)
+		if cfgErr == nil && len(configs) > 0 {
+			builtIns := agents.BuiltInAgents()
+			builtIns = agents.MergeToolPatterns(builtIns, configs)
+			if err := agents.SeedAgentList(seedCtx, seedBridge.Client(), builtIns); err != nil {
+				fmt.Printf("⚠️  %v\n", err)
+			} else {
+				fmt.Println("✅")
+			}
 		} else {
-			fmt.Println("✅")
+			if err := agents.SeedBuiltInAgents(seedCtx, seedBridge.Client()); err != nil {
+				fmt.Printf("⚠️  %v\n", err)
+			} else {
+				fmt.Println("✅")
+			}
 		}
 		seedBridge.Close()
 	}
@@ -656,20 +670,39 @@ func cmdAgentSeed() {
 	}
 	defer bridge.Close()
 
-	builtIns := agents.BuiltInAgents()
-	fmt.Printf("Found %d built-in agent(s):\n", len(builtIns))
-	for _, ba := range builtIns {
-		fmt.Printf("  • %s — %s\n", ba.Name, ba.Description)
+	// Read graph tool configs
+	fmt.Println("🔍 Reading AgentToolConfig from graph...")
+	configs, err := agents.ReadAgentToolConfigs(ctx, bridge.Client().Graph)
+	if err != nil {
+		fmt.Printf("⚠️  Could not read graph configs (non-fatal): %v\n", err)
+	} else if len(configs) > 0 {
+		for agentName, patterns := range configs {
+			fmt.Printf("  • %s: %v\n", agentName, patterns)
+		}
+	} else {
+		fmt.Println("  (none found)")
 	}
 	fmt.Println()
 
-	if err := agents.SeedBuiltInAgents(ctx, bridge.Client()); err != nil {
+	// Get built-in agents and merge graph configs
+	builtIns := agents.BuiltInAgents()
+	if len(configs) > 0 {
+		builtIns = agents.MergeToolPatterns(builtIns, configs)
+	}
+
+	fmt.Printf("Found %d agent(s) to seed:\n", len(builtIns))
+	for _, ba := range builtIns {
+		fmt.Printf("  • %s — %s (%d tools)\n", ba.Name, ba.Description, len(ba.Tools))
+	}
+	fmt.Println()
+
+	if err := agents.SeedAgentList(ctx, bridge.Client(), builtIns); err != nil {
 		fmt.Printf("❌ Seeding failed: %v\n", err)
 		return
 	}
 
-	fmt.Println("✅ All built-in agents seeded to Memory Platform")
-	fmt.Println("   They are immutable: cannot be deleted or renamed via CLI/API.")
+	fmt.Println("✅ All agents seeded to Memory Platform")
+	fmt.Println("   Built-in agents are immutable: cannot be deleted or renamed.")
 }
 
 func syncOneAgent(ctx context.Context, bridge *memory.Bridge, name string, ac *config.AgentConfig) error {

@@ -267,10 +267,11 @@ func buildAgentList() []BuiltInAgent {
 				"todo_read",
 				"todo_update",
 
-				// MCP relay tools (node-provided, glob patterns)
-				"*github*",
-				"*infakt*",
-			},
+			// MCP relay tools are configured dynamically via AgentToolConfig
+			// entities in the graph — see toolconfig.go for the merge mechanism.
+			// Glob patterns (e.g. "*github*", "*infakt*") are stored in the
+			// graph and merged at seed time, NOT hardcoded here.
+		},
 			Skills:     []string{"diane-coding"},
 			Visibility: "project",
 			MaxSteps:   50,
@@ -1119,7 +1120,17 @@ If nothing is worth saving from a session, skip it.`,
 // agents that happen to share a name with a built-in are NOT touched
 // (they're user agents that happen to clash — we skip to avoid overwriting).
 func SeedBuiltInAgents(ctx context.Context, client *sdk.Client) error {
-	builtIns := BuiltInAgents()
+	return seedBuiltInList(ctx, client, BuiltInAgents())
+}
+
+// SeedAgentList seeds a pre-built agent list to Memory Platform.
+// Used by config-aware seeding that merges graph tool configs first.
+func SeedAgentList(ctx context.Context, client *sdk.Client, agents []BuiltInAgent) error {
+	return seedBuiltInList(ctx, client, agents)
+}
+
+// seedBuiltInList is the core seeding logic, accepting a pre-built agent list.
+func seedBuiltInList(ctx context.Context, client *sdk.Client, builtIns []BuiltInAgent) error {
 
 	// Fetch existing agent definitions from MP
 	resp, err := client.AgentDefinitions.List(ctx)

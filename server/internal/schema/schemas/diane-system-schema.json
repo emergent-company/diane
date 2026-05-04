@@ -52,5 +52,29 @@
       "description": "Diane node configuration shared across project instances"
     },
     "enabled": true
+  },
+  {
+    "type_name": "AgentToolConfig",
+    "description": "Agent tool access configuration — maps agent names to tool glob patterns. When present, these patterns are merged into the agent definition's tools list on every seed/sync.",
+    "namespace": "system",
+    "json_schema": {
+      "label": "Agent Tool Config",
+      "type": "object",
+      "properties": {
+        "agent_name": {
+          "type": "string",
+          "description": "Agent definition name (e.g. diane-default, diane-researcher)"
+        },
+        "tool_patterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Tool glob patterns to add (e.g. [\"*github*\", \"*slack*\", \"*notion*\"])"
+        }
+      },
+      "description": "Maps agent names to tool glob patterns merged on seed"
+    },
+    "enabled": true
   }
 ]

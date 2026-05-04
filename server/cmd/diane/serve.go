@@ -152,13 +152,13 @@ func cmdServe() {
 				ProjectToken: pc.Token,
 			}
 
-			// Sync config from graph
-			syncConfigFromGraph(pc.ServerURL, pc.Token, pc.ProjectID, instanceID)
+			// Sync config from graph and pass servers to relay
+			servers := syncConfigFromGraph(pc.ServerURL, pc.Token, pc.ProjectID, instanceID)
 
 			// Register this node's config in the graph
 			upsertNodeConfigInGraph(pc, instanceID)
 
-			cmdMCPRelay(relayCfg, nil)
+			cmdMCPRelay(relayCfg, servers)
 			errCh <- nil // relay exited cleanly
 		}()
 	}

@@ -174,6 +174,25 @@ func (f *FakeDiscordAPI) ChannelMessageSend(channelID, content string) (*discord
 	}, nil
 }
 
+func (f *FakeDiscordAPI) ChannelMessageSendComplex(channelID string, data *discordgo.MessageSend) (*discordgo.Message, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ErrMessageSend != nil {
+		return nil, f.ErrMessageSend
+	}
+	content := ""
+	if data.Embed != nil && data.Embed.Title != "" {
+		content = data.Embed.Title
+	} else if data.Content != "" {
+		content = data.Content
+	}
+	f.MessageSendCalls = append(f.MessageSendCalls, MessageSendCall{
+		ChannelID: channelID,
+		Content:   content,
+	})
+	return &discordgo.Message{ID: "fake-cpx-" + channelID, ChannelID: channelID, Content: content}, nil
+}
+
 func (f *FakeDiscordAPI) MessageReactionAdd(channelID, messageID, emoji string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

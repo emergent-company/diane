@@ -66,6 +66,10 @@ func (a *discordAPI) ChannelMessageSend(channelID, content string) (*discordgo.M
 	return a.session.ChannelMessageSend(channelID, content)
 }
 
+func (a *discordAPI) ChannelMessageSendComplex(channelID string, data *discordgo.MessageSend) (*discordgo.Message, error) {
+	return a.session.ChannelMessageSendComplex(channelID, data)
+}
+
 func (a *discordAPI) MessageReactionAdd(channelID, messageID, emoji string) error {
 	return a.session.MessageReactionAdd(channelID, messageID, emoji)
 }
