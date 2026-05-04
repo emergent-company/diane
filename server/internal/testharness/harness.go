@@ -49,6 +49,7 @@
 package testharness
 
 import (
+	"sync/atomic"
 	"fmt"
 	"log"
 	"sync"
@@ -166,6 +167,10 @@ type TestHarness struct {
 	// memoryBridge lazily created when a scenario calls Bridge()
 	memoryMu     sync.Mutex
 	memoryBridge *memory.Bridge
+
+	// lastEventAt tracks the most recent Discord event timestamp.
+	// Used by WaitForQuiet to detect when Diane has settled between tests.
+	lastEventAt atomic.Int64
 }
 
 // Bridge returns a Memory Platform bridge, creating it lazily on first call.
@@ -235,6 +240,9 @@ func New(cfg Config) (*TestHarness, error) {
 		done:        make(chan struct{}),
 	}
 
+	// seed with current time so WaitForQuiet has a reference point
+	h.lastEventAt.Store(time.Now().UnixNano())
+
 	dg.AddHandler(h.onMessageCreate)
 	dg.AddHandler(h.onReactionAdd)
 	dg.AddHandler(h.onChannelCreate)
@@ -278,6 +286,7 @@ func (h *TestHarness) TargetBotID() string { return h.targetBotID }
 // ── Gateway Event Handlers ──────────────────────────────────────────────
 
 func (h *TestHarness) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
+	h.lastEventAt.Store(time.Now().UnixNano())
 	// Only track messages from the target bot (Diane)
 	if m.Author.ID != h.targetBotID {
 		return
@@ -304,6 +313,7 @@ func (h *TestHarness) onMessageCreate(s *discordgo.Session, m *discordgo.Message
 }
 
 func (h *TestHarness) onReactionAdd(s *discordgo.Session, r *discordgo.MessageReactionAdd) {
+	h.lastEventAt.Store(time.Now().UnixNano())
 	// Only track reactions from the target bot
 	if r.UserID != h.targetBotID {
 		return
@@ -322,6 +332,7 @@ func (h *TestHarness) onReactionAdd(s *discordgo.Session, r *discordgo.MessageRe
 }
 
 func (h *TestHarness) onChannelCreate(s *discordgo.Session, c *discordgo.ChannelCreate) {
+	h.lastEventAt.Store(time.Now().UnixNano())
 	// Only track thread creation (public/private threads)
 	if c.Type != discordgo.ChannelTypeGuildPublicThread &&
 		c.Type != discordgo.ChannelTypeGuildPrivateThread {
@@ -348,6 +359,7 @@ func (h *TestHarness) onChannelCreate(s *discordgo.Session, c *discordgo.Channel
 // Discord sends this event when threads are created (new threads created via
 // MessageThreadStart API don't always trigger CHANNEL_CREATE).
 func (h *TestHarness) onThreadCreate(s *discordgo.Session, c *discordgo.ThreadCreate) {
+	h.lastEventAt.Store(time.Now().UnixNano())
 	// ThreadCreate embeds *Channel — use the same logic
 	if c.Type != discordgo.ChannelTypeGuildPublicThread &&
 		c.Type != discordgo.ChannelTypeGuildPrivateThread {
@@ -412,6 +424,32 @@ func (h *TestHarness) CleanupChannel() {
 	h.logf("[HARNESS] Archived %d active threads", len(threads.Threads))
 	for _, t := range threads.Threads {
 		h.DeleteThread(t.ID)
+	}
+}
+
+// WaitForQuiet polls Discord event activity and returns once no events have
+// been received for quietWindow duration, or maxWait elapses (whichever comes
+// first). Use this between tests instead of a fixed sleep — adaptive to how
+// fast Diane actually settles after a test.
+func (h *TestHarness) WaitForQuiet(maxWait, quietWindow time.Duration) {
+	deadline := time.After(maxWait)
+	poll := time.NewTicker(500 * time.Millisecond)
+	defer poll.Stop()
+
+	for {
+		select {
+		case <-deadline:
+			h.logf("[HARNESS] WaitForQuiet max wait reached (%v)", maxWait)
+			return
+		case <-poll.C:
+			last := time.Unix(0, h.lastEventAt.Load())
+			if time.Since(last) >= quietWindow {
+				h.logf("[HARNESS] WaitForQuiet settled after %v idle", time.Since(last).Round(100*time.Millisecond))
+				return
+			}
+		case <-h.done:
+			return
+		}
 	}
 }
 

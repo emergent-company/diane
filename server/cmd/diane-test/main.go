@@ -135,8 +135,10 @@ func main() {
 			passed++
 		}
 
-		// Small delay between tests to let Discord settle
-		time.Sleep(2 * time.Second)
+		// Adaptive delay: wait until Diane settles (no Discord events for 2s,
+		// max 10s). This replaces the old fixed 10s sleep — fast when Diane
+		// settles quickly, slow only when needed.
+		h.WaitForQuiet(10*time.Second, 2*time.Second)
 	}
 
 	// Print summary

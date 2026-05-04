@@ -16,6 +16,9 @@ type DiscordAPI interface {
 	// ChannelMessageSend sends a message to a channel or thread.
 	ChannelMessageSend(channelID, content string) (*discordgo.Message, error)
 
+	// ChannelMessageSendComplex sends a message with embeds and components.
+	ChannelMessageSendComplex(channelID string, data *discordgo.MessageSend) (*discordgo.Message, error)
+
 	// MessageReactionAdd adds a reaction emoji to a message.
 	MessageReactionAdd(channelID, messageID, emoji string) error
 

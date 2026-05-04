@@ -24,6 +24,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -83,6 +84,10 @@ type MCPSession struct {
 	wsMutex sync.Mutex
 	done    chan struct{}
 	version string // build version for registration
+
+	// lastToolsHash stores a digest of the last registered tool list.
+	// The tools watch compares against this to avoid unnecessary re-registrations.
+	lastToolsHash string
 }
 
 // upsertNodeConfigInGraph registers this node's config in the Memory Platform graph.
@@ -384,7 +389,9 @@ func (s *MCPSession) doRegister(data []byte) {
 }
 
 // startToolWatch periodically checks for new/changed tools and re-registers.
-// This picks up slow-starting MCP servers (like AirMCP) without blocking.
+// Only re-registers when the tool list actually changes — uses SHA256 digest
+// to detect deltas. Previously re-registered every 20s unconditionally,
+// causing 150K+ relay sessions and making tools intermittently unavailable.
 func (s *MCPSession) startToolWatch() {
 	go func() {
 		ticker := time.NewTicker(20 * time.Second)
@@ -401,6 +408,11 @@ func (s *MCPSession) startToolWatch() {
 					}
 				}
 				toolsData, _ := json.Marshal(map[string]interface{}{"tools": tools})
+				hash := fmt.Sprintf("%x", sha256.Sum256(toolsData))
+				if hash == s.lastToolsHash {
+					continue // tools haven't changed, skip re-registration
+				}
+				s.lastToolsHash = hash
 				log.Printf("[mcp-relay] Tools watch: re-registering...")
 				s.doRegister(toolsData)
 			case <-s.done:

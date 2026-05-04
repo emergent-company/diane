@@ -700,36 +700,50 @@ func (b *Bot) sendAgentQuestionToDiscord(data map[string]interface{}) {
 		Components: components,
 	}
 
+	// If this is a main channel (not a thread), route the question into a thread
+	// so the entire question → answer → response cycle stays coherent.
+	if !isThread && runID != "" {
+		// Check if there's already a thread for this run
+		b.runChannelsMu.RLock()
+		existingThread, hasThread := b.runChannels[runID]
+		b.runChannelsMu.RUnlock()
+
+		if hasThread {
+			channelID = existingThread
+			log.Printf("[SSE] Routing question %s to existing thread %s", questionID[:12], channelID)
+		} else {
+			// Create a standalone thread and send the question there
+			threadName := "🧠 " + truncateStr(question, 80)
+			if len(threadName) > 100 {
+				threadName = threadName[:100]
+			}
+			// Send a transient message to start the thread from
+			placeholder, plErr := b.api.ChannelMessageSend(channelID, "_")
+			if plErr == nil {
+				thread, thrErr := b.api.MessageThreadStart(channelID, placeholder.ID, threadName, 60*24)
+				if thrErr == nil {
+					b.runChannelsMu.Lock()
+					b.runChannels[runID] = thread.ID
+					b.runChannelsMu.Unlock()
+					// Delete the placeholder from the parent channel
+					_ = b.dg.ChannelMessageDelete(channelID, placeholder.ID)
+					channelID = thread.ID
+					log.Printf("[SSE] Created thread %s for question %s", thread.ID, questionID[:12])
+				} else {
+					log.Printf("[SSE] Failed to create thread: %v — question stays in main channel", thrErr)
+				}
+			} else {
+				log.Printf("[SSE] Failed to send placeholder for thread: %v — question stays in main channel", plErr)
+			}
+		}
+	}
+
 	msg, err := b.dg.ChannelMessageSendComplex(channelID, msgSend)
 	if err != nil {
 		log.Printf("[SSE] Failed to send question to Discord: %v", err)
 		return
 	}
-
-	// If we sent to a main channel and this run doesn't have a thread yet,
-	// create one from the message for coherent conversation flow
-	if !isThread && runID != "" && msg != nil {
-		// Check if we already resolved to a thread via runChannels above
-		b.runChannelsMu.RLock()
-		_, hasThread := b.runChannels[runID]
-		b.runChannelsMu.RUnlock()
-
-		if !hasThread {
-			threadName := "🧠 " + truncateStr(question, 80)
-			if len(threadName) > 100 {
-				threadName = threadName[:100]
-			}
-			thread, thrErr := b.api.MessageThreadStart(channelID, msg.ID, threadName, 60*24)
-			if thrErr == nil {
-				b.runChannelsMu.Lock()
-				b.runChannels[runID] = thread.ID
-				b.runChannelsMu.Unlock()
-				log.Printf("[SSE] Created thread %s for question %s", thread.ID, questionID[:12])
-			} else {
-				log.Printf("[SSE] Failed to create thread: %v — question stays in main channel", thrErr)
-			}
-		}
-	}
+	_ = msg
 
 	log.Printf("[SSE] Question %s sent to Discord (type=%s, %d options)", questionID[:12], interactionType, len(options))
 }

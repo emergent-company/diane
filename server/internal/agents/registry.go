@@ -661,49 +661,31 @@ Use entity-query(type_name=Session) to find sessions with a matching label if sp
 Check each session's properties: if extracted_message_count >= message_count, skip it (already processed).
 
 ## Step 2: Read session's messages
-For each unprocessed session, call entity-query with its ID and include_relationships=true:
-  entity-query(ids=[sessionId], type_name=Session, include_relationships=true)
-
-This returns the session along with its has_message relationship targets (message IDs).
-NOTE: session-get-messages tool is currently unavailable — use entity-query to get relationships instead.
-
-From the response, find the entity with type=Session and collect all has_message relationship dst_id values.
-Then fetch each message by its ID:
-  entity-query(type_name=Message, ids=[msgId1, msgId2, ...])
-
-Read the returned message content and identify atomic facts about:
+For each unprocessed session, call session-get-messages(sessionId=<id>).
+Read the returned messages and identify atomic facts about:
 - Events with dates/locations
 - Preferences, personality traits, identity
 - Relationships between people
 - Decisions and plans
 - Actions taken
 
-## Step 3: Save facts
-For EACH atomic fact you find, call memory_save with:
-- fact: the atomic fact as a self-contained sentence
-- category: "extracted"
-- memory_tier: 2
-- source_session: the session ID
+NOTE: If session-get-messages fails or returns empty, use this fallback:
+entity-query(ids=[sessionId], type_name=Session, include_relationships=true)
+to find has_message relationship targets, then fetch each message by ID.`,
 
-Save ALL facts you find. Do not skip any.
+		Tools: []string{
+			// Session inspection
+			"session-get-messages",
 
-## Step 4: Mark session as processed
-After saving all facts from a session, call entity-update(entity_id=<sessionId>, properties={extracted_at: "<now>", extracted_message_count: <count>})
+			// Memory operations
+			"memory_save",
 
-Be thorough. Every session contains multiple useful facts about user preferences,
-relationships, decisions, and plans. Extract them all.`,
+			// Graph operations
+			"entity-create", "entity-update", "entity-query",
 
-			Tools: []string{
-				// Memory operations
-				"memory_save",
-
-				// Graph operations
-				"entity-create", "entity-update", "entity-query",
-
-				// NOTE: session-get-messages and search-hybrid are currently
-				// broken in the ADK runtime (emergent.memory#267). Use entity-query
-				// with include_relationships to read session messages instead.
-			},
+			// Semantic search (check for duplicates)
+			"search-hybrid", "search-semantic",
+		},
 			Skills:     []string{"diane-memory"},
 			Visibility: "project",
 			MaxSteps:   100,
