@@ -472,6 +472,11 @@ func (b *Bot) handleModalSubmit(s *discordgo.Session, i *discordgo.Interaction) 
 func (b *Bot) respondToQuestion(s *discordgo.Session, i *discordgo.Interaction, questionID, responseValue, responseLabel string) {
 	log.Printf("[INT] Responding to question %s with %q", questionID[:12], responseValue)
 
+	// Determine where the question was asked — main channel or thread
+	questionChannelID := i.ChannelID
+	ch, chErr := b.api.Channel(questionChannelID)
+	isThread := chErr == nil && ch != nil && ch.IsThread()
+
 	// Acknowledge the interaction immediately (Discord requires this within 3s)
 	err := b.api.InteractionRespond(i, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredMessageUpdate,
@@ -506,6 +511,25 @@ func (b *Bot) respondToQuestion(s *discordgo.Session, i *discordgo.Interaction, 
 	})
 	if editErr != nil {
 		log.Printf("[INT] Failed to edit original message: %v", editErr)
+	}
+
+	// If the question was in a main channel (not a thread), create a thread
+	// for the conversation continuation so the user has a coherent place
+	// for the back-and-forth.
+	if !isThread {
+		threadName := "🧠 " + truncateStr(responseLabel, 80)
+		if len(threadName) > 100 {
+			threadName = threadName[:100]
+		}
+		// Use the message ID from the interaction to start the thread
+		thread, thrErr := b.api.MessageThreadStart(questionChannelID, i.Message.ID, threadName, 60*24)
+		if thrErr == nil {
+			log.Printf("[INT] Created thread %s for conversation continuation", thread.ID)
+			// Send a note to the thread that the agent is resuming
+			b.sendMessage(thread.ID, fmt.Sprintf("🧠 Agent resuming after your response: **%s**", responseLabel))
+		} else {
+			log.Printf("[INT] Failed to create thread: %v — continuing in main channel", thrErr)
+		}
 	}
 }
 
@@ -562,6 +586,22 @@ func (b *Bot) sendAgentQuestionToDiscord(data map[string]interface{}) {
 	if questionID == "" || question == "" {
 		log.Printf("[SSE] Incomplete agent_question event, skipping")
 		return
+	}
+
+	// ── Route to a thread, never a raw channel ──
+	// If the resolved channel is a parent (non-thread) channel, create a thread
+	// so the entire question → answer → response cycle stays coherent.
+	ch, chErr := b.api.Channel(channelID)
+	isThread := chErr == nil && ch != nil && ch.IsThread()
+	if !isThread && runID != "" {
+		// Check runChannels for an already existing thread for this run
+		b.runChannelsMu.RLock()
+		existingThread, hasThread := b.runChannels[runID]
+		b.runChannelsMu.RUnlock()
+		if hasThread {
+			channelID = existingThread
+			log.Printf("[SSE] Routing question %s to existing thread %s", questionID[:12], channelID)
+		}
 	}
 
 	// Parse options array from data
@@ -660,10 +700,35 @@ func (b *Bot) sendAgentQuestionToDiscord(data map[string]interface{}) {
 		Components: components,
 	}
 
-	_, err := b.dg.ChannelMessageSendComplex(channelID, msgSend)
+	msg, err := b.dg.ChannelMessageSendComplex(channelID, msgSend)
 	if err != nil {
 		log.Printf("[SSE] Failed to send question to Discord: %v", err)
 		return
+	}
+
+	// If we sent to a main channel and this run doesn't have a thread yet,
+	// create one from the message for coherent conversation flow
+	if !isThread && runID != "" && msg != nil {
+		// Check if we already resolved to a thread via runChannels above
+		b.runChannelsMu.RLock()
+		_, hasThread := b.runChannels[runID]
+		b.runChannelsMu.RUnlock()
+
+		if !hasThread {
+			threadName := "🧠 " + truncateStr(question, 80)
+			if len(threadName) > 100 {
+				threadName = threadName[:100]
+			}
+			thread, thrErr := b.api.MessageThreadStart(channelID, msg.ID, threadName, 60*24)
+			if thrErr == nil {
+				b.runChannelsMu.Lock()
+				b.runChannels[runID] = thread.ID
+				b.runChannelsMu.Unlock()
+				log.Printf("[SSE] Created thread %s for question %s", thread.ID, questionID[:12])
+			} else {
+				log.Printf("[SSE] Failed to create thread: %v — question stays in main channel", thrErr)
+			}
+		}
 	}
 
 	log.Printf("[SSE] Question %s sent to Discord (type=%s, %d options)", questionID[:12], interactionType, len(options))
