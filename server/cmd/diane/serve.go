@@ -161,10 +161,11 @@ func cmdServe() {
 			cmdMCPRelay(relayCfg, servers)
 			errCh <- nil // relay exited cleanly
 		}()
-
-		// Watch for AgentToolConfig changes via SSE and auto-seed agents
-		go agentToolConfigWatch(shutdownCtx, pc.ServerURL, pc.Token, pc.ProjectID, pc.OrgID)
 	}
+
+	// Watch for AgentToolConfig changes via SSE and auto-seed agents
+	// Runs on any node with a valid project config (not relay-dependent)
+	go agentToolConfigWatch(shutdownCtx, pc.ServerURL, pc.Token, pc.ProjectID, pc.OrgID)
 
 	// ── Wait for first exit or shutdown signal ──
 	select {
