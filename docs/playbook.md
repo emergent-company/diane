@@ -84,3 +84,27 @@ The title is stored in the graph session's `Properties.title`. The bot reads it 
 **Phase 2 (post-response):** Agent calls `set_session_title` → bot reads session title → renames thread.
 
 Discord mention syntax (`<@...>`, `<@&...>`, `<#...>`) is stripped from the thread name.
+
+## Release
+
+```bash
+# Interactive — checks GitHub releases, asks for confirmation
+./scripts/release.sh
+
+# Non-interactive — for AI agents / CI (auto bumps minor)
+./scripts/release.sh -y
+
+# Dry-run — preview what would happen
+./scripts/release.sh -n
+
+# Explicit version
+./scripts/release.sh -y 1.36.0
+
+# Bump type
+./scripts/release.sh -y patch       # 1.35.0 → 1.35.1
+./scripts/release.sh -y major       # 1.35.0 → 2.0.0
+```
+
+The script checks `gh release list` (GitHub API) for the latest version — it never
+trusts stale local tags. CI handles CLI binary builds, companion DMG, and Sparkle
+update signing when the tag is pushed.

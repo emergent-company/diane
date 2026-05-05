@@ -138,6 +138,23 @@ make build && make install
 
 Requires Go 1.23+.
 
+## Releasing
+
+```bash
+# Interactive — checks latest GitHub release, asks for confirmation
+./scripts/release.sh
+
+# Non-interactive (for AI agents / CI)
+./scripts/release.sh -y
+
+# Dry-run
+./scripts/release.sh -n
+```
+
+The script queries `gh release list` (GitHub API) to determine the next version —
+it never trusts stale local tags. CI handles CLI binary builds for 4 platforms
+and the companion app DMG when the tag is pushed.
+
 ## License
 
 MIT
