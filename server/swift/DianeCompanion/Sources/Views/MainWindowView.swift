@@ -87,40 +87,54 @@ struct MainWindowView: View {
 
     private var notConnectedView: some View {
         VStack(spacing: 16) {
-            Image(systemName: "wifi.slash")
-                .font(.system(size: 48))
-                .foregroundStyle(.secondary)
+            if statusMonitor.isConnecting {
+                // Aggressive retry phase — server may still be starting up
+                Image(systemName: "antenna.radiowaves.left.and.right")
+                    .font(.system(size: 40))
+                    .foregroundStyle(.orange)
+                    .symbolEffect(.variableColor.iterative, options: .repeating)
 
-            Text("Not Connected to Server")
-                .font(.title2)
-                .fontWeight(.semibold)
+                Text("Connecting to Server…")
+                    .font(.title2)
+                    .fontWeight(.semibold)
 
-            Text("Cannot reach \(serverConfig.serverURL). Check your connection and server settings.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
+                Text("Waiting for the local server to start. This should only take a moment after an upgrade.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
 
-            if statusMonitor.isChecking {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("Checking connection…")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                ProgressView()
+                    .controlSize(.large)
+                    .padding(.top, 8)
+            } else {
+                // Normal disconnected state — show error + Retry
+                Image(systemName: "wifi.slash")
+                    .font(.system(size: 48))
+                    .foregroundStyle(.secondary)
+
+                Text("Not Connected to Server")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+
+                Text("Cannot reach \(serverConfig.serverURL). Check your connection and server settings.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+
+                HStack(spacing: 12) {
+                    Button(action: { statusMonitor.restartConnectingPhase() }) {
+                        Label("Retry", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(statusMonitor.isConnecting)
+
+                    Button(action: { resetToOnboarding() }) {
+                        Label("Change Server", systemImage: "gearshape")
+                    }
+                    .buttonStyle(.bordered)
                 }
-            }
-
-            HStack(spacing: 12) {
-                Button(action: { statusMonitor.checkNow() }) {
-                    Label("Retry", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.bordered)
-                .disabled(statusMonitor.isChecking)
-
-                Button(action: { resetToOnboarding() }) {
-                    Label("Change Server", systemImage: "gearshape")
-                }
-                .buttonStyle(.bordered)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
