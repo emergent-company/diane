@@ -77,7 +77,8 @@ func MergeToolPatterns(agents []BuiltInAgent, configs map[string][]string) []Bui
 // in the correct order:
 //   1. BuiltInAgents() (Go code defaults)
 //   2. ApplyOverrides from AgentOverrideConfig (replace specified fields)
-//   3. MergeToolPatterns from AgentToolConfig (additive tool globs)
+//   3. FilterDisabled agents (remove those marked as disabled)
+//   4. MergeToolPatterns from AgentToolConfig (additive tool globs)
 //
 // This is the single entry point for both CLI seeding and SSE auto-seed.
 func BuildMergedAgents(ctx context.Context, graphClient *graph.Client) ([]BuiltInAgent, error) {
@@ -90,9 +91,11 @@ func BuildMergedAgents(ctx context.Context, graphClient *graph.Client) ([]BuiltI
 	}
 	if len(overrides) > 0 {
 		agents = ApplyOverrides(agents, overrides)
+		// Step 2: Filter out disabled agents
+		agents = FilterDisabled(agents, overrides)
 	}
 
-	// Step 2: Read tool patterns from graph
+	// Step 3: Read tool patterns from graph
 	toolConfigs, err := ReadAgentToolConfigs(ctx, graphClient)
 	if err != nil {
 		return nil, fmt.Errorf("read AgentToolConfig: %w", err)

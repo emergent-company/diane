@@ -53,6 +53,10 @@
         "sandbox_enabled": {
           "type": "boolean",
           "description": "Override sandbox enabled state (null = keep built-in)"
+        },
+        "disabled": {
+          "type": "boolean",
+          "description": "Skip this agent during seed (effectively delete/disable built-in agents)"
         }
       },
       "description": "Maps agent names to partial override fields applied at seed time"

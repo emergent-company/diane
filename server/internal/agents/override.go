@@ -32,6 +32,9 @@ type AgentOverrideConfig struct {
 
 	// SandboxEnabled uses *bool to distinguish "not set" (nil) from "set to false".
 	SandboxEnabled *bool `json:"sandbox_enabled,omitempty"`
+
+	// Disabled skips this agent during seed (effectively deletes built-in agents).
+	Disabled bool `json:"disabled,omitempty"`
 }
 
 // HasOverrides returns true if any override field is set (beyond agent_name).
@@ -45,7 +48,49 @@ func (o *AgentOverrideConfig) HasOverrides() bool {
 		o.MaxSteps != 0 ||
 		o.Timeout != 0 ||
 		o.Visibility != "" ||
-		o.SandboxEnabled != nil
+		o.SandboxEnabled != nil ||
+		o.Disabled
+}
+
+// ToProperties converts the override config to a flat map for graph storage.
+func (o *AgentOverrideConfig) ToProperties() map[string]any {
+	props := map[string]any{
+		"agent_name": o.AgentName,
+	}
+	if o.SystemPrompt != "" {
+		props["system_prompt"] = o.SystemPrompt
+	}
+	if len(o.Skills) > 0 {
+		props["skills"] = o.Skills
+	}
+	if o.ModelProvider != "" {
+		props["model_provider"] = o.ModelProvider
+	}
+	if o.ModelName != "" {
+		props["model_name"] = o.ModelName
+	}
+	if o.ModelTemperature != 0 {
+		props["model_temperature"] = o.ModelTemperature
+	}
+	if o.ModelMaxTokens != 0 {
+		props["model_max_tokens"] = o.ModelMaxTokens
+	}
+	if o.MaxSteps > 0 {
+		props["max_steps"] = o.MaxSteps
+	}
+	if o.Timeout > 0 {
+		props["timeout"] = o.Timeout
+	}
+	if o.Visibility != "" {
+		props["visibility"] = o.Visibility
+	}
+	if o.SandboxEnabled != nil {
+		props["sandbox_enabled"] = *o.SandboxEnabled
+	}
+	if o.Disabled {
+		props["disabled"] = true
+	}
+	return props
 }
 
 // ReadAgentOverrideConfigs queries the project graph for AgentOverrideConfig entities
@@ -78,6 +123,7 @@ func ReadAgentOverrideConfigs(ctx context.Context, graphClient *graph.Client) (m
 			Timeout:          propInt(obj.Properties, "timeout"),
 			Visibility:       propString(obj.Properties, "visibility"),
 			SandboxEnabled:   propBoolPtr(obj.Properties, "sandbox_enabled"),
+			Disabled:         propBool(obj.Properties, "disabled"),
 		}
 
 		if !oc.HasOverrides() {
@@ -168,6 +214,20 @@ func ApplyOverrides(agents []BuiltInAgent, overrides map[string]*AgentOverrideCo
 	return merged
 }
 
+// FilterDisabled removes agents that have a disabled=true override.
+func FilterDisabled(agents []BuiltInAgent, overrides map[string]*AgentOverrideConfig) []BuiltInAgent {
+	var result []BuiltInAgent
+	for _, ba := range agents {
+		oc, ok := overrides[ba.Name]
+		if ok && oc != nil && oc.Disabled {
+			log.Printf("[override] Agent %q: skipped (disabled by graph config)", ba.Name)
+			continue
+		}
+		result = append(result, ba)
+	}
+	return result
+}
+
 // ---------------------------------------------------------------------------
 // Extra property extraction helpers
 // ---------------------------------------------------------------------------
@@ -221,4 +281,19 @@ func propBoolPtr(props map[string]any, key string) *bool {
 		return nil
 	}
 	return &b
+}
+
+func propBool(props map[string]any, key string) bool {
+	if props == nil {
+		return false
+	}
+	v, ok := props[key]
+	if !ok {
+		return false
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return false
+	}
+	return b
 }
