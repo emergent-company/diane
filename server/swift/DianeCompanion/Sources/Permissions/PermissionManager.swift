@@ -149,8 +149,11 @@ final class PermissionManager: ObservableObject {
 
     init() {
         refresh()
+        // Kick off an async refresh to get notification status post-init
+        Task { await asyncRefresh() }
     }
 
+    /// Synchronous refresh — fast, uses only sync-checkable permissions.
     func refresh() {
         isRefreshing = true
         permissions = PermissionType.allCases.map { type in
@@ -161,6 +164,21 @@ final class PermissionManager: ObservableObject {
             )
         }
         isRefreshing = false
+    }
+
+    /// Async refresh — calls sync refresh first, then checks
+    /// permissions that require async queries (notifications).
+    func asyncRefresh() async {
+        refresh()
+        // Update notification status asynchronously
+        let notifStatus = await checkNotificationStatus()
+        if let idx = permissions.firstIndex(where: { $0.type == .notifications }) {
+            permissions[idx] = PermissionInfo(
+                type: .notifications,
+                status: notifStatus,
+                featureEnabled: permissions[idx].featureEnabled
+            )
+        }
     }
 
     // MARK: - Feature Toggles
@@ -245,7 +263,7 @@ final class PermissionManager: ObservableObject {
         let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as NSString
         let options: NSDictionary = [key: true]
         let trusted = AXIsProcessTrustedWithOptions(options)
-        refresh()
+        await asyncRefresh()
         return trusted
     }
 
@@ -254,11 +272,11 @@ final class PermissionManager: ObservableObject {
         do {
             if #available(macOS 14.0, *) {
                 let granted = try await store.requestFullAccessToEvents()
-                refresh()
+                await asyncRefresh()
                 return granted
             } else {
                 let granted = try await store.requestAccess(to: .event)
-                refresh()
+                await asyncRefresh()
                 return granted
             }
         } catch {
@@ -272,11 +290,11 @@ final class PermissionManager: ObservableObject {
         do {
             if #available(macOS 14.0, *) {
                 let granted = try await store.requestFullAccessToReminders()
-                refresh()
+                await asyncRefresh()
                 return granted
             } else {
                 let granted = try await store.requestAccess(to: .reminder)
-                refresh()
+                await asyncRefresh()
                 return granted
             }
         } catch {
@@ -289,7 +307,7 @@ final class PermissionManager: ObservableObject {
         let store = CNContactStore()
         do {
             let granted = try await store.requestAccess(for: .contacts)
-            refresh()
+            await asyncRefresh()
             return granted
         } catch {
             logError(error, category: "Permissions")
@@ -300,7 +318,7 @@ final class PermissionManager: ObservableObject {
     private func requestNotifications() async -> Bool {
         do {
             let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
-            refresh()
+            await asyncRefresh()
             return granted
         } catch {
             logError(error, category: "Permissions")
@@ -309,11 +327,28 @@ final class PermissionManager: ObservableObject {
     }
 
     private func requestAutomation() async -> Bool {
-        refresh()
+        // Automation can't be programmatically requested — open settings instead.
+        // Refresh to show settings link.
+        await asyncRefresh()
         return false
     }
 
     // MARK: - Status mapping
+
+    /// Asynchronously check notification authorization status via UNNotificationSettings.
+    private func checkNotificationStatus() async -> PermissionStatus {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        switch settings.authorizationStatus {
+        case .authorized, .provisional, .ephemeral:
+            return .granted
+        case .denied:
+            return .denied
+        case .notDetermined:
+            return .notDetermined
+        @unknown default:
+            return .notDetermined
+        }
+    }
 
     private func mapEKStatus(_ status: EKAuthorizationStatus) -> PermissionStatus {
         switch status {

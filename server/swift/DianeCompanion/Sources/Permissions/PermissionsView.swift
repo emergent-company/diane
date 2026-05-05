@@ -23,7 +23,9 @@ struct PermissionsView: View {
                         .controlSize(.mini)
                         .scaleEffect(0.7)
                 }
-                Button("Refresh") { manager.refresh() }
+                Button("Refresh") {
+                    Task { await manager.asyncRefresh() }
+                }
                     .font(.caption)
                     .buttonStyle(.borderless)
             }
