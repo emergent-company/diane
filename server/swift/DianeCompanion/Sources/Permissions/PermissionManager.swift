@@ -13,9 +13,9 @@ enum PermissionType: String, CaseIterable, Identifiable, Sendable {
     case calendar
     case reminders
     case contacts
-    
+
     var id: String { rawValue }
-    
+
     var settingsURL: URL? {
         switch self {
         case .accessibility:
@@ -28,7 +28,7 @@ enum PermissionType: String, CaseIterable, Identifiable, Sendable {
             return URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy")
         }
     }
-    
+
     var setupGuide: String {
         switch self {
         case .accessibility:
@@ -45,7 +45,7 @@ enum PermissionType: String, CaseIterable, Identifiable, Sendable {
             return "1. Open System Settings → Privacy & Security → Contacts\n2. Find \"Diane\" in the app list\n3. Toggle the switch to enable"
         }
     }
-    
+
     var displayName: String {
         switch self {
         case .accessibility: return "Accessibility"
@@ -56,7 +56,7 @@ enum PermissionType: String, CaseIterable, Identifiable, Sendable {
         case .contacts: return "Contacts"
         }
     }
-    
+
     var description: String {
         switch self {
         case .accessibility: return "Required for controlling other apps and UI automation"
@@ -67,7 +67,7 @@ enum PermissionType: String, CaseIterable, Identifiable, Sendable {
         case .contacts: return "Required for searching and reading contacts"
         }
     }
-    
+
     var systemIcon: String {
         switch self {
         case .accessibility: return "figure.arm.seatbelt"
@@ -85,9 +85,28 @@ enum PermissionStatus: Sendable {
     case denied
     case notDetermined
     case restricted
-    
+
     var isGranted: Bool {
         if case .granted = self { return true }
+        return false
+    }
+}
+
+/// Combined feature-level status — merges OS permission grant with app-level toggle.
+enum FeatureStatus: Sendable {
+    /// Toggle ON + macOS granted → ready to use
+    case active
+    /// Toggle OFF → feature is intentionally disabled by user
+    case disabled
+    /// Toggle ON but macOS permission denied → needs user action
+    case needsPermission
+    /// Toggle ON but macOS hasn't prompted yet
+    case notDetermined
+    /// Toggle ON but macOS permission is restricted (parental controls, MDM, etc.)
+    case restricted
+
+    var isUsable: Bool {
+        if case .active = self { return true }
         return false
     }
 }
@@ -96,28 +115,77 @@ enum PermissionStatus: Sendable {
 struct PermissionInfo: Identifiable, Sendable {
     let type: PermissionType
     var status: PermissionStatus
+    var featureEnabled: Bool
     var id: String { type.rawValue }
+
+    var featureStatus: FeatureStatus {
+        guard featureEnabled else { return .disabled }
+        switch status {
+        case .granted:      return .active
+        case .denied:       return .needsPermission
+        case .notDetermined: return .notDetermined
+        case .restricted:   return .restricted
+        }
+    }
 }
 
-/// Central permission manager that checks and requests all macOS permissions.
+/// Central permission manager that checks all macOS permissions
+/// and manages app-level feature toggles (persisted to UserDefaults).
 @MainActor
 final class PermissionManager: ObservableObject {
-    
+
     @Published var permissions: [PermissionInfo] = []
     @Published var isRefreshing = false
-    
+
+    private let defaults = UserDefaults.standard
+    private let togglePrefix = "feature_toggle_"
+
+    /// All features enabled by default — users opt out, not in.
+    private var toggleDefaults: [PermissionType: Bool] {
+        Dictionary(uniqueKeysWithValues: PermissionType.allCases.map { ($0, true) })
+    }
+
+    // MARK: - Init / Refresh
+
     init() {
         refresh()
     }
-    
+
     func refresh() {
         isRefreshing = true
         permissions = PermissionType.allCases.map { type in
-            PermissionInfo(type: type, status: checkStatus(type))
+            PermissionInfo(
+                type: type,
+                status: checkStatus(type),
+                featureEnabled: isFeatureEnabled(type)
+            )
         }
         isRefreshing = false
     }
-    
+
+    // MARK: - Feature Toggles
+
+    func isFeatureEnabled(_ type: PermissionType) -> Bool {
+        let key = togglePrefix + type.rawValue
+        // If never set, defaults to true (enabled)
+        return defaults.object(forKey: key) as? Bool ?? true
+    }
+
+    func setFeatureEnabled(_ enabled: Bool, for type: PermissionType) {
+        let key = togglePrefix + type.rawValue
+        defaults.set(enabled, forKey: key)
+        // Update the published permissions array to trigger UI refresh
+        if let idx = permissions.firstIndex(where: { $0.type == type }) {
+            permissions[idx] = PermissionInfo(
+                type: type,
+                status: permissions[idx].status,
+                featureEnabled: enabled
+            )
+        }
+    }
+
+    // MARK: - macOS Permission Status
+
     func checkStatus(_ type: PermissionType) -> PermissionStatus {
         switch type {
         case .accessibility:
@@ -136,7 +204,7 @@ final class PermissionManager: ObservableObject {
             return .notDetermined
         }
     }
-    
+
     func request(_ type: PermissionType) async -> Bool {
         switch type {
         case .accessibility:
@@ -153,7 +221,7 @@ final class PermissionManager: ObservableObject {
             return await requestAutomation()
         }
     }
-    
+
     func openSystemSettings(_ type: PermissionType) {
         switch type {
         case .accessibility:
@@ -170,18 +238,17 @@ final class PermissionManager: ObservableObject {
             NSWorkspace.shared.open(url)
         }
     }
-    
+
     // MARK: - Private permission request helpers
-    
+
     private func requestAccessibility() async -> Bool {
-        // Accessibility cannot be programmatically requested — user must enable manually
         let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as NSString
         let options: NSDictionary = [key: true]
         let trusted = AXIsProcessTrustedWithOptions(options)
         refresh()
         return trusted
     }
-    
+
     private func requestCalendar() async -> Bool {
         let store = EKEventStore()
         do {
@@ -199,7 +266,7 @@ final class PermissionManager: ObservableObject {
             return false
         }
     }
-    
+
     private func requestReminders() async -> Bool {
         let store = EKEventStore()
         do {
@@ -217,7 +284,7 @@ final class PermissionManager: ObservableObject {
             return false
         }
     }
-    
+
     private func requestContacts() async -> Bool {
         let store = CNContactStore()
         do {
@@ -229,7 +296,7 @@ final class PermissionManager: ObservableObject {
             return false
         }
     }
-    
+
     private func requestNotifications() async -> Bool {
         do {
             let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
@@ -240,16 +307,14 @@ final class PermissionManager: ObservableObject {
             return false
         }
     }
-    
+
     private func requestAutomation() async -> Bool {
-        // Automation can't be programmatically requested — user must enable in System Settings
-        // We just show the settings link
         refresh()
         return false
     }
-    
+
     // MARK: - Status mapping
-    
+
     private func mapEKStatus(_ status: EKAuthorizationStatus) -> PermissionStatus {
         switch status {
         case .authorized: return .granted
@@ -261,7 +326,7 @@ final class PermissionManager: ObservableObject {
         @unknown default: return .notDetermined
         }
     }
-    
+
     private func mapCNStatus(_ status: CNAuthorizationStatus) -> PermissionStatus {
         switch status {
         case .authorized: return .granted

@@ -1,12 +1,13 @@
 import SwiftUI
 
-/// Permissions management view — shows all macOS permissions with status, actions, and step-by-step guides.
+/// Permissions management view — shows all macOS permissions with status,
+/// app-level feature toggles, and guided setup for denied permissions.
 struct PermissionsView: View {
     @StateObject private var manager = PermissionManager()
     @State private var selectedGuide: PermissionType? = nil
 
     private let columns = [
-        GridItem(.adaptive(minimum: 140, maximum: 200), spacing: 12)
+        GridItem(.adaptive(minimum: 160, maximum: 220), spacing: 12)
     ]
 
     var body: some View {
@@ -22,9 +23,6 @@ struct PermissionsView: View {
                         .controlSize(.mini)
                         .scaleEffect(0.7)
                 }
-                Text("Auto-refreshes every 15s")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
                 Button("Refresh") { manager.refresh() }
                     .font(.caption)
                     .buttonStyle(.borderless)
@@ -45,11 +43,17 @@ struct PermissionsView: View {
 
             Divider()
 
+            // Summary footer
             HStack {
-                Text("\(manager.permissions.filter(\.status.isGranted).count)/\(manager.permissions.count) granted")
+                let active = manager.permissions.filter { $0.featureStatus.isUsable }.count
+                let total = manager.permissions.count
+                Text("\(active)/\(total) features active")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
+                Text("Toggle features on/off per-card")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
@@ -63,35 +67,70 @@ struct PermissionsView: View {
     // MARK: - Permission Card
 
     private func permissionCard(_ permission: PermissionInfo) -> some View {
-        VStack(spacing: 12) {
-            // Icon
-            Image(systemName: permission.type.systemIcon)
-                .font(.title2)
-                .foregroundStyle(permission.status.isGranted ? .green : .secondary.opacity(0.6))
+        let ft = permission.featureStatus
+
+        return VStack(spacing: 0) {
+            // Icon + Toggle row
+            HStack(spacing: 8) {
+                Image(systemName: permission.type.systemIcon)
+                    .font(.title3)
+                    .foregroundStyle(ft == .active ? .green : .secondary.opacity(0.6))
+
+                Spacer(minLength: 4)
+
+                Toggle(isOn: Binding(
+                    get: { permission.featureEnabled },
+                    set: { manager.setFeatureEnabled($0, for: permission.type) }
+                )) { }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+            }
+
+            Spacer().frame(height: 10)
 
             // Name
             Text(permission.type.displayName)
                 .font(.subheadline)
                 .fontWeight(.medium)
-                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             // Description
             Text(permission.type.description)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .lineLimit(2)
 
-            Spacer()
+            Spacer().frame(height: 10)
 
-            // Status & action
-            switch permission.status {
-            case .granted:
-                Label("Granted", systemImage: "checkmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.green)
-            case .denied:
-                VStack(spacing: 4) {
+            // Combined feature status badge
+            featureBadge(ft)
+
+            Spacer().frame(height: 6)
+
+            // OS permission sub-line
+            HStack(spacing: 4) {
+                Image(systemName: permission.status.isGranted ? "checkmark.circle.fill" : "xmark.circle.fill")
+                    .font(.system(size: 9))
+                Text(permission.status.isGranted ? "macOS: Granted" : "macOS: Denied")
+                    .font(.caption2)
+            }
+            .foregroundStyle(permission.status.isGranted ? .green : .secondary)
+
+            // Action buttons — only when feature is ON but needs permission
+            if ft == .needsPermission || ft == .notDetermined || ft == .restricted {
+                Spacer().frame(height: 10)
+
+                if permission.status == .notDetermined && permission.featureEnabled {
+                    Button("Request Permission") {
+                        Task { await manager.request(permission.type) }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .tint(.orange)
+                }
+
+                if permission.status == .denied && permission.featureEnabled {
                     Button("Open Settings") {
                         manager.openSystemSettings(permission.type)
                     }
@@ -105,35 +144,93 @@ struct PermissionsView: View {
                     .buttonStyle(.borderless)
                     .foregroundStyle(.secondary)
                 }
-            case .notDetermined:
-                Button("Request") {
-                    Task { await manager.request(permission.type) }
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-            case .restricted:
-                Text("Restricted")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
         }
         .padding(12)
-        .frame(minHeight: 180)
+        .frame(minHeight: 200)
         .background(
             RoundedRectangle(cornerRadius: Design.CornerRadius.large)
-                .fill(Design.Surface.elevatedBackground)
+                .fill(cardBackground(ft))
                 .overlay(
                     RoundedRectangle(cornerRadius: Design.CornerRadius.large)
-                        .stroke(
-                            permission.status.isGranted ? Color.green.opacity(0.2) : Color.secondary.opacity(0.1),
-                            lineWidth: 1
-                        )
+                        .stroke(cardBorder(ft), lineWidth: 1)
                 )
         )
     }
+
+    // MARK: - Feature status badge
+
+    @ViewBuilder
+    private func featureBadge(_ status: FeatureStatus) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: statusIcon(status))
+                .font(.system(size: 10, weight: .semibold))
+            Text(statusLabel(status))
+                .font(.caption)
+                .fontWeight(.medium)
+        }
+        .foregroundStyle(statusColor(status))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(statusColor(status).opacity(0.1))
+        .cornerRadius(4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func statusLabel(_ s: FeatureStatus) -> String {
+        switch s {
+        case .active:          return "Active"
+        case .disabled:        return "Disabled"
+        case .needsPermission: return "Needs Permission"
+        case .notDetermined:   return "Not Requested"
+        case .restricted:      return "Restricted"
+        }
+    }
+
+    private func statusIcon(_ s: FeatureStatus) -> String {
+        switch s {
+        case .active:          return "checkmark.circle.fill"
+        case .disabled:        return "power"
+        case .needsPermission: return "exclamationmark.triangle.fill"
+        case .notDetermined:   return "questionmark.circle"
+        case .restricted:      return "lock.fill"
+        }
+    }
+
+    private func statusColor(_ s: FeatureStatus) -> Color {
+        switch s {
+        case .active:          return .green
+        case .disabled:        return .secondary
+        case .needsPermission: return .orange
+        case .notDetermined:   return .blue
+        case .restricted:      return .red
+        }
+    }
+
+    // MARK: - Card theming
+
+    private func cardBackground(_ s: FeatureStatus) -> Color {
+        switch s {
+        case .active:          return Design.Surface.cardBackground
+        case .disabled:        return Design.Surface.cardBackground.opacity(0.5)
+        case .needsPermission: return Design.Surface.cardBackground
+        case .notDetermined:   return Design.Surface.cardBackground
+        case .restricted:      return Design.Surface.cardBackground
+        }
+    }
+
+    private func cardBorder(_ s: FeatureStatus) -> Color {
+        switch s {
+        case .active:          return .green.opacity(0.2)
+        case .disabled:        return .secondary.opacity(0.08)
+        case .needsPermission: return .orange.opacity(0.25)
+        case .notDetermined:   return Design.Surface.border
+        case .restricted:      return .red.opacity(0.2)
+        }
+    }
 }
 
-// MARK: - Setup Guide Sheet
+// MARK: - Setup Guide Sheet (unchanged)
 
 struct SetupGuideView: View {
     @Environment(\.dismiss) private var dismiss
