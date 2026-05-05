@@ -163,8 +163,28 @@ func nodeConfigFromPC(pc *config.ProjectConfig, instanceID string) *memory.NodeC
 // startNodeHeartbeat periodically re-upserts the node config to keep last_seen fresh.
 // Runs until ctx is cancelled.
 func startNodeHeartbeat(ctx context.Context, pc *config.ProjectConfig, instanceID string, relayActive, botActive bool) {
-	// Initial registration
-	upsertNodeConfigInGraph(pc, instanceID)
+	// Initial registration with correct status
+	ctx2, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	bridge, err := memory.New(memory.Config{
+		ServerURL:         pc.ServerURL,
+		APIKey:            pc.Token,
+		ProjectID:         pc.ProjectID,
+		OrgID:             pc.OrgID,
+		HTTPClientTimeout: 10 * time.Second,
+	})
+	if err == nil {
+		nc := nodeConfigFromPC(pc, instanceID)
+		nc.RelayActive = relayActive
+		nc.BotActive = botActive
+		nc.LastSeen = time.Now().UTC().Format(time.RFC3339)
+		if _, err := bridge.UpsertNodeConfig(ctx2, nc); err != nil {
+			log.Printf("[node] Initial registration failed: %v", err)
+		} else {
+			log.Printf("[node] Registered (instance=%s, mode=%s, relay=%v, bot=%v)", instanceID, nc.Mode, relayActive, botActive)
+		}
+		bridge.Close()
+	}
+	cancel()
 
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
