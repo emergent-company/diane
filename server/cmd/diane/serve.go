@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -266,7 +267,51 @@ func runAutoUpgrade() {
 
 	log.Printf("[UPGRADE] Update available: %s → %s", currentVer, latestVer)
 
-	// Download new binary
+	// ── macOS + companion app: defer to DMG-based full app update ──
+	// The companion app's UpdateChecker handles DMG download, backup, install, and relaunch.
+	// We write a trigger file and still update the standalone CLI binary for terminal use.
+	if runtime.GOOS == "darwin" && isCompanionInstalled() {
+		log.Printf("[UPGRADE] Companion app detected — writing DMG trigger for %s", latestVer)
+
+		// Update standalone binary at ~/.diane/bin/diane (for direct CLI use)
+		if err := downloadAndStage(latestVer); err != nil {
+			log.Printf("[UPGRADE] Download failed: %v", err)
+			return
+		}
+
+		staged := stagedBinaryPath()
+		target := upgradeBinaryPath()
+		os.MkdirAll(filepath.Dir(target), 0755)
+
+		if err := swapBinary(staged, target); err != nil {
+			log.Printf("[UPGRADE] Standalone binary update failed: %v", err)
+		} else if _, err := verifyBinary(target); err != nil {
+			log.Printf("[UPGRADE] Standalone binary verification failed: %v", err)
+		} else {
+			log.Printf("[UPGRADE] Standalone binary updated to %s", latestVer)
+		}
+
+		// Write DMG trigger for companion app
+		if err := writeDMGTrigger(latestVer); err != nil {
+			log.Printf("[UPGRADE] Failed to write DMG trigger: %v", err)
+		} else {
+			log.Printf("[UPGRADE] DMG trigger written — companion will update the app bundle")
+		}
+
+		// Update state
+		st := readUpgradeState()
+		st.Current = latestVer
+		st.Previous = currentVer
+		st.PrevPath = previousBinaryPath()
+		writeUpgradeState(st)
+
+		log.Printf("[UPGRADE] ✅ %s staged — companion will handle DMG install", latestVer)
+		return
+	}
+
+	// ── Linux / headless macOS: full binary upgrade ──
+	log.Printf("[UPGRADE] Downloading %s...", latestVer)
+
 	if err := downloadAndStage(latestVer); err != nil {
 		log.Printf("[UPGRADE] Download failed: %v", err)
 		return
@@ -278,7 +323,7 @@ func runAutoUpgrade() {
 		log.Printf("[UPGRADE] Backup failed: %v", err)
 	}
 
-	// Resolve symlinks
+	// Resolve symlinks (only for headless macOS where CLI binary is linked into app bundle)
 	targetPath := upgradeBinaryPath()
 	var symlinkTarget string
 	if fi, err := os.Lstat(targetPath); err == nil && fi.Mode()&os.ModeSymlink != 0 {

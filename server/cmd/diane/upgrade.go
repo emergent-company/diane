@@ -391,7 +391,57 @@ func doAutoUpgrade() {
 	}
 }
 
+// companionAppPath returns the path to the companion app bundle, if installed.
+func companionAppPath() string {
+	// Check standard locations for Diane.app
+	for _, p := range []string{
+		"/Applications/Diane.app",
+		filepath.Join(os.Getenv("HOME"), "Applications", "Diane.app"),
+	} {
+		if fi, err := os.Stat(p); err == nil && fi.IsDir() {
+			return p
+		}
+	}
+	return ""
+}
+
+// isCompanionInstalled returns true if the companion app bundle exists on this machine.
+func isCompanionInstalled() bool {
+	return companionAppPath() != ""
+}
+
+// dmgTriggerPath returns the path to the auto-upgrade DMG trigger file.
+func dmgTriggerPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".diane", "diane.dmg-trigger")
+}
+
+// writeDMGTrigger writes a trigger file that the companion app's UpdateChecker watches.
+// When the companion sees this file, it performs the DMG-based full app update.
+func writeDMGTrigger(version string) error {
+	data := map[string]interface{}{
+		"version":       version,
+		"available":     true,
+		"triggered_at":  time.Now().UTC().Format(time.RFC3339),
+		"triggered_by":  Version,
+	}
+	raw, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return err
+	}
+	os.MkdirAll(filepath.Dir(dmgTriggerPath()), 0755)
+	return os.WriteFile(dmgTriggerPath(), raw, 0644)
+}
+
+// clearDMGTrigger removes the DMG trigger file.
+func clearDMGTrigger() {
+	os.Remove(dmgTriggerPath())
+}
+
+// ── Auto-Upgrade (Background / --auto) ──
+
 // downloadAndStage downloads the release tarball and extracts the binary to the staged path.
+// On macOS with companion app, also writes a DMG trigger for the companion to update.
 func downloadAndStage(version string) error {
 	repo := "emergent-company/diane"
 	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)

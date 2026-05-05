@@ -26,6 +26,13 @@ final class UpdateChecker: ObservableObject {
     private var hasStarted = false
     private var releaseData: GitHubRelease?
     private var shouldAutoUpdate = false
+    private let dianeDir: String
+
+    override init() {
+        self.dianeDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".diane").path
+        super.init()
+    }
 
     deinit { timer?.invalidate() }
 
@@ -103,8 +110,58 @@ final class UpdateChecker: ObservableObject {
                 shouldAutoUpdate = true
                 performUpdate()
             }
+
+            // Check for CLI-triggered DMG update (written by diane upgrade --auto or serve background check)
+            checkDMGTrigger()
         } catch {
             logDebug("UpdateChecker: checkForUpdates failed: \(error.localizedDescription)", category: "Updates")
+        }
+    }
+
+    /// Check for a DMG trigger file written by the CLI upgrade mechanism.
+    /// When the CLI (running alongside the companion) detects a new version,
+    /// it writes ~/.diane/diane.dmg-trigger instead of replacing the embedded binary.
+    /// The companion picks this up and performs the full DMG-based app update.
+    private func checkDMGTrigger() {
+        let triggerPath = (dianeDir as NSString).appendingPathComponent("diane.dmg-trigger")
+        guard FileManager.default.fileExists(atPath: triggerPath) else { return }
+
+        do {
+            let data = try Data(contentsOf: URL(fileURLWithPath: triggerPath))
+            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let version = json["version"] as? String,
+               let available = json["available"] as? Bool,
+               available {
+
+                logInfo("UpdateChecker: DMG trigger found for \(version)", category: "Updates")
+
+                // Only proceed if we have a newer version or no version info
+                let installed = currentVersion ?? "0.0.0"
+                if installed == "unknown" || installed == "dev" || isOlderVersion(installed, than: version) {
+                    latestVersion = version
+                    updateAvailable = true
+                    releaseData = nil // Will re-fetch from GitHub for DMG URL
+
+                    logInfo("UpdateChecker: Triggered DMG update to \(version)", category: "Updates")
+
+                    // Clear trigger so it doesn't re-trigger
+                    try? FileManager.default.removeItem(atPath: triggerPath)
+
+                    if autoUpdateEnabled && !isUpdating {
+                        shouldAutoUpdate = true
+                        performUpdate()
+                    }
+                } else {
+                    // Already on this or newer version — clean up stale trigger
+                    try? FileManager.default.removeItem(atPath: triggerPath)
+                }
+            } else {
+                // Invalid trigger — clean up
+                try? FileManager.default.removeItem(atPath: triggerPath)
+            }
+        } catch {
+            logError("UpdateChecker: Failed to read DMG trigger: \(error.localizedDescription)", category: "Updates")
+            try? FileManager.default.removeItem(atPath: triggerPath)
         }
     }
 
