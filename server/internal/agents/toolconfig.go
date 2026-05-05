@@ -73,6 +73,37 @@ func MergeToolPatterns(agents []BuiltInAgent, configs map[string][]string) []Bui
 	return merged
 }
 
+// BuildMergedAgents builds the final agent list by applying graph configs
+// in the correct order:
+//   1. BuiltInAgents() (Go code defaults)
+//   2. ApplyOverrides from AgentOverrideConfig (replace specified fields)
+//   3. MergeToolPatterns from AgentToolConfig (additive tool globs)
+//
+// This is the single entry point for both CLI seeding and SSE auto-seed.
+func BuildMergedAgents(ctx context.Context, graphClient *graph.Client) ([]BuiltInAgent, error) {
+	agents := BuiltInAgents()
+
+	// Step 1: Read overrides from graph
+	overrides, err := ReadAgentOverrideConfigs(ctx, graphClient)
+	if err != nil {
+		return nil, fmt.Errorf("read AgentOverrideConfig: %w", err)
+	}
+	if len(overrides) > 0 {
+		agents = ApplyOverrides(agents, overrides)
+	}
+
+	// Step 2: Read tool patterns from graph
+	toolConfigs, err := ReadAgentToolConfigs(ctx, graphClient)
+	if err != nil {
+		return nil, fmt.Errorf("read AgentToolConfig: %w", err)
+	}
+	if len(toolConfigs) > 0 {
+		agents = MergeToolPatterns(agents, toolConfigs)
+	}
+
+	return agents, nil
+}
+
 // ---------------------------------------------------------------------------
 // Property extraction helpers (mirrors bridge.go patterns)
 // ---------------------------------------------------------------------------

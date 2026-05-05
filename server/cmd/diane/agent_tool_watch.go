@@ -17,8 +17,9 @@ import (
 )
 
 // agentToolConfigWatch connects to the MP SSE stream and watches for
-// AgentToolConfig entity changes. On change, it automatically re-reads
-// tool configs from the graph and re-seeds affected built-in agents.
+// AgentToolConfig and AgentOverrideConfig entity changes. On change,
+// it automatically re-reads configs from the graph and re-seeds
+// affected built-in agents.
 //
 // At startup it does an initial poll+seed to catch any changes made while
 // the relay was offline, then subscribes to SSE for real-time updates.
@@ -36,7 +37,7 @@ func agentToolConfigWatch(ctx context.Context, serverURL, apiKey, projectID, org
 		return
 	}
 
-	// Cache: track last-seen hash of AgentToolConfig entities
+	// Cache: track last-seen hash of AgentToolConfig + AgentOverrideConfig entities
 	var lastHash string
 
 	// Read current state once at startup, seed if needed
@@ -45,7 +46,7 @@ func agentToolConfigWatch(ctx context.Context, serverURL, apiKey, projectID, org
 		lastHash = hash
 	}
 	if hash == lastHash {
-		log.Printf("[agent-watch] AgentToolConfig unchanged since last check")
+		log.Printf("[agent-watch] Agent config unchanged since last check")
 	}
 
 	// SSE reconnect loop
@@ -165,7 +166,10 @@ type sseEntityEvent struct {
 	Timestamp string `json:"timestamp"`
 }
 
-// handleEntityEvent checks if the changed entity is an AgentToolConfig
+// agentConfigWatcherTypes lists the graph entity types that trigger re-seeding.
+var agentConfigWatcherTypes = []string{"AgentToolConfig", "AgentOverrideConfig"}
+
+// handleEntityEvent checks if the changed entity is an watched config type
 // and triggers a re-seed if so.
 func handleEntityEvent(ctx context.Context, gc *graphClientWrapper, evt sseEntityEvent, lastHash *string, memCfg memory.Config) {
 	if evt.Entity != "graph_object" || evt.ID == "" {
@@ -177,11 +181,11 @@ func handleEntityEvent(ctx context.Context, gc *graphClientWrapper, evt sseEntit
 	if err != nil {
 		// Object not found (deleted or error) — recheck all to be safe
 		log.Printf("[agent-watch] Could not fetch entity %s (may be deleted): %v", truncateStr(evt.ID, 12), err)
-	} else if obj.Type != "AgentToolConfig" {
-		return // not an AgentToolConfig change, skip
+	} else if !isWatchedConfigType(obj.Type) {
+		return // not an agent config change, skip
 	}
 
-	log.Printf("[agent-watch] AgentToolConfig entity changed (%s) — re-reading configs", evt.Entity)
+	log.Printf("[agent-watch] Agent config entity changed (%s, type=%s) — re-reading configs", evt.Entity, obj.Type)
 
 	hash := pollAndSeed(ctx, gc, memCfg, *lastHash)
 	if hash != "" {
@@ -189,22 +193,44 @@ func handleEntityEvent(ctx context.Context, gc *graphClientWrapper, evt sseEntit
 	}
 }
 
-// pollAndSeed reads AgentToolConfig entities from the graph, computes a hash,
-// and seeds if the hash differs from lastHash.
-// Returns the new hash, or empty string if unchanged.
+// isWatchedConfigType returns true if the given entity type is one that
+// triggers auto-re-seeding of agent definitions.
+func isWatchedConfigType(objType string) bool {
+	for _, t := range agentConfigWatcherTypes {
+		if objType == t {
+			return true
+		}
+	}
+	return false
+}
+
+// pollAndSeed reads AgentToolConfig and AgentOverrideConfig entities from
+// the graph, computes a combined hash, and seeds if the hash differs
+// from lastHash. Returns the new hash, or empty string if unchanged.
 func pollAndSeed(ctx context.Context, gc *graphClientWrapper, memCfg memory.Config, lastHash string) string {
-	resp, err := gc.ListObjects(ctx, "AgentToolConfig", 100)
+	// Read both config types
+	toolConfigs, err := gc.ListObjects(ctx, "AgentToolConfig", 100)
 	if err != nil {
 		log.Printf("[agent-watch] Failed to list AgentToolConfig: %v", err)
 		return ""
 	}
+	overrideConfigs, err := gc.ListObjects(ctx, "AgentOverrideConfig", 100)
+	if err != nil {
+		log.Printf("[agent-watch] Failed to list AgentOverrideConfig: %v", err)
+		return ""
+	}
 
-	// Compute hash of current state
+	// Compute combined hash
 	hashInput := ""
-	for _, obj := range resp.Items {
+	for _, obj := range toolConfigs.Items {
 		agentName, _ := obj.Properties["agent_name"].(string)
 		patternsRaw, _ := obj.Properties["tool_patterns"].([]interface{})
-		hashInput += agentName + ":" + strings.Join(toStringSlice(patternsRaw), ",") + ";"
+		hashInput += "tool:" + agentName + ":" + strings.Join(toStringSlice(patternsRaw), ",") + ";"
+	}
+	for _, obj := range overrideConfigs.Items {
+		agentName, _ := obj.Properties["agent_name"].(string)
+		sp, _ := obj.Properties["system_prompt"].(string)
+		hashInput += "override:" + agentName + ":" + sp + ";"
 	}
 	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(hashInput)))
 
@@ -212,7 +238,7 @@ func pollAndSeed(ctx context.Context, gc *graphClientWrapper, memCfg memory.Conf
 		return hash // unchanged
 	}
 
-	log.Printf("[agent-watch] AgentToolConfig changed — seeding built-in agents")
+	log.Printf("[agent-watch] Agent config changed — seeding built-in agents")
 	if err := seedBuiltInAgentsFromGraph(ctx, memCfg); err != nil {
 		log.Printf("[agent-watch] Seed failed: %v", err)
 		return lastHash // keep old hash so we retry
@@ -222,9 +248,9 @@ func pollAndSeed(ctx context.Context, gc *graphClientWrapper, memCfg memory.Conf
 	return hash
 }
 
-// seedBuiltInAgentsFromGraph reads AgentToolConfig from the graph, merges
-// with built-in agents, and seeds to Memory Platform.
-// This is the same logic as cmdAgentSeed() but without CLI output.
+// seedBuiltInAgentsFromGraph reads AgentToolConfig and AgentOverrideConfig
+// from the graph, applies them to built-in agents in the correct order,
+// and seeds to Memory Platform.
 func seedBuiltInAgentsFromGraph(ctx context.Context, memCfg memory.Config) error {
 	bridge, err := memory.New(memCfg)
 	if err != nil {
@@ -232,16 +258,10 @@ func seedBuiltInAgentsFromGraph(ctx context.Context, memCfg memory.Config) error
 	}
 	defer bridge.Close()
 
-	// Read graph tool configs
-	configs, err := agents.ReadAgentToolConfigs(ctx, bridge.Client().Graph)
+	// Build merged agents: built-in → overrides → tool patterns
+	builtIns, err := agents.BuildMergedAgents(ctx, bridge.Client().Graph)
 	if err != nil {
-		return fmt.Errorf("read AgentToolConfig: %w", err)
-	}
-
-	// Merge with built-in agents
-	builtIns := agents.BuiltInAgents()
-	if len(configs) > 0 {
-		builtIns = agents.MergeToolPatterns(builtIns, configs)
+		return fmt.Errorf("build merged agents: %w", err)
 	}
 
 	// Seed

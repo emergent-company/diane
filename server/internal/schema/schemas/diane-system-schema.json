@@ -1,5 +1,65 @@
 [
   {
+    "type_name": "AgentOverrideConfig",
+    "description": "Partial overrides for built-in agent definitions. Only specified fields override the Go-code defaults at seed time.",
+    "namespace": "system",
+    "json_schema": {
+      "label": "Agent Override Config",
+      "type": "object",
+      "properties": {
+        "agent_name": {
+          "type": "string",
+          "description": "Built-in agent name to override (e.g. diane-default)"
+        },
+        "system_prompt": {
+          "type": "string",
+          "description": "Override system prompt (empty = keep built-in)"
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Override skills list (empty = keep built-in)"
+        },
+        "model_provider": {
+          "type": "string",
+          "description": "Override model provider (empty = keep built-in)"
+        },
+        "model_name": {
+          "type": "string",
+          "description": "Override model name (empty = keep built-in)"
+        },
+        "model_temperature": {
+          "type": "number",
+          "description": "Override model temperature (0 = keep built-in)"
+        },
+        "model_max_tokens": {
+          "type": "integer",
+          "description": "Override model max tokens (0 = keep built-in)"
+        },
+        "max_steps": {
+          "type": "integer",
+          "description": "Override max steps (0 = keep built-in)"
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "Override timeout in seconds (0 = keep built-in)"
+        },
+        "visibility": {
+          "type": "string",
+          "description": "Override visibility (project/org/private, empty = keep built-in)"
+        },
+        "sandbox_enabled": {
+          "type": "boolean",
+          "description": "Override sandbox enabled state (null = keep built-in)"
+        }
+      },
+      "description": "Maps agent names to partial override fields applied at seed time"
+    },
+    "enabled": true
+  },
+  {
     "type_name": "SkillMonitorCheckpoint",
     "description": "Tracks the last time diane-skill-monitor checked completed sessions for skill extraction",
     "namespace": "system",
