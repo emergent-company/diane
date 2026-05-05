@@ -49,7 +49,11 @@ func cmdMCPAuth(args []string) {
 	}
 
 	oauth := server.OAuth
-	if oauth == nil {
+
+	// Bug 2 fix: Check for existing token BEFORE checking OAuth config source.
+	// This ensures we don't re-authenticate every time when OAuth is discovered
+	// from graph config or local files (oauth != nil).
+	{
 		tokens, err := mcpproxy.LoadTokens(*serverName)
 		if err == nil && tokens.AccessToken != "" {
 			fmt.Printf("✅ %s is already authenticated", *serverName)
@@ -65,6 +69,9 @@ func cmdMCPAuth(args []string) {
 			}
 			return
 		}
+	}
+
+	if oauth == nil {
 		fmt.Fprintf(os.Stderr, "Error: no OAuth configuration for server %q\n", *serverName)
 		os.Exit(1)
 	}
@@ -120,6 +127,15 @@ func cmdMCPAuth(args []string) {
 		_ = token
 	} else if oauth.AuthorizationURL != "" {
 		// Auth code flow (e.g., infakt)
+
+		if *background {
+			fmt.Printf("\n📋 Authorization URL:\n%s\n\n", oauth.AuthorizationURL)
+			fmt.Printf("Open this URL in a browser and authorize the application.\n")
+			fmt.Printf("After authorizing, the callback server (started by the non-background command) will handle the redirect and save the token.\n")
+			fmt.Printf("\nAlternatively, run 'diane mcp auth --server %s' from a terminal with browser access.\n", *serverName)
+			return
+		}
+
 		token, err := mcpproxy.AuthenticateAuthCodeFlow(*serverName, oauth)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "❌ Authentication failed: %v\n", err)
@@ -302,14 +318,10 @@ func loadGraphMCPConfigs() []mcpproxy.ServerConfig {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	bridge, err := memory.New(memory.Config{
-		ServerURL:         pc.ServerURL,
-		APIKey:            pc.Token,
-		ProjectID:         pc.ProjectID,
-		OrgID:             pc.OrgID,
-		HTTPClientTimeout: 10 * time.Second,
+	bridge := memory.NewBridgeFromConfig(func() (string, string, string, string) {
+		return pc.ServerURL, pc.Token, pc.ProjectID, pc.OrgID
 	})
-	if err != nil {
+	if bridge == nil {
 		return nil
 	}
 	defer bridge.Close()
@@ -415,15 +427,11 @@ func syncTokenToGraph(serverName, scope string) error {
 
 	value, _ := json.Marshal(tokens)
 
-	bridge, err := memory.New(memory.Config{
-		ServerURL:         pc.ServerURL,
-		APIKey:            pc.Token,
-		ProjectID:         pc.ProjectID,
-		OrgID:             pc.OrgID,
-		HTTPClientTimeout: 15 * time.Second,
+	bridge := memory.NewBridgeFromConfig(func() (string, string, string, string) {
+		return pc.ServerURL, pc.Token, pc.ProjectID, pc.OrgID
 	})
-	if err != nil {
-		return fmt.Errorf("connect to MP: %w", err)
+	if bridge == nil {
+		return fmt.Errorf("connect to MP: bridge creation failed")
 	}
 	defer bridge.Close()
 

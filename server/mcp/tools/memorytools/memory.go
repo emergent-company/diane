@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Emergent-Comapny/diane/mcp/tools"
 	"gopkg.in/yaml.v3"
 )
 
@@ -62,12 +63,8 @@ func findMemoryCLI() string {
 
 // ── Tool Defs ──
 
-// Tool represents an MCP tool definition.
-type Tool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"inputSchema"`
-}
+// Tool is a type alias for the shared tools.Tool type
+type Tool = tools.Tool
 
 // Provider implements memory MCP tools.
 type Provider struct {
@@ -79,6 +76,11 @@ type Provider struct {
 // NewProvider creates a new memory tools provider.
 func NewProvider() *Provider {
 	return &Provider{}
+}
+
+// Name returns the provider name.
+func (p *Provider) Name() string {
+	return "memory"
 }
 
 // CheckDependencies loads config and finds the memory CLI.
@@ -157,8 +159,12 @@ func (p *Provider) Tools() []Tool {
 
 // HasTool checks if a tool belongs to this provider.
 func (p *Provider) HasTool(name string) bool {
-	return name == "memory_save" || name == "memory_recall" ||
-		name == "memory_apply_decay" || name == "memory_detect_patterns"
+	for _, t := range p.Tools() {
+		if t.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // Call dispatches to the right tool implementation.

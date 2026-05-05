@@ -128,15 +128,11 @@ func cmdMCPAdd(args []string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	bridge, err := memory.New(memory.Config{
-		ServerURL:         pc.ServerURL,
-		APIKey:            pc.Token,
-		ProjectID:         pc.ProjectID,
-		OrgID:             pc.OrgID,
-		HTTPClientTimeout: 15 * time.Second,
+	bridge := memory.NewBridgeFromConfig(func() (string, string, string, string) {
+		return pc.ServerURL, pc.Token, pc.ProjectID, pc.OrgID
 	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Failed to connect to MP: %v\n", err)
+	if bridge == nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Failed to connect to MP\n")
 		fmt.Println("   (server not added)")
 		osExit(1)
 	}

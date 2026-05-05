@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/Emergent-Comapny/diane/mcp/tools"
 )
 
 // --- Configuration ---
@@ -144,12 +146,8 @@ func geocodeLocation(location string) (lat, lng float64, err error) {
 
 // --- Tool Definition ---
 
-// Tool represents an MCP tool definition
-type Tool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"inputSchema"`
-}
+// Tool is a type alias for the shared tools.Tool type
+type Tool = tools.Tool
 
 // Provider implements ToolProvider for Google Places tools
 type Provider struct {
@@ -253,7 +251,12 @@ func (p *Provider) HasTool(name string) bool {
 	if !p.available {
 		return false
 	}
-	return strings.HasPrefix(name, "google-places_")
+	for _, t := range p.Tools() {
+		if t.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // Call executes a tool by name

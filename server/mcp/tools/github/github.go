@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/Emergent-Comapny/diane/mcp/tools"
 )
 
 // getConfigPath returns the path to the GitHub bot config file
@@ -46,17 +48,26 @@ type Provider struct {
 }
 
 // NewProvider creates a new GitHub provider
-func NewProvider() (*Provider, error) {
-	// Read config
+func NewProvider() *Provider {
+	return &Provider{}
+}
+
+// Name returns the provider name
+func (p *Provider) Name() string {
+	return "github"
+}
+
+// CheckDependencies verifies GitHub App configuration and loads all settings
+func (p *Provider) CheckDependencies() error {
 	configPath := getConfigPath()
 	configData, err := os.ReadFile(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config: %w", err)
+		return fmt.Errorf("failed to read config: %w", err)
 	}
 
 	var config Config
 	if err := json.Unmarshal(configData, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
+		return fmt.Errorf("failed to parse config: %w", err)
 	}
 
 	// Read private key
@@ -67,13 +78,13 @@ func NewProvider() (*Provider, error) {
 
 	keyData, err := os.ReadFile(keyPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read private key: %w", err)
+		return fmt.Errorf("failed to read private key: %w", err)
 	}
 
 	// Parse PEM block
 	block, _ := pem.Decode(keyData)
 	if block == nil {
-		return nil, fmt.Errorf("failed to decode PEM block")
+		return fmt.Errorf("failed to decode PEM block")
 	}
 
 	// Parse private key (PKCS8 format)
@@ -82,36 +93,22 @@ func NewProvider() (*Provider, error) {
 		// Try PKCS1 as fallback
 		key, err = x509.ParsePKCS1PrivateKey(block.Bytes)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse private key: %w", err)
+			return fmt.Errorf("failed to parse private key: %w", err)
 		}
 	}
 
 	rsaKey, ok := key.(*rsa.PrivateKey)
 	if !ok {
-		return nil, fmt.Errorf("private key is not RSA")
+		return fmt.Errorf("private key is not RSA")
 	}
 
-	return &Provider{
-		config:     &config,
-		privateKey: rsaKey,
-	}, nil
-}
-
-// CheckDependencies verifies GitHub App configuration exists
-func (p *Provider) CheckDependencies() error {
-	configPath := getConfigPath()
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		return fmt.Errorf("GitHub App config not found at %s", configPath)
-	}
+	p.config = &config
+	p.privateKey = rsaKey
 	return nil
 }
 
-// Tool represents an MCP tool definition
-type Tool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"inputSchema"`
-}
+// Tool is a type alias for the shared tools.Tool type
+type Tool = tools.Tool
 
 // Tools returns the list of GitHub bot tools
 func (p *Provider) Tools() []Tool {
@@ -179,9 +176,10 @@ func (p *Provider) Tools() []Tool {
 
 // HasTool checks if a tool name belongs to this provider
 func (p *Provider) HasTool(name string) bool {
-	switch name {
-	case "github-bot_comment_as_bot", "github-bot_react_as_bot", "github-bot_manage_labels":
-		return true
+	for _, t := range p.Tools() {
+		if t.Name == name {
+			return true
+		}
 	}
 	return false
 }

@@ -443,12 +443,10 @@ func handleMCPAdd(args map[string]interface{}) (map[string]interface{}, error) {
 	if pc != nil && pc.Token != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		bridge, err := memory.New(memory.Config{
-			ServerURL: pc.ServerURL, APIKey: pc.Token,
-			ProjectID: pc.ProjectID, OrgID: pc.OrgID,
-			HTTPClientTimeout: 15 * time.Second,
+		bridge := memory.NewBridgeFromConfig(func() (string, string, string, string) {
+			return pc.ServerURL, pc.Token, pc.ProjectID, pc.OrgID
 		})
-		if err == nil {
+		if bridge != nil {
 			serverData, _ := json.Marshal(server)
 			_ = bridge.UpsertMCPProxyConfig(ctx, &memory.MCPProxyConfigRequest{
 				Scope: scope, Config: string(serverData),

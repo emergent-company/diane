@@ -9,16 +9,14 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/Emergent-Comapny/diane/mcp/tools"
 )
 
 const userAgent = "diane github.com/Emergent-Comapny/diane"
 
-// Tool represents an MCP tool definition
-type Tool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"inputSchema"`
-}
+// Tool is a type alias for the shared tools.Tool type
+type Tool = tools.Tool
 
 // Provider implements weather tools
 type Provider struct{}
@@ -26,6 +24,11 @@ type Provider struct{}
 // NewProvider creates a new weather provider
 func NewProvider() *Provider {
 	return &Provider{}
+}
+
+// Name returns the provider name
+func (p *Provider) Name() string {
+	return "weather"
 }
 
 // CheckDependencies verifies weather API is accessible (no config needed)
@@ -78,9 +81,10 @@ func (p *Provider) Tools() []Tool {
 
 // HasTool checks if a tool name belongs to this provider
 func (p *Provider) HasTool(name string) bool {
-	switch name {
-	case "weather_get_weather", "weather_search_location_weather":
-		return true
+	for _, t := range p.Tools() {
+		if t.Name == name {
+			return true
+		}
 	}
 	return false
 }

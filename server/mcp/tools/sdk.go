@@ -24,6 +24,9 @@ type ToolProvider interface {
 	// Tools returns all tools provided by this module
 	Tools() []Tool
 
+	// HasTool checks if a tool name belongs to this provider
+	HasTool(name string) bool
+
 	// Call executes a tool by name with the given arguments
 	Call(name string, args map[string]interface{}) (interface{}, error)
 

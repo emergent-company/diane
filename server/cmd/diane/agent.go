@@ -15,6 +15,7 @@ import (
 	"github.com/Emergent-Comapny/diane/internal/config"
 	"github.com/Emergent-Comapny/diane/internal/db"
 	"github.com/Emergent-Comapny/diane/internal/memory"
+	"github.com/Emergent-Comapny/diane/internal/x/ptr"
 	sdkagents "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agentdefinitions"
 	sdkagentrun "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agents"
 )
@@ -160,13 +161,10 @@ func cmdAgentList() {
 
 	// Fetch remote agents for display
 	var remoteAgents *sdkagents.APIResponse[[]sdkagents.AgentDefinitionSummary]
-	bridge, err := memory.New(memory.Config{
-		ServerURL: pc.ServerURL,
-		APIKey:    pc.Token,
-		ProjectID: pc.ProjectID,
-		OrgID:     pc.OrgID,
+	bridge := memory.NewBridgeFromConfig(func() (string, string, string, string) {
+		return pc.ServerURL, pc.Token, pc.ProjectID, pc.OrgID
 	})
-	if err == nil {
+	if bridge != nil {
 		defer bridge.Close()
 		remoteAgents, _ = bridge.ListAgentDefs(context.Background())
 	}
@@ -187,9 +185,9 @@ func cmdAgentList() {
 				if a.Description != "" {
 					fmt.Printf("       %s\n", a.Description)
 				}
-				fmt.Printf("       Tools: %d | Skills: %d | Flow: %s\n", toolCount, skillCount, orDefault(a.FlowType, ""))
+				fmt.Printf("       Tools: %d | Skills: %d | Flow: %s\n", toolCount, skillCount, ptr.OrDefault(a.FlowType, ""))
 				if a.Sandbox != nil && a.Sandbox.Enabled {
-					fmt.Printf("       Sandbox: %s\n", orDefault(a.Sandbox.BaseImage, "default"))
+					fmt.Printf("       Sandbox: %s\n", ptr.OrDefault(a.Sandbox.BaseImage, "default"))
 				}
 			}
 		}
@@ -253,7 +251,7 @@ func cmdAgentDefine(name string) {
 	fmt.Println()
 
 	// Description
-	prompt := fmt.Sprintf("Description [%s]: ", orDefault(ac.Description, "General purpose AI assistant"))
+	prompt := fmt.Sprintf("Description [%s]: ", ptr.OrDefault(ac.Description, "General purpose AI assistant"))
 	fmt.Print(prompt)
 	if desc := readLine(reader); desc != "" {
 		ac.Description = desc
@@ -289,7 +287,7 @@ func cmdAgentDefine(name string) {
 	}
 
 	// Visibility
-	prompt = fmt.Sprintf("Visibility (project/org/private) [%s]: ", orDefault(ac.Visibility, "project"))
+	prompt = fmt.Sprintf("Visibility (project/org/private) [%s]: ", ptr.OrDefault(ac.Visibility, "project"))
 	fmt.Print(prompt)
 	if vis := readLine(reader); vis != "" {
 		ac.Visibility = vis
@@ -298,7 +296,7 @@ func cmdAgentDefine(name string) {
 	}
 
 	// Dispatch mode
-	prompt = fmt.Sprintf("Dispatch mode (auto/manual) [%s]: ", orDefault(ac.DispatchMode, "auto"))
+	prompt = fmt.Sprintf("Dispatch mode (auto/manual) [%s]: ", ptr.OrDefault(ac.DispatchMode, "auto"))
 	fmt.Print(prompt)
 	if dm := readLine(reader); dm != "" {
 		ac.DispatchMode = dm
@@ -312,13 +310,13 @@ func cmdAgentDefine(name string) {
 		if ac.Model == nil {
 			ac.Model = &config.AgentModelConfig{}
 		}
-		fmt.Printf("  Provider [%s]: ", orDefault(ac.Model.Provider, "deepseek"))
+		fmt.Printf("  Provider [%s]: ", ptr.OrDefault(ac.Model.Provider, "deepseek"))
 		if p := readLine(reader); p != "" {
 			ac.Model.Provider = p
 		} else if ac.Model.Provider == "" {
 			ac.Model.Provider = "deepseek"
 		}
-		fmt.Printf("  Model [%s]: ", orDefault(ac.Model.Name, "deepseek-chat"))
+		fmt.Printf("  Model [%s]: ", ptr.OrDefault(ac.Model.Name, "deepseek-chat"))
 		if m := readLine(reader); m != "" {
 			ac.Model.Name = m
 		} else if ac.Model.Name == "" {
@@ -361,13 +359,13 @@ func cmdAgentDefine(name string) {
 	}
 
 	// Execution limits
-	fmt.Printf("\nMax steps [%d]: ", orDefaultInt(ac.MaxSteps, 50))
+	fmt.Printf("\nMax steps [%d]: ", ptr.OrDefaultInt(ac.MaxSteps, 50))
 	if ms := readLine(reader); ms != "" {
 		fmt.Sscanf(ms, "%d", &ac.MaxSteps)
 	} else if ac.MaxSteps == 0 {
 		ac.MaxSteps = 50
 	}
-	fmt.Printf("Default timeout (seconds) [%d]: ", orDefaultInt(ac.DefaultTimeout, 300))
+	fmt.Printf("Default timeout (seconds) [%d]: ", ptr.OrDefaultInt(ac.DefaultTimeout, 300))
 	if dt := readLine(reader); dt != "" {
 		fmt.Sscanf(dt, "%d", &ac.DefaultTimeout)
 	} else if ac.DefaultTimeout == 0 {
@@ -395,7 +393,7 @@ func cmdAgentDefine(name string) {
 		} else {
 			ac.Sandbox.BaseImage = baseImage
 		}
-		fmt.Printf("  Pull policy (always/missing) [%s]: ", orDefault(ac.Sandbox.PullPolicy, "missing"))
+		fmt.Printf("  Pull policy (always/missing) [%s]: ", ptr.OrDefault(ac.Sandbox.PullPolicy, "missing"))
 		if pp := readLine(reader); pp != "" {
 			ac.Sandbox.PullPolicy = pp
 		} else if ac.Sandbox.PullPolicy == "" {
@@ -423,13 +421,13 @@ func cmdAgentDefine(name string) {
 		if ac.ACP == nil {
 			ac.ACP = &config.ACPConfig{}
 		}
-		fmt.Printf("  Display name [%s]: ", orDefault(ac.ACP.DisplayName, name))
+		fmt.Printf("  Display name [%s]: ", ptr.OrDefault(ac.ACP.DisplayName, name))
 		if dn := readLine(reader); dn != "" {
 			ac.ACP.DisplayName = dn
 		} else if ac.ACP.DisplayName == "" {
 			ac.ACP.DisplayName = name
 		}
-		fmt.Printf("  Description [%s]: ", orDefault(ac.ACP.Description, ac.Description))
+		fmt.Printf("  Description [%s]: ", ptr.OrDefault(ac.ACP.Description, ac.Description))
 		if ad := readLine(reader); ad != "" {
 			ac.ACP.Description = ad
 		} else if ac.ACP.Description == "" {
@@ -494,11 +492,11 @@ func cmdAgentShow(name string) {
 			"name":            name,
 			"description":     ac.Description,
 			"system_prompt":   ac.SystemPrompt,
-			"flow_type":       orDefault(ac.FlowType, "standard"),
-			"visibility":      orDefault(ac.Visibility, "project"),
-			"dispatch_mode":   orDefault(ac.DispatchMode, "auto"),
-			"max_steps":       orDefaultInt(ac.MaxSteps, 50),
-			"default_timeout": orDefaultInt(ac.DefaultTimeout, 300),
+			"flow_type":       ptr.OrDefault(ac.FlowType, "standard"),
+			"visibility":      ptr.OrDefault(ac.Visibility, "project"),
+			"dispatch_mode":   ptr.OrDefault(ac.DispatchMode, "auto"),
+			"max_steps":       ptr.OrDefaultInt(ac.MaxSteps, 50),
+			"default_timeout": ptr.OrDefaultInt(ac.DefaultTimeout, 300),
 			"tools":           ac.Tools,
 			"skills":          ac.Skills,
 			"model":           ac.Model,
@@ -513,14 +511,14 @@ func cmdAgentShow(name string) {
 	if ac.SystemPrompt != "" {
 		fmt.Printf("  System prompt:   %d chars\n", len(ac.SystemPrompt))
 	}
-	fmt.Printf("  Flow type:       %s\n", orDefault(ac.FlowType, "standard"))
-	fmt.Printf("  Visibility:      %s\n", orDefault(ac.Visibility, "project"))
-	fmt.Printf("  Dispatch mode:   %s\n", orDefault(ac.DispatchMode, "auto"))
-	fmt.Printf("  Max steps:       %d\n", orDefaultInt(ac.MaxSteps, 50))
-	fmt.Printf("  Timeout:         %ds\n", orDefaultInt(ac.DefaultTimeout, 300))
+	fmt.Printf("  Flow type:       %s\n", ptr.OrDefault(ac.FlowType, "standard"))
+	fmt.Printf("  Visibility:      %s\n", ptr.OrDefault(ac.Visibility, "project"))
+	fmt.Printf("  Dispatch mode:   %s\n", ptr.OrDefault(ac.DispatchMode, "auto"))
+	fmt.Printf("  Max steps:       %d\n", ptr.OrDefaultInt(ac.MaxSteps, 50))
+	fmt.Printf("  Timeout:         %ds\n", ptr.OrDefaultInt(ac.DefaultTimeout, 300))
 	if ac.Model != nil {
 		fmt.Printf("  Model provider:  %s\n", ac.Model.Provider)
-		fmt.Printf("  Model name:      %s\n", orDefault(ac.Model.Name, "(auto)"))
+		fmt.Printf("  Model name:      %s\n", ptr.OrDefault(ac.Model.Name, "(auto)"))
 	}
 	if len(ac.Tools) > 0 {
 		fmt.Printf("  Tools:           %s\n", strings.Join(ac.Tools, ", "))
@@ -529,14 +527,14 @@ func cmdAgentShow(name string) {
 		fmt.Printf("  Skills:          %s\n", strings.Join(ac.Skills, ", "))
 	}
 	if ac.Sandbox != nil && ac.Sandbox.Enabled {
-		fmt.Printf("  Sandbox:         %s\n", orDefault(ac.Sandbox.BaseImage, "default"))
-		fmt.Printf("  Pull policy:     %s\n", orDefault(ac.Sandbox.PullPolicy, "missing"))
+		fmt.Printf("  Sandbox:         %s\n", ptr.OrDefault(ac.Sandbox.BaseImage, "default"))
+		fmt.Printf("  Pull policy:     %s\n", ptr.OrDefault(ac.Sandbox.PullPolicy, "missing"))
 		if len(ac.Sandbox.Env) > 0 {
 			fmt.Printf("  Env vars:        %d\n", len(ac.Sandbox.Env))
 		}
 	}
 	if ac.ACP != nil {
-		fmt.Printf("  ACP:             %s\n", orDefault(ac.ACP.DisplayName, name))
+		fmt.Printf("  ACP:             %s\n", ptr.OrDefault(ac.ACP.DisplayName, name))
 		fmt.Printf("    Capabilities:  %s\n", strings.Join(ac.ACP.Capabilities, ", "))
 	}
 
@@ -564,12 +562,10 @@ func doAgentSync(name string, cfg *config.Config, pc *config.ProjectConfig) {
 	// This ensures immutable agents are up to date with any graph config changes.
 	seedCtx, seedCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer seedCancel()
-	seedBridge, err := memory.New(memory.Config{
-		ServerURL: pc.ServerURL,
-		APIKey:    pc.Token,
-		ProjectID: pc.ProjectID,
+	seedBridge := memory.NewBridgeFromConfig(func() (string, string, string, string) {
+		return pc.ServerURL, pc.Token, pc.ProjectID, pc.OrgID
 	})
-	if err == nil {
+	if seedBridge != nil {
 		fmt.Print("📦 Seeding built-in agents... ")
 
 		builtIns, buildErr := agents.BuildMergedAgents(seedCtx, seedBridge.Client().Graph)
@@ -591,14 +587,11 @@ func doAgentSync(name string, cfg *config.Config, pc *config.ProjectConfig) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	bridge, err := memory.New(memory.Config{
-		ServerURL: pc.ServerURL,
-		APIKey:    pc.Token,
-		ProjectID: pc.ProjectID,
-		OrgID:     pc.OrgID,
+	bridge := memory.NewBridgeFromConfig(func() (string, string, string, string) {
+		return pc.ServerURL, pc.Token, pc.ProjectID, pc.OrgID
 	})
-	if err != nil {
-		fmt.Printf("❌ Connection failed: %v\n", err)
+	if bridge == nil {
+		fmt.Printf("❌ Connection failed\n")
 		return
 	}
 	defer bridge.Close()
@@ -655,13 +648,11 @@ func cmdAgentSeed() {
 	fmt.Println("═══ Seeding Built-in Agents ═══")
 	fmt.Println()
 
-	bridge, err := memory.New(memory.Config{
-		ServerURL: pc.ServerURL,
-		APIKey:    pc.Token,
-		ProjectID: pc.ProjectID,
+	bridge := memory.NewBridgeFromConfig(func() (string, string, string, string) {
+		return pc.ServerURL, pc.Token, pc.ProjectID, pc.OrgID
 	})
-	if err != nil {
-		fmt.Printf("❌ Connection: %v\n", err)
+	if bridge == nil {
+		fmt.Printf("❌ Connection failed\n")
 		return
 	}
 	defer bridge.Close()
@@ -742,31 +733,31 @@ func syncOneAgent(ctx context.Context, bridge *memory.Bridge, name string, ac *c
 	// Build the SDK create request
 	req := &sdkagents.CreateAgentDefinitionRequest{
 		Name:         name,
-		FlowType:     orDefault(ac.FlowType, "standard"),
-		Visibility:   orDefault(ac.Visibility, "project"),
-		DispatchMode: orDefault(ac.DispatchMode, "auto"),
-		Description:  strPtr(ac.Description),
+		FlowType:     ptr.OrDefault(ac.FlowType, "standard"),
+		Visibility:   ptr.OrDefault(ac.Visibility, "project"),
+		DispatchMode: ptr.OrDefault(ac.DispatchMode, "auto"),
+		Description:  ptr.Str(ac.Description),
 		Tools:        ac.Tools,
 		Skills:       ac.Skills,
 	}
 
 	if ac.SystemPrompt != "" {
-		req.SystemPrompt = strPtr(ac.SystemPrompt)
+		req.SystemPrompt = ptr.Str(ac.SystemPrompt)
 	}
 
 	if ac.Model != nil {
 		req.Model = &sdkagents.ModelConfig{
 			Name:        ac.Model.Name,
-			Temperature: fl32Ptr(ac.Model.Temperature),
-			MaxTokens:   intPtr(ac.Model.MaxTokens),
+			Temperature: ptr.F32(ac.Model.Temperature),
+			MaxTokens:   ptr.Int(ac.Model.MaxTokens),
 		}
 	}
 
 	if ac.MaxSteps > 0 {
-		req.MaxSteps = intPtr(ac.MaxSteps)
+		req.MaxSteps = ptr.Int(ac.MaxSteps)
 	}
 	if ac.DefaultTimeout > 0 {
-		req.DefaultTimeout = intPtr(ac.DefaultTimeout)
+		req.DefaultTimeout = ptr.Int(ac.DefaultTimeout)
 	}
 
 	if ac.ACP != nil {
@@ -800,26 +791,26 @@ func syncOneAgent(ctx context.Context, bridge *memory.Bridge, name string, ac *c
 		// Update
 		updReq := &sdkagents.UpdateAgentDefinitionRequest{
 			Name:         &name,
-			Description:  strPtr(ac.Description),
-			SystemPrompt: strPtr(ac.SystemPrompt),
-			FlowType:     strPtr(orDefault(ac.FlowType, "standard")),
-			Visibility:   strPtr(orDefault(ac.Visibility, "project")),
-			DispatchMode: strPtr(orDefault(ac.DispatchMode, "auto")),
+			Description:  ptr.Str(ac.Description),
+			SystemPrompt: ptr.Str(ac.SystemPrompt),
+			FlowType:     ptr.Str(ptr.OrDefault(ac.FlowType, "standard")),
+			Visibility:   ptr.Str(ptr.OrDefault(ac.Visibility, "project")),
+			DispatchMode: ptr.Str(ptr.OrDefault(ac.DispatchMode, "auto")),
 			Tools:        ac.Tools,
 			Skills:       ac.Skills,
 		}
 		if ac.Model != nil {
 			updReq.Model = &sdkagents.ModelConfig{
 				Name:        ac.Model.Name,
-				Temperature: fl32Ptr(ac.Model.Temperature),
-				MaxTokens:   intPtr(ac.Model.MaxTokens),
+				Temperature: ptr.F32(ac.Model.Temperature),
+				MaxTokens:   ptr.Int(ac.Model.MaxTokens),
 			}
 		}
 		if ac.MaxSteps > 0 {
-			updReq.MaxSteps = intPtr(ac.MaxSteps)
+			updReq.MaxSteps = ptr.Int(ac.MaxSteps)
 		}
 		if ac.DefaultTimeout > 0 {
-			updReq.DefaultTimeout = intPtr(ac.DefaultTimeout)
+			updReq.DefaultTimeout = ptr.Int(ac.DefaultTimeout)
 		}
 		if ac.ACP != nil {
 			updReq.ACPConfig = &sdkagents.ACPConfig{
@@ -844,7 +835,7 @@ func syncOneAgent(ctx context.Context, bridge *memory.Bridge, name string, ac *c
 		sbConfig := map[string]any{
 			"enabled":     true,
 			"baseImage":   ac.Sandbox.BaseImage,
-			"pull_policy": orDefault(ac.Sandbox.PullPolicy, "missing"),
+			"pull_policy": ptr.OrDefault(ac.Sandbox.PullPolicy, "missing"),
 		}
 		if ac.Sandbox.Env != nil {
 			sbConfig["env"] = ac.Sandbox.Env
@@ -874,13 +865,11 @@ func cmdAgentTrigger(name, prompt string) {
 
 	fmt.Printf("═══ Triggering Agent: %s ═══\n\n", name)
 
-	bridge, err := memory.New(memory.Config{
-		ServerURL: pc.ServerURL,
-		APIKey:    pc.Token,
-		ProjectID: pc.ProjectID,
+	bridge := memory.NewBridgeFromConfig(func() (string, string, string, string) {
+		return pc.ServerURL, pc.Token, pc.ProjectID, pc.OrgID
 	})
-	if err != nil {
-		fmt.Printf("❌ Connection: %v\n", err)
+	if bridge == nil {
+		fmt.Printf("❌ Connection failed\n")
 		return
 	}
 	defer bridge.Close()
@@ -942,8 +931,8 @@ func cmdAgentTrigger(name, prompt string) {
 		}
 		if run.Data.Status == "success" || run.Data.Status == "completed" {
 			fmt.Println(" ✅")
-			fmt.Printf("\n📊 Duration: %dms\n", safeDeref(run.Data.DurationMs))
-			fmt.Printf("📝 Steps: %d/%d\n", run.Data.StepCount, safeDeref(run.Data.MaxSteps))
+			fmt.Printf("\n📊 Duration: %dms\n", ptr.SafeDeref(run.Data.DurationMs))
+			fmt.Printf("📝 Steps: %d/%d\n", run.Data.StepCount, ptr.SafeDeref(run.Data.MaxSteps))
 
 			// Show summary
 			if summary, ok := run.Data.Summary["final_response"]; ok {
@@ -1055,13 +1044,10 @@ func cmdAgentDelete(name string) {
 	}
 
 	// Delete from MP if synced
-	bridge, err := memory.New(memory.Config{
-		ServerURL: pc.ServerURL,
-		APIKey:    pc.Token,
-		ProjectID: pc.ProjectID,
-		OrgID:     pc.OrgID,
+	bridge := memory.NewBridgeFromConfig(func() (string, string, string, string) {
+		return pc.ServerURL, pc.Token, pc.ProjectID, pc.OrgID
 	})
-	if err == nil {
+	if bridge != nil {
 		existingList, listErr := bridge.ListAgentDefs(context.Background())
 		if listErr == nil && existingList != nil {
 			for _, a := range existingList.Data {
@@ -1103,14 +1089,11 @@ func cmdAgentPrune(force bool) {
 	}
 
 	ctx := context.Background()
-	bridge, err := memory.New(memory.Config{
-		ServerURL: pc.ServerURL,
-		APIKey:    pc.Token,
-		ProjectID: pc.ProjectID,
-		OrgID:     pc.OrgID,
+	bridge := memory.NewBridgeFromConfig(func() (string, string, string, string) {
+		return pc.ServerURL, pc.Token, pc.ProjectID, pc.OrgID
 	})
-	if err != nil {
-		fmt.Printf("❌ Connection: %v\n", err)
+	if bridge == nil {
+		fmt.Printf("❌ Connection failed\n")
 		return
 	}
 	defer bridge.Close()
@@ -1304,14 +1287,11 @@ func cmdAgentStats(name string) {
 		opts.AgentID = name
 	}
 
-	bridge, err := memory.New(memory.Config{
-		ServerURL: pc.ServerURL,
-		APIKey:    pc.Token,
-		ProjectID: pc.ProjectID,
-		OrgID:     pc.OrgID,
+	bridge := memory.NewBridgeFromConfig(func() (string, string, string, string) {
+		return pc.ServerURL, pc.Token, pc.ProjectID, pc.OrgID
 	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Memory Platform: %v\n", err)
+	if bridge == nil {
+		fmt.Fprintf(os.Stderr, "❌ Memory Platform: connection failed\n")
 		return
 	}
 	defer bridge.Close()
@@ -1451,13 +1431,11 @@ func cmdAgentTrace(runID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	bridge, err := memory.New(memory.Config{
-		ServerURL: pc.ServerURL,
-		APIKey:    pc.Token,
-		ProjectID: pc.ProjectID,
+	bridge := memory.NewBridgeFromConfig(func() (string, string, string, string) {
+		return pc.ServerURL, pc.Token, pc.ProjectID, pc.OrgID
 	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Bridge: %v\n", err)
+	if bridge == nil {
+		fmt.Fprintf(os.Stderr, "❌ Bridge: connection failed\n")
 		return
 	}
 	defer bridge.Close()
@@ -1637,13 +1615,11 @@ func cmdAgentRuns(agentName, sinceStr string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	bridge, err := memory.New(memory.Config{
-		ServerURL: pc.ServerURL,
-		APIKey:    pc.Token,
-		ProjectID: pc.ProjectID,
+	bridge := memory.NewBridgeFromConfig(func() (string, string, string, string) {
+		return pc.ServerURL, pc.Token, pc.ProjectID, pc.OrgID
 	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Bridge: %v\n", err)
+	if bridge == nil {
+		fmt.Fprintf(os.Stderr, "❌ Bridge: connection failed\n")
 		return
 	}
 	defer bridge.Close()
@@ -1785,22 +1761,6 @@ func cmdAgentRuns(agentName, sinceStr string) {
 	fmt.Printf("💡 Full trace: diane agent trace <runID>\n")
 }
 
-// ─── Helpers ───
-
-func orDefault(s, def string) string {
-	if s == "" {
-		return def
-	}
-	return s
-}
-
-func orDefaultInt(v, def int) int {
-	if v == 0 {
-		return def
-	}
-	return v
-}
-
 func ynStr(v bool) string {
 	if v {
 		return "Y/n"
@@ -1817,28 +1777,6 @@ func splitTrim(s string) []string {
 		}
 	}
 	return out
-}
-
-func strPtr(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
-}
-
-func intPtr(v int) *int {
-	return &v
-}
-
-func fl32Ptr(v float32) *float32 {
-	return &v
-}
-
-func safeDeref[T int | int64](p *T) T {
-	if p == nil {
-		return 0
-	}
-	return *p
 }
 
 // requireMaster checks that the active project is a master node.

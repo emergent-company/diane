@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/Emergent-Comapny/diane/internal/config"
+	"github.com/Emergent-Comapny/diane/internal/x/ptr"
 	sdk "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk"
 	sdkagents "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agentdefinitions"
 )
@@ -1195,19 +1196,19 @@ func seedBuiltInList(ctx context.Context, client *sdk.Client, builtIns []BuiltIn
 func toCreateRequest(ba BuiltInAgent) *sdkagents.CreateAgentDefinitionRequest {
 	r := &sdkagents.CreateAgentDefinitionRequest{
 		Name:           ba.Name,
-		Description:    strPtr(ba.Description),
-		SystemPrompt:   strPtr(ba.SystemPrompt),
-		Visibility:     orDefault(ba.Visibility, "project"),
+		Description:    ptr.Str(ba.Description),
+		SystemPrompt:   ptr.Str(ba.SystemPrompt),
+		Visibility:     ptr.OrDefault(ba.Visibility, "project"),
 		Tools:          ba.Tools,
 		Skills:         ba.Skills,
-		MaxSteps:       intPtr(ba.MaxSteps),
-		DefaultTimeout: intPtr(ba.Timeout),
+		MaxSteps:       ptr.Int(ba.MaxSteps),
+		DefaultTimeout: ptr.Int(ba.Timeout),
 	}
 	if ba.Model != nil {
 		r.Model = &sdkagents.ModelConfig{
 			Name:        ba.Model.Name,
-			Temperature: fl32Ptr(ba.Model.Temperature),
-			MaxTokens:   intPtr(ba.Model.MaxTokens),
+			Temperature: ptr.F32(ba.Model.Temperature),
+			MaxTokens:   ptr.Int(ba.Model.MaxTokens),
 		}
 	}
 	if ba.Delegation != nil {
@@ -1222,19 +1223,19 @@ func toCreateRequest(ba BuiltInAgent) *sdkagents.CreateAgentDefinitionRequest {
 func toUpdateRequest(ba BuiltInAgent) *sdkagents.UpdateAgentDefinitionRequest {
 	r := &sdkagents.UpdateAgentDefinitionRequest{
 		Name:           &ba.Name,
-		Description:    strPtr(ba.Description),
-		SystemPrompt:   strPtr(ba.SystemPrompt),
-		Visibility:     strPtr(orDefault(ba.Visibility, "project")),
+		Description:    ptr.Str(ba.Description),
+		SystemPrompt:   ptr.Str(ba.SystemPrompt),
+		Visibility:     ptr.Str(ptr.OrDefault(ba.Visibility, "project")),
 		Tools:          ba.Tools,
 		Skills:         ba.Skills,
-		MaxSteps:       intPtr(ba.MaxSteps),
-		DefaultTimeout: intPtr(ba.Timeout),
+		MaxSteps:       ptr.Int(ba.MaxSteps),
+		DefaultTimeout: ptr.Int(ba.Timeout),
 	}
 	if ba.Model != nil {
 		r.Model = &sdkagents.ModelConfig{
 			Name:        ba.Model.Name,
-			Temperature: fl32Ptr(ba.Model.Temperature),
-			MaxTokens:   intPtr(ba.Model.MaxTokens),
+			Temperature: ptr.F32(ba.Model.Temperature),
+			MaxTokens:   ptr.Int(ba.Model.MaxTokens),
 		}
 	}
 	if ba.Delegation != nil {
@@ -1244,26 +1245,4 @@ func toUpdateRequest(ba BuiltInAgent) *sdkagents.UpdateAgentDefinitionRequest {
 		r.Config["delegation"] = ba.Delegation
 	}
 	return r
-}
-
-func strPtr(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
-}
-
-func intPtr(v int) *int {
-	return &v
-}
-
-func fl32Ptr(v float32) *float32 {
-	return &v
-}
-
-func orDefault(s, def string) string {
-	if s == "" {
-		return def
-	}
-	return s
 }

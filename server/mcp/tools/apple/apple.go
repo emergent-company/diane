@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/Emergent-Comapny/diane/mcp/tools"
 )
 
 // --- Helper Functions (embedded from SDK) ---
@@ -112,12 +114,8 @@ func stringProperty(description string) map[string]interface{} {
 
 // --- Tool Definition ---
 
-// Tool represents an MCP tool definition
-type Tool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"inputSchema"`
-}
+// Tool is a type alias for the shared tools.Tool type
+type Tool = tools.Tool
 
 // Provider implements ToolProvider for Apple services
 type Provider struct {
@@ -326,18 +324,12 @@ func (p *Provider) Tools() []Tool {
 
 // HasTool checks if a tool name belongs to this provider
 func (p *Provider) HasTool(name string) bool {
-	switch name {
-	case "apple_list_reminders", "apple_add_reminder",
-		"apple_search_contacts", "apple_list_all_contacts",
-		"apple_list_calendars", "apple_list_events", "apple_create_event",
-		"apple_list_notes", "apple_create_note",
-		"apple_list_inbox", "apple_send_email",
-		"apple_send_imessage", "apple_list_conversations",
-		"apple_show_notification":
-		return true
-	default:
-		return false
+	for _, t := range p.Tools() {
+		if t.Name == name {
+			return true
+		}
 	}
+	return false
 }
 
 // Call executes a tool by name

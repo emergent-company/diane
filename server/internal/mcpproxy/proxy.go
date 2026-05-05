@@ -95,9 +95,21 @@ func NewProxy(servers []ServerConfig) (*Proxy, error) {
 	return proxy, nil
 }
 
-// startClient starts an MCP client
+// startClient starts an MCP client for any supported type.
+// It handles I/O (subprocess startup, HTTP handshake) before acquiring the lock
+// to add the client to the map, so callers do not need to hold the lock.
 func (p *Proxy) startClient(config ServerConfig) error {
-	client, err := NewMCPClient(config.Name, config.Command, config.Args, config.Env, config.Timeout)
+	var client Client
+	var err error
+
+	switch config.Type {
+	case "stdio":
+		client, err = NewMCPClient(config.Name, config.Command, config.Args, config.Env, config.Timeout)
+	case "http", "streamable-http", "sse":
+		client, err = NewHTTPMCPClient(config.Name, config.URL, config.Headers, config.OAuth, config.Timeout)
+	default:
+		return fmt.Errorf("unknown MCP server type: %s", config.Type)
+	}
 	if err != nil {
 		return err
 	}
@@ -105,6 +117,11 @@ func (p *Proxy) startClient(config ServerConfig) error {
 	p.mu.Lock()
 	p.clients[config.Name] = client
 	p.mu.Unlock()
+
+	// Start monitoring this client's notifications (only if it supports them)
+	if client.NotificationChan() != nil {
+		go p.monitorClient(config.Name, client)
+	}
 
 	log.Printf("Started MCP server: %s", config.Name)
 	return nil
@@ -209,39 +226,51 @@ func (p *Proxy) NotificationChan() <-chan string {
 func (p *Proxy) Reload(servers []ServerConfig) error {
 	log.Printf("Reloading MCP configuration with %d servers", len(servers))
 
+	// Phase 1: Under lock, compute diff and stop removed servers
+	var toStart []ServerConfig
+
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	// Build map of new enabled servers
-	newServers := make(map[string]ServerConfig)
-	for _, s := range servers {
-		if !s.Enabled {
-			continue
-		}
-		switch s.Type {
-		case "stdio", "http", "streamable-http", "sse":
-			newServers[s.Name] = s
-		default:
-			log.Printf("Unknown MCP server type in reload: %s for server %s", s.Type, s.Name)
-		}
-	}
-
-	// Stop removed servers
-	for name, client := range p.clients {
-		if _, exists := newServers[name]; !exists {
-			log.Printf("Stopping removed MCP server: %s", name)
-			client.Close()
-			delete(p.clients, name)
-		}
-	}
-
-	// Start new servers
-	for name, serverConfig := range newServers {
-		if _, exists := p.clients[name]; !exists {
-			log.Printf("Starting new MCP server: %s", name)
-			if err := p.startClientUnlocked(serverConfig); err != nil {
-				log.Printf("Failed to start %s: %v", name, err)
+	{
+		// Build map of new enabled servers
+		newServers := make(map[string]ServerConfig)
+		for _, s := range servers {
+			if !s.Enabled {
+				continue
 			}
+			switch s.Type {
+			case "stdio", "http", "streamable-http", "sse":
+				newServers[s.Name] = s
+			default:
+				log.Printf("Unknown MCP server type in reload: %s for server %s", s.Type, s.Name)
+			}
+		}
+
+		// Stop removed servers
+		for name, client := range p.clients {
+			if _, exists := newServers[name]; !exists {
+				log.Printf("Stopping removed MCP server: %s", name)
+				client.Close()
+				delete(p.clients, name)
+			}
+		}
+
+		// Collect new servers to start (I/O happens outside lock)
+		for name, sc := range newServers {
+			if _, exists := p.clients[name]; !exists {
+				toStart = append(toStart, sc)
+			}
+		}
+	}
+	p.mu.Unlock()
+
+	// Phase 2: Start new servers (I/O) without holding the lock.
+	// Each call to startClient briefly re-acquires the lock only to add
+	// the client to the map, so tool calls and listings are not blocked
+	// during slow server initialization (subprocess startup, HTTP handshake).
+	for _, sc := range toStart {
+		log.Printf("Starting new MCP server: %s", sc.Name)
+		if err := p.startClient(sc); err != nil {
+			log.Printf("Failed to start %s: %v", sc.Name, err)
 		}
 	}
 

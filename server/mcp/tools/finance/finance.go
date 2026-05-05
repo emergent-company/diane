@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Emergent-Comapny/diane/mcp/tools"
 )
 
 // --- Configuration ---
@@ -274,12 +276,8 @@ func runActualCLI(command string, args ...string) (interface{}, error) {
 
 // --- Tool Definition ---
 
-// Tool represents an MCP tool definition
-type Tool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"inputSchema"`
-}
+// Tool is a type alias for the shared tools.Tool type
+type Tool = tools.Tool
 
 // Provider implements ToolProvider for finance tools
 type Provider struct {

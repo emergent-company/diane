@@ -98,15 +98,11 @@ func upsertNodeConfigInGraph(pc *config.ProjectConfig, instanceID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	bridge, err := memory.New(memory.Config{
-		ServerURL:         pc.ServerURL,
-		APIKey:            pc.Token,
-		ProjectID:         pc.ProjectID,
-		OrgID:             pc.OrgID,
-		HTTPClientTimeout: 10 * time.Second,
+	bridge := memory.NewBridgeFromConfig(func() (string, string, string, string) {
+		return pc.ServerURL, pc.Token, pc.ProjectID, pc.OrgID
 	})
-	if err != nil {
-		log.Printf("[mcp-relay] Warning: cannot create bridge for node config: %v", err)
+	if bridge == nil {
+		log.Printf("[mcp-relay] Warning: cannot create bridge for node config")
 		return
 	}
 	defer bridge.Close()
@@ -163,26 +159,25 @@ func nodeConfigFromPC(pc *config.ProjectConfig, instanceID string) *memory.NodeC
 // startNodeHeartbeat periodically re-upserts the node config to keep last_seen fresh.
 // Runs until ctx is cancelled.
 func startNodeHeartbeat(ctx context.Context, pc *config.ProjectConfig, instanceID string, relayActive, botActive bool) {
+	// Create a shared bridge for both initial registration and heartbeat loop
+	bridge := memory.NewBridgeFromConfig(func() (string, string, string, string) {
+		return pc.ServerURL, pc.Token, pc.ProjectID, pc.OrgID
+	})
+	if bridge == nil {
+		log.Printf("[node] Warning: cannot create bridge for node heartbeat")
+		return
+	}
+
 	// Initial registration with correct status
 	ctx2, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	bridge, err := memory.New(memory.Config{
-		ServerURL:         pc.ServerURL,
-		APIKey:            pc.Token,
-		ProjectID:         pc.ProjectID,
-		OrgID:             pc.OrgID,
-		HTTPClientTimeout: 10 * time.Second,
-	})
-	if err == nil {
-		nc := nodeConfigFromPC(pc, instanceID)
-		nc.RelayActive = relayActive
-		nc.BotActive = botActive
-		nc.LastSeen = time.Now().UTC().Format(time.RFC3339)
-		if _, err := bridge.UpsertNodeConfig(ctx2, nc); err != nil {
-			log.Printf("[node] Initial registration failed: %v", err)
-		} else {
-			log.Printf("[node] Registered (instance=%s, mode=%s, relay=%v, bot=%v)", instanceID, nc.Mode, relayActive, botActive)
-		}
-		bridge.Close()
+	nc := nodeConfigFromPC(pc, instanceID)
+	nc.RelayActive = relayActive
+	nc.BotActive = botActive
+	nc.LastSeen = time.Now().UTC().Format(time.RFC3339)
+	if _, err := bridge.UpsertNodeConfig(ctx2, nc); err != nil {
+		log.Printf("[node] Initial registration failed: %v", err)
+	} else {
+		log.Printf("[node] Registered (instance=%s, mode=%s, relay=%v, bot=%v)", instanceID, nc.Mode, relayActive, botActive)
 	}
 	cancel()
 
@@ -192,21 +187,10 @@ func startNodeHeartbeat(ctx context.Context, pc *config.ProjectConfig, instanceI
 	for {
 		select {
 		case <-ctx.Done():
+			bridge.Close()
 			return
 		case <-ticker.C:
 			ctx2, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			bridge, err := memory.New(memory.Config{
-				ServerURL:         pc.ServerURL,
-				APIKey:            pc.Token,
-				ProjectID:         pc.ProjectID,
-				OrgID:             pc.OrgID,
-				HTTPClientTimeout: 10 * time.Second,
-			})
-			if err != nil {
-				cancel()
-				continue
-			}
-
 			nc := nodeConfigFromPC(pc, instanceID)
 			nc.RelayActive = relayActive
 			nc.BotActive = botActive
@@ -215,7 +199,6 @@ func startNodeHeartbeat(ctx context.Context, pc *config.ProjectConfig, instanceI
 			if _, err := bridge.UpsertNodeConfig(ctx2, nc); err != nil {
 				log.Printf("[node] Heartbeat: failed to update node config: %v", err)
 			}
-			bridge.Close()
 			cancel()
 		}
 	}
@@ -545,26 +528,13 @@ func (s *MCPSession) disconnectWS() {
 		s.wsConn = nil
 	}
 }
-
+// sendWS sends a message over the WebSocket connection.
 func (s *MCPSession) sendWS(msg json.RawMessage) {
 	s.wsMutex.Lock()
 	defer s.wsMutex.Unlock()
 	if s.wsConn != nil {
 		if err := s.wsConn.WriteMessage(websocket.TextMessage, msg); err != nil {
 			log.Printf("[mcp-relay] WS write error: %v", err)
-		}
-	}
-}
-
-// reloadFromGraph syncs MCP proxy config from the graph and reloads the proxy.
-func (s *MCPSession) reloadFromGraph() {
-	servers := syncConfigFromGraph(s.cfg.ServerURL, s.cfg.ProjectToken, s.cfg.ProjectID, s.cfg.InstanceID)
-	if s.proxy != nil && servers != nil {
-		if err := s.proxy.Reload(servers); err != nil {
-			log.Printf("[mcp-relay] Config reload failed: %v", err)
-		} else {
-			log.Printf("[mcp-relay] MCP config reloaded successfully")
-			s.sendRegister()
 		}
 	}
 }
@@ -594,21 +564,68 @@ type scoredConfig struct {
 	score   int // higher = more specific match
 }
 
-// syncConfigFromGraph pulls MCP proxy config and secrets from the MP graph.
-// Returns the merged server configs, or nil if none were found.
-func syncConfigFromGraph(serverURL, token, projectID, instanceID string) []mcpproxy.ServerConfig {
-	// Try memory CLI first (works on master where it's installed)
-	memoryCLI := findMemoryCLI()
-	if memoryCLI != "" {
-		return syncConfigFromGraphViaCLI(memoryCLI, serverURL, token, projectID, instanceID)
-	}
-
-	// Fall back to SDK bridge (works everywhere the relay can connect to MP)
-	return syncConfigFromGraphViaSDK(serverURL, token, projectID, instanceID)
+// propertySource provides access to properties of a graph object,
+// abstracting over both CLI (map[string]interface{}) and SDK (map[string]any) sources.
+type propertySource interface {
+	getString(key string) string
+	getInt(key string) int
 }
 
-// syncConfigFromGraphViaCLI uses the memory CLI to sync MCP config and secrets.
-func syncConfigFromGraphViaCLI(memoryCLI, serverURL, token, projectID, instanceID string) []mcpproxy.ServerConfig {
+// cliPropertySource wraps a CLI graph object (map[string]interface{}).
+type cliPropertySource struct {
+	obj map[string]interface{}
+}
+
+func (s cliPropertySource) getString(key string) string {
+	props, _ := s.obj["properties"].(map[string]interface{})
+	if props == nil {
+		return ""
+	}
+	v, _ := props[key].(string)
+	return v
+}
+
+func (s cliPropertySource) getInt(key string) int {
+	props, _ := s.obj["properties"].(map[string]interface{})
+	if props == nil {
+		return 0
+	}
+	v, _ := props[key].(float64)
+	return int(v)
+}
+
+// sdkPropertySource wraps SDK graph object properties (map[string]any).
+type sdkPropertySource struct {
+	props map[string]any
+}
+
+func (s sdkPropertySource) getString(key string) string {
+	if v, ok := s.props[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+func (s sdkPropertySource) getInt(key string) int {
+	if v, ok := s.props[key]; ok {
+		switch n := v.(type) {
+		case int:
+			return n
+		case float64:
+			return int(n)
+		case json.Number:
+			i, _ := n.Int64()
+			return int(i)
+		}
+	}
+	return 0
+}
+
+// syncConfigs is the shared pipeline for syncing MCP config and secrets from the graph.
+// It accepts a pluggable query function that returns propertySource objects for a given graph type.
+func syncConfigs(instanceID string, queryObjects func(objectType string) ([]propertySource, error)) []mcpproxy.ServerConfig {
 	dianeDir := filepath.Join(os.Getenv("HOME"), ".diane")
 	os.MkdirAll(dianeDir, 0755)
 	os.MkdirAll(filepath.Join(dianeDir, "secrets"), 0755)
@@ -616,16 +633,15 @@ func syncConfigFromGraphViaCLI(memoryCLI, serverURL, token, projectID, instanceI
 	var servers []mcpproxy.ServerConfig
 
 	// ── Query MCPProxyConfig objects ──
-	configs, err := queryGraphObjects(memoryCLI, serverURL, token, projectID, "MCPProxyConfig")
+	configs, err := queryObjects("MCPProxyConfig")
 	if err != nil {
 		log.Printf("[mcp-relay] Failed to query MCPProxyConfig: %v", err)
 	} else {
-		// Match by scope: collect all configs that apply to this instance
 		var matched []scoredConfig
 		for _, obj := range configs {
-			scope := getPropString(obj, "scope")
-			cfgStr := getPropString(obj, "config")
-			ver := getPropInt(obj, "version")
+			scope := obj.getString("scope")
+			cfgStr := obj.getString("config")
+			ver := obj.getInt("version")
 			score := scopeMatchScore(scope, instanceID)
 			if score > 0 && cfgStr != "" {
 				matched = append(matched, scoredConfig{config: cfgStr, version: ver, score: score})
@@ -641,18 +657,17 @@ func syncConfigFromGraphViaCLI(memoryCLI, serverURL, token, projectID, instanceI
 	}
 
 	// ── Query MCPSecret objects ──
-	secrets, err := queryGraphObjects(memoryCLI, serverURL, token, projectID, "MCPSecret")
+	secrets, err := queryObjects("MCPSecret")
 	if err != nil {
 		log.Printf("[mcp-relay] Failed to query MCPSecret: %v", err)
 	} else {
 		written := 0
 		for _, obj := range secrets {
-			scope := getPropString(obj, "scope")
-			name := getPropString(obj, "name")
-			value := getPropString(obj, "value")
+			scope := obj.getString("scope")
+			name := obj.getString("name")
+			value := obj.getString("value")
 			if scopeMatchScore(scope, instanceID) > 0 && name != "" && value != "" {
 				secretPath := filepath.Join(dianeDir, "secrets", name)
-				// If filename doesn't end in .json, add it
 				if !strings.HasSuffix(name, ".json") && !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
 					secretPath += ".json"
 				}
@@ -671,13 +686,38 @@ func syncConfigFromGraphViaCLI(memoryCLI, serverURL, token, projectID, instanceI
 	return servers
 }
 
+// syncConfigFromGraph pulls MCP proxy config and secrets from the MP graph.
+// Returns the merged server configs, or nil if none were found.
+func syncConfigFromGraph(serverURL, token, projectID, instanceID string) []mcpproxy.ServerConfig {
+	// Try memory CLI first (works on master where it's installed)
+	memoryCLI := findMemoryCLI()
+	if memoryCLI != "" {
+		return syncConfigFromGraphViaCLI(memoryCLI, serverURL, token, projectID, instanceID)
+	}
+
+	// Fall back to SDK bridge (works everywhere the relay can connect to MP)
+	return syncConfigFromGraphViaSDK(serverURL, token, projectID, instanceID)
+}
+
+// syncConfigFromGraphViaCLI uses the memory CLI to sync MCP config and secrets.
+func syncConfigFromGraphViaCLI(memoryCLI, serverURL, token, projectID, instanceID string) []mcpproxy.ServerConfig {
+	queryObjects := func(objectType string) ([]propertySource, error) {
+		objs, err := queryGraphObjects(memoryCLI, serverURL, token, projectID, objectType)
+		if err != nil {
+			return nil, err
+		}
+		sources := make([]propertySource, len(objs))
+		for i, obj := range objs {
+			sources[i] = cliPropertySource{obj: obj}
+		}
+		return sources, nil
+	}
+	return syncConfigs(instanceID, queryObjects)
+}
+
 // syncConfigFromGraphViaSDK uses the SDK bridge to sync MCP config and secrets.
 // This works without the memory CLI installed.
 func syncConfigFromGraphViaSDK(serverURL, token, projectID, instanceID string) []mcpproxy.ServerConfig {
-	dianeDir := filepath.Join(os.Getenv("HOME"), ".diane")
-	os.MkdirAll(dianeDir, 0755)
-	os.MkdirAll(filepath.Join(dianeDir, "secrets"), 0755)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -691,112 +731,39 @@ func syncConfigFromGraphViaSDK(serverURL, token, projectID, instanceID string) [
 		}
 	}
 
-	bridge, err := memory.New(memory.Config{
-		ServerURL:         serverURL,
-		APIKey:            token,
-		ProjectID:         projectID,
-		OrgID:             orgID,
-		HTTPClientTimeout: 15 * time.Second,
+	bridge := memory.NewBridgeFromConfig(func() (string, string, string, string) {
+		return serverURL, token, projectID, orgID
 	})
-	if err != nil {
-		log.Printf("[mcp-relay] Failed to create bridge for graph sync: %v", err)
+	if bridge == nil {
+		log.Printf("[mcp-relay] Failed to create bridge for graph sync")
 		return nil
 	}
 	defer bridge.Close()
 
 	client := bridge.Client()
 
-	var servers []mcpproxy.ServerConfig
-
-	// ── Query MCPProxyConfig objects ──
-	configResp, err := client.Graph.ListObjects(ctx, &graph.ListObjectsOptions{
-		Type:  "MCPProxyConfig",
-		Limit: 100,
-	})
-	if err != nil {
-		log.Printf("[mcp-relay] Failed to query MCPProxyConfig via SDK: %v", err)
-	} else if configResp != nil {
-		var matched []scoredConfig
-		for _, obj := range configResp.Items {
+	queryObjects := func(objectType string) ([]propertySource, error) {
+		resp, err := client.Graph.ListObjects(ctx, &graph.ListObjectsOptions{
+			Type:  objectType,
+			Limit: 100,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if resp == nil {
+			return nil, nil
+		}
+		sources := make([]propertySource, 0, len(resp.Items))
+		for _, obj := range resp.Items {
 			if obj == nil || obj.Properties == nil {
 				continue
 			}
-			scope := getPropAnyString(obj.Properties, "scope")
-			cfgStr := getPropAnyString(obj.Properties, "config")
-			ver := getPropAnyInt(obj.Properties, "version")
-			score := scopeMatchScore(scope, instanceID)
-			if score > 0 && cfgStr != "" {
-				matched = append(matched, scoredConfig{config: cfgStr, version: ver, score: score})
-			}
+			sources = append(sources, sdkPropertySource{props: obj.Properties})
 		}
-		if len(matched) > 0 {
-			servers = mergeProxyConfigs(matched)
-			log.Printf("[mcp-relay] Synced MCP proxy config via SDK (%d matching, %d servers)", len(matched), len(servers))
-		} else {
-			log.Printf("[mcp-relay] No MCPProxyConfig objects found via SDK for scope matching '%s'", instanceID)
-		}
+		return sources, nil
 	}
 
-	// ── Query MCPSecret objects ──
-	secretResp, err := client.Graph.ListObjects(ctx, &graph.ListObjectsOptions{
-		Type:  "MCPSecret",
-		Limit: 100,
-	})
-	if err != nil {
-		log.Printf("[mcp-relay] Failed to query MCPSecret via SDK: %v", err)
-	} else if secretResp != nil {
-		written := 0
-		for _, obj := range secretResp.Items {
-			if obj == nil || obj.Properties == nil {
-				continue
-			}
-			scope := getPropAnyString(obj.Properties, "scope")
-			name := getPropAnyString(obj.Properties, "name")
-			value := getPropAnyString(obj.Properties, "value")
-			if scopeMatchScore(scope, instanceID) > 0 && name != "" && value != "" {
-				secretPath := filepath.Join(dianeDir, "secrets", name)
-				if !strings.HasSuffix(name, ".json") && !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
-					secretPath += ".json"
-				}
-				if err := os.WriteFile(secretPath, []byte(value), 0600); err != nil {
-					log.Printf("[mcp-relay] Failed to write secret %s: %v", name, err)
-				} else {
-					written++
-				}
-			}
-		}
-		if written > 0 {
-			log.Printf("[mcp-relay] Synced %d secrets from graph via SDK to %s/secrets/", written, dianeDir)
-		}
-	}
-
-	return servers
-}
-
-// getPropAnyString extracts a string from a map[string]any (the SDK type).
-func getPropAnyString(props map[string]any, key string) string {
-	if v, ok := props[key]; ok {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return ""
-}
-
-// getPropAnyInt extracts an int from a map[string]any.
-func getPropAnyInt(props map[string]any, key string) int {
-	if v, ok := props[key]; ok {
-		switch n := v.(type) {
-		case int:
-			return n
-		case float64:
-			return int(n)
-		case json.Number:
-			i, _ := n.Int64()
-			return int(i)
-		}
-	}
-	return 0
+	return syncConfigs(instanceID, queryObjects)
 }
 
 // findMemoryCLI locates the memory CLI binary.
@@ -865,7 +832,7 @@ func queryGraphObjects(memoryCLI, serverURL, token, projectID, objectType string
 }
 
 // scopeMatchScore returns how well a scope matches an instance ID.
-// 3 = exact match, 2 = scope starts with instance prefix, 1 = scope=all, 0 = no match
+// 3 = exact match, 2 = wildcard prefix match (scope ends with "*"), 1 = scope="all", 0 = no match
 func scopeMatchScore(scope, instanceID string) int {
 	if scope == "" || scope == "all" {
 		return 1
@@ -875,42 +842,19 @@ func scopeMatchScore(scope, instanceID string) int {
 	if strings.HasPrefix(scope, "instance:") {
 		scopeID = strings.TrimPrefix(scope, "instance:")
 	}
+	// Explicit wildcard: trailing "*" means prefix match
+	if strings.HasSuffix(scopeID, "*") {
+		prefix := strings.TrimSuffix(scopeID, "*")
+		if prefix == "" || prefix == instanceID || strings.HasPrefix(instanceID, prefix) {
+			return 2
+		}
+		return 0
+	}
+	// Otherwise exact match only
 	if scopeID == instanceID {
 		return 3
 	}
-	if strings.HasPrefix(instanceID, scopeID) || strings.HasPrefix(scopeID, instanceID) {
-		return 2
-	}
 	return 0
-}
-
-// getPropString extracts a string property from a graph object.
-func getPropString(obj map[string]interface{}, key string) string {
-	props, _ := obj["properties"].(map[string]interface{})
-	if props == nil {
-		return ""
-	}
-	v, _ := props[key].(string)
-	return v
-}
-
-// getPropInt extracts an integer property from a graph object.
-func getPropInt(obj map[string]interface{}, key string) int {
-	props, _ := obj["properties"].(map[string]interface{})
-	if props == nil {
-		return 0
-	}
-	v, _ := props[key].(float64)
-	return int(v)
-}
-
-// prefixTools prepends a prefix to the "name" field of each tool in place.
-func prefixTools(tools []map[string]interface{}, prefix string) {
-	for _, tool := range tools {
-		if name, ok := tool["name"].(string); ok {
-			tool["name"] = prefix + name
-		}
-	}
 }
 
 // mergeProxyConfigs merges multiple scored MCP proxy configs into one.
