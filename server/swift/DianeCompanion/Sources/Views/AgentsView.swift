@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Agents view — lists agent definitions from the Memory Platform,
-/// with full detail panel showing tools, skills, model config, and runtime settings.
-/// Supports editing overrides for built-in agents, creating/cloning/deleting agents.
+/// Agents view — lists agent definitions from the Memory Platform.
+/// The detail panel is a live form: edit fields directly, save persists
+/// to the right backend (override config for built-in, direct PATCH for user-defined).
 struct AgentsView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var dianeAPI: DianeAPIClient
@@ -13,12 +13,28 @@ struct AgentsView: View {
     @State private var selectedAgent: AgentDef? = nil
     @State private var agentDetail: AgentDetail? = nil
     @State private var overrideConfig: AgentOverrideConfig? = nil
+
+    // Editable form state
+    @State private var editSystemPrompt: String = ""
+    @State private var editSkills: String = ""
+    @State private var editModelName: String = ""
+    @State private var editModelProvider: String = ""
+    @State private var editTemperature: String = ""
+    @State private var editMaxTokens: String = ""
+    @State private var editMaxSteps: String = ""
+    @State private var editTimeout: String = ""
+    @State private var editVisibility: String = "project"
+    @State private var editDisabled: Bool = false
+    @State private var editSandboxEnabled: Bool = false
+    @State private var editHasChanges: Bool = false
+
     @State private var isLoading = false
     @State private var isLoadingDetail = false
-    @State private var error: String? = nil
+    @State private var isSaving = false
+    @State private var error: String?
+    @State private var saveStatus: String?
 
     // Sheets
-    @State private var showOverrideEditor = false
     @State private var showCreateSheet = false
     @State private var showCloneSheet = false
     @State private var cloneName: String = ""
@@ -32,20 +48,25 @@ struct AgentsView: View {
         "diane-dreamer", "diane-skill-monitor"
     ]
 
+    private var isBuiltIn: Bool {
+        guard let agent = selectedAgent else { return false }
+        return builtInAgentNames.contains(agent.name)
+    }
+
     var body: some View {
         SplitListDetailView(
             emptyTitle: "Select an Agent",
             emptyIcon: "brain.head.profile",
-            emptyDescription: "Select an agent definition to view its configuration.",
+            emptyDescription: "Select an agent to view and edit its configuration.",
             listContent: { agentsList },
             detailContent: {
-                if let agent = selectedAgent {
-                    agentDetailPanel(agent)
+                if let _ = selectedAgent {
+                    agentEditorPanel
                 } else {
                     EmptyStateView(
                         title: "Select an Agent",
                         icon: "brain.head.profile",
-                        description: "Select an agent definition to view its configuration."
+                        description: "Select an agent to view and edit its configuration."
                     )
                 }
             }
@@ -57,27 +78,6 @@ struct AgentsView: View {
             }
         }
         .task { await load() }
-        .sheet(isPresented: $showOverrideEditor) {
-            if let agent = selectedAgent {
-                AgentOverrideEditorView(
-                    agentName: agent.name,
-                    agentDetail: agentDetail,
-                    existingOverride: overrideConfig,
-                    onSave: { oc in
-                        try? await dianeAPI.saveAgentOverride(name: agent.name, override: oc)
-                        _ = try? await dianeAPI.seedAgents()
-                        await loadDetail()
-                    },
-                    onDelete: {
-                        try? await dianeAPI.deleteAgentOverride(name: agent.name)
-                        _ = try? await dianeAPI.seedAgents()
-                        overrideConfig = nil
-                        await loadDetail()
-                    },
-                    onClose: { showOverrideEditor = false }
-                )
-            }
-        }
         .sheet(isPresented: $showCreateSheet) {
             AgentCreateView(
                 onCreate: { req in
@@ -125,7 +125,7 @@ struct AgentsView: View {
         } message: {
             if let agent = selectedAgent {
                 if builtInAgentNames.contains(agent.name) {
-                    Text("Disable built-in agent \"\(agent.name)\"? It will be skipped during seeding. Re-enable by removing the override.")
+                    Text("Disable built-in agent \"\(agent.name)\"? It will be skipped during seeding.")
                 } else {
                     Text("Delete agent \"\(agent.name)\"? This cannot be undone.")
                 }
@@ -157,9 +157,6 @@ struct AgentsView: View {
                 List(agents, selection: $selectedAgent) { agent in
                     agentRow(agent)
                         .tag(agent)
-                        .onChange(of: selectedAgent?.id) { _ in
-                            Task { await loadDetail() }
-                        }
                 }
                 .listStyle(.plain)
             }
@@ -261,307 +258,383 @@ struct AgentsView: View {
         }
     }
 
-    // MARK: - Agent Detail Panel
+    // MARK: - Agent Editor (Inline Form)
 
     @ViewBuilder
-    private func agentDetailPanel(_ agent: AgentDef) -> some View {
+    private var agentEditorPanel: some View {
         if isLoadingDetail {
             VStack {
                 Spacer()
                 LoadingStateView(message: "Loading agent details…")
                 Spacer()
             }
-        } else if let detail = agentDetail {
-            detailContent(detail)
         } else {
-            fallbackDetail(agent)
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        editorForm
+                    }
+                }
+
+                Divider()
+
+                // Action bar: save + clone + delete
+                HStack(spacing: 8) {
+                    if isSaving {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                            .frame(width: 16)
+                    }
+                    if let status = saveStatus {
+                        Text(status)
+                            .font(.caption)
+                            .foregroundStyle(status.contains("✅") ? .green : .secondary)
+                    }
+                    if editHasChanges {
+                        Button("Revert") {
+                            populateForm(from: agentDetail, override: overrideConfig)
+                        }
+                        .buttonStyle(.borderless)
+                    }
+
+                    Spacer()
+
+                    if editHasChanges || true {
+                        Button("Save Changes") {
+                            Task { await saveChanges() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(isSaving)
+                    }
+
+                    Button("Clone") {
+                        if let agent = selectedAgent {
+                            cloneName = agent.name + "-copy"
+                            showCloneSheet = true
+                        }
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("Delete", role: .destructive) {
+                        showDeleteConfirm = true
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+            }
         }
     }
 
     @ViewBuilder
-    private func detailContent(_ detail: AgentDetail) -> some View {
-        VStack(spacing: 0) {
-            List {
-                // ── Identity ──
-                Section("Agent") {
-                    HStack {
-                        Text(detail.name)
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                        Spacer()
-                        if detail.isDefault {
-                            Text("default")
-                                .font(.caption)
-                                .fontWeight(.medium)
-                                .badgeStyle(color: .blue)
-                        }
-                        if builtInAgentNames.contains(detail.name) {
-                            Text("built-in")
-                                .font(.caption)
-                                .fontWeight(.medium)
-                                .badgeStyle(color: .secondary)
-                        }
-                        flowBadge(detail.flowType)
+    private var editorForm: some View {
+        if let agent = selectedAgent {
+            // Header
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(agent.name)
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                    Spacer()
+                    if agent.isDefault {
+                        Text("default")
+                            .font(.caption).fontWeight(.medium)
+                            .badgeStyle(color: .blue)
                     }
-
-                    if let desc = detail.description, !desc.isEmpty {
-                        Text(desc)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                    if isBuiltIn {
+                        Text("built-in")
+                            .font(.caption).fontWeight(.medium)
+                            .badgeStyle(color: .secondary)
                     }
-
-                    detailRow(label: "Visibility", value: detail.visibility)
-                    if let dm = detail.dispatchMode, !dm.isEmpty {
-                        detailRow(label: "Dispatch", value: dm)
+                    if overrideConfig?.disabled == true {
+                        Text("DISABLED")
+                            .font(.caption).fontWeight(.bold)
+                            .foregroundStyle(.red)
                     }
-
-                    if let oc = overrideConfig {
-                        HStack {
-                            Text("Overrides Active")
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                            if oc.disabled == true {
-                                Text("DISABLED")
-                                    .font(.caption)
-                                    .fontWeight(.bold)
-                                    .foregroundStyle(.red)
-                            }
-                        }
-                    }
+                    flowBadge(agent.flowType)
                 }
 
-                // ── Runtime Limits ──
-                Section("Runtime") {
-                    if let ms = detail.maxSteps {
-                        detailRow(label: "Max Steps", value: "\(ms)")
-                    }
-                    if let to = detail.defaultTimeout {
-                        detailRow(label: "Timeout", value: "\(to)s")
-                    }
+                if let desc = agent.description, !desc.isEmpty {
+                    Text(desc)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
 
-                // ── Model ──
-                Section("Model") {
-                    if let model = detail.model {
-                        if let name = model.name, !name.isEmpty {
-                            detailRow(label: "Name", value: name)
-                        } else {
-                            Text("Project default")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+            // ── System Prompt ──
+            Section {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("System Prompt")
+                        .font(.caption).foregroundStyle(.secondary)
+                    TextEditor(text: $editSystemPrompt)
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(minHeight: 100)
+                        .border(Color.secondary.opacity(0.3))
+                        .overlay(alignment: .topTrailing) {
+                            Text("\(editSystemPrompt.count) chars")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.tertiary)
+                                .padding(4)
                         }
-                        if let temp = model.temperature {
-                            detailRow(label: "Temperature", value: String(format: "%.2f", temp))
-                        }
-                        if let mt = model.maxTokens {
-                            detailRow(label: "Max Tokens", value: "\(mt)")
-                        }
-                    } else {
-                        Text("Project default (no override)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
                 }
+                .padding(.horizontal)
+                .padding(.vertical, 6)
+            }
 
-                // ── Tools ──
-                Section {
-                    if let tools = detail.tools, !tools.isEmpty {
-                        ForEach(tools, id: \.self) { tool in
-                            HStack(spacing: 6) {
-                                Image(systemName: "wrench.fill")
-                                    .font(.system(size: 9))
-                                    .foregroundStyle(.secondary)
-                                Text(tool)
-                                    .font(.system(.caption, design: .monospaced))
-                            }
-                        }
-                    } else {
-                        Text("No tools configured")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                } header: {
-                    HStack {
-                        Text("Tools")
-                        if detail.toolCount > 0 {
-                            Text("(\(detail.toolCount))")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
+            Divider()
 
-                // ── Skills ──
-                Section {
-                    if let skills = detail.skills, !skills.isEmpty {
-                        ForEach(skills, id: \.self) { skill in
-                            HStack(spacing: 6) {
-                                Image(systemName: "book.fill")
-                                    .font(.system(size: 9))
-                                    .foregroundStyle(.secondary)
-                                Text(skill)
-                                    .font(.system(.caption, design: .monospaced))
-                            }
-                        }
-                    } else {
-                        Text("None")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                } header: {
+            // ── Skills ──
+            Section {
+                VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Text("Skills")
-                        if let s = detail.skills {
-                            Text("(\(s.count))")
-                                .foregroundStyle(.secondary)
-                        }
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text("(comma-separated)")
+                            .font(.caption2).foregroundStyle(.tertiary)
                     }
+                    TextField("skill1, skill2", text: $editSkills)
+                        .textFieldStyle(.roundedBorder)
                 }
-
-                // ── System Prompt ──
-                if let sp = detail.systemPrompt, !sp.isEmpty {
-                    Section("System Prompt (\(sp.count) chars)") {
-                        Text(sp)
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(nil)
-                            .textSelection(.enabled)
-                    }
-                }
-
-                // ── Timestamps ──
-                Section("Timestamps") {
-                    if let created = detail.createdAt {
-                        detailRow(label: "Created", value: DateUtils.formatTimestamp(created))
-                    }
-                    if let updated = detail.updatedAt {
-                        detailRow(label: "Updated", value: DateUtils.formatTimestamp(updated))
-                    }
-                }
+                .padding(.horizontal)
+                .padding(.vertical, 6)
             }
-            .listStyle(.sidebar)
 
-            // ── Action Bar ──
-            VStack(spacing: 0) {
-                Divider()
-                HStack(spacing: 8) {
-                    if builtInAgentNames.contains(detail.name) {
-                        Button(overrideConfig != nil ? "Edit Override" : "Override") {
-                            showOverrideEditor = true
-                        }
-                        .buttonStyle(.bordered)
-                        .help("Override built-in agent configuration via graph config")
-                    } else {
-                        Button("Edit") {
-                            // For user-defined agents — show edit sheet (simplified)
-                            Task {
-                                // Future: build an edit sheet for user-defined agents
+            Divider()
+
+            // ── Tools (read-only display) ──
+            if let tools = agentDetail?.tools, !tools.isEmpty {
+                Section {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Tools (\(tools.count))")
+                            .font(.caption).foregroundStyle(.secondary)
+                        FlowLayout(spacing: 4) {
+                            ForEach(tools, id: \.self) { tool in
+                                Text(tool)
+                                    .font(.system(size: 9, design: .monospaced))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.secondary.opacity(0.1))
+                                    .cornerRadius(4)
                             }
                         }
-                        .buttonStyle(.bordered)
                     }
-
-                    Button("Clone") {
-                        cloneName = detail.name + "-copy"
-                        showCloneSheet = true
-                    }
-                    .buttonStyle(.bordered)
-
-                    Spacer()
-
-                    Button("Delete", role: .destructive) {
-                        showDeleteConfirm = true
-                    }
-                    .buttonStyle(.bordered)
+                    .padding(.horizontal)
+                    .padding(.vertical, 6)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-            }
-        }
-    }
-
-    /// Fallback detail panel using summary-only AgentDef when detail fetch fails.
-    private func fallbackDetail(_ agent: AgentDef) -> some View {
-        VStack(spacing: 0) {
-            List {
-                Section("Agent") {
-                    HStack {
-                        Text(agent.name)
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                        Spacer()
-                        if agent.isDefault {
-                            Text("default")
-                                .font(.caption)
-                                .fontWeight(.medium)
-                                .badgeStyle(color: .blue)
-                        }
-                        if builtInAgentNames.contains(agent.name) {
-                            Text("built-in")
-                                .font(.caption)
-                                .fontWeight(.medium)
-                                .badgeStyle(color: .secondary)
-                        }
-                        flowBadge(agent.flowType)
-                    }
-
-                    if let desc = agent.description, !desc.isEmpty {
-                        Text(desc)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    detailRow(label: "Visibility", value: agent.visibility)
-                    detailRow(label: "Tool Count", value: "\(agent.toolCount)")
-                }
-
-                Section("Timestamps") {
-                    if let created = agent.createdAt {
-                        detailRow(label: "Created", value: DateUtils.formatTimestamp(created))
-                    }
-                    if let updated = agent.updatedAt {
-                        detailRow(label: "Updated", value: DateUtils.formatTimestamp(updated))
-                    }
-                }
-            }
-            .listStyle(.sidebar)
-
-            // Action bar even in fallback
-            VStack(spacing: 0) {
                 Divider()
-                HStack(spacing: 8) {
-                    if builtInAgentNames.contains(agent.name) {
-                        Button(overrideConfig != nil ? "Edit Override" : "Override") {
-                            showOverrideEditor = true
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                    Button("Clone") {
-                        cloneName = agent.name + "-copy"
-                        showCloneSheet = true
-                    }
-                    .buttonStyle(.bordered)
-                    Spacer()
-                    Button("Delete", role: .destructive) {
-                        showDeleteConfirm = true
-                    }
-                    .buttonStyle(.bordered)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
             }
+
+            // ── Model ──
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Model")
+                        .font(.caption).foregroundStyle(.secondary)
+
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Provider").font(.caption2).foregroundStyle(.tertiary)
+                            TextField("deepseek", text: $editModelProvider)
+                                .textFieldStyle(.roundedBorder)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Name").font(.caption2).foregroundStyle(.tertiary)
+                            TextField("deepseek-v4-flash", text: $editModelName)
+                                .textFieldStyle(.roundedBorder)
+                        }
+                    }
+
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Temperature").font(.caption2).foregroundStyle(.tertiary)
+                            TextField("0.7", text: $editTemperature)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 80)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Max Tokens").font(.caption2).foregroundStyle(.tertiary)
+                            TextField("4096", text: $editMaxTokens)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 100)
+                        }
+                        Spacer()
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 6)
+            }
+
+            Divider()
+
+            // ── Runtime Limits ──
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Runtime")
+                        .font(.caption).foregroundStyle(.secondary)
+
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Max Steps").font(.caption2).foregroundStyle(.tertiary)
+                            TextField("50", text: $editMaxSteps)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 80)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Timeout (s)").font(.caption2).foregroundStyle(.tertiary)
+                            TextField("300", text: $editTimeout)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 80)
+                        }
+                        Spacer()
+                    }
+
+                    HStack(spacing: 12) {
+                        Text("Visibility").font(.caption).foregroundStyle(.secondary)
+                        Picker("", selection: $editVisibility) {
+                            Text("project").tag("project")
+                            Text("org").tag("org")
+                            Text("private").tag("private")
+                        }
+                        .labelsHidden()
+                        .frame(width: 120)
+                        Spacer()
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 6)
+            }
+
+            // ── Built-in Only Options ──
+            if isBuiltIn {
+                Divider()
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Override Options")
+                            .font(.caption).foregroundStyle(.secondary)
+
+                        Toggle(isOn: $editDisabled) {
+                            HStack {
+                                Text("Disabled")
+                                Text("(agent won't be seeded)")
+                                    .font(.caption2).foregroundStyle(.tertiary)
+                            }
+                        }
+
+                        Toggle(isOn: $editSandboxEnabled) {
+                            HStack {
+                                Text("Sandbox Enabled")
+                                Text("(isolated execution environment)")
+                                    .font(.caption2).foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 6)
+                }
+            }
+
+            // ── Timestamps ──
+            if let detail = agentDetail {
+                Divider()
+                Section {
+                    HStack(spacing: 16) {
+                        if let created = detail.createdAt {
+                            VStack(alignment: .leading) {
+                                Text("Created").font(.caption2).foregroundStyle(.tertiary)
+                                Text(DateUtils.formatTimestamp(created))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        if let updated = detail.updatedAt {
+                            VStack(alignment: .leading) {
+                                Text("Updated").font(.caption2).foregroundStyle(.tertiary)
+                                Text(DateUtils.formatTimestamp(updated))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 4)
+                }
+            }
+
+            // spacer for bottom padding
+            Color.clear.frame(height: 8)
         }
     }
 
-    private func detailRow(label: String, value: String) -> some View {
-        HStack(alignment: .top) {
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(width: 90, alignment: .leading)
-            Text(value)
-                .font(.system(.caption, design: .monospaced))
-                .textSelection(.enabled)
-            Spacer()
+    // MARK: - Save Logic
+
+    private func saveChanges() async {
+        guard let agent = selectedAgent else { return }
+        isSaving = true
+        saveStatus = nil
+
+        if isBuiltIn {
+            await saveBuiltInOverride(agent)
+        } else {
+            await saveUserDefinedAgent(agent)
+        }
+
+        isSaving = false
+    }
+
+    private func saveBuiltInOverride(_ agent: AgentDef) async {
+        var oc = AgentOverrideConfig(agentName: agent.name)
+
+        // Only include fields that differ from defaults
+        if !editSystemPrompt.isEmpty { oc.systemPrompt = editSystemPrompt }
+        let skillList = parseCommaList(editSkills)
+        if !skillList.isEmpty { oc.skills = skillList }
+        if !editModelProvider.isEmpty { oc.modelProvider = editModelProvider }
+        if !editModelName.isEmpty { oc.modelName = editModelName }
+        if let t = Double(editTemperature), t != 0 { oc.modelTemperature = t }
+        if let mt = Int(editMaxTokens), mt > 0 { oc.modelMaxTokens = mt }
+        if let ms = Int(editMaxSteps), ms > 0 { oc.maxSteps = ms }
+        if let to = Int(editTimeout), to > 0 { oc.timeout = to }
+        if !editVisibility.isEmpty { oc.visibility = editVisibility }
+        oc.sandboxEnabled = editSandboxEnabled
+        if editDisabled { oc.disabled = true }
+
+        do {
+            try await dianeAPI.saveAgentOverride(name: agent.name, override: oc)
+            _ = try? await dianeAPI.seedAgents()
+            saveStatus = "✅ Saved as override"
+            await loadDetail()
+        } catch {
+            saveStatus = "❌ \(error.localizedDescription)"
+        }
+    }
+
+    private func saveUserDefinedAgent(_ agent: AgentDef) async {
+        var changes: [String: Any] = [:]
+
+        if editSystemPrompt != (agentDetail?.systemPrompt ?? "") {
+            changes["system_prompt"] = editSystemPrompt
+        }
+
+        let currentSkills = agentDetail?.skills ?? []
+        let newSkills = parseCommaList(editSkills)
+        if newSkills != currentSkills {
+            changes["skills"] = newSkills
+        }
+
+        if let ms = Int(editMaxSteps), ms > 0 { changes["max_steps"] = ms }
+        if let to = Int(editTimeout), to > 0 { changes["default_timeout"] = to }
+
+        let modelNameVal = editModelName.isEmpty ? NSNull() : editModelName
+        changes["model"] = ["name": modelNameVal]
+
+        changes["visibility"] = editVisibility
+
+        do {
+            try await dianeAPI.updateAgent(name: agent.name, changes: changes)
+            saveStatus = "✅ Saved"
+            await loadDetail()
+        } catch {
+            saveStatus = "❌ \(error.localizedDescription)"
         }
     }
 
@@ -581,22 +654,91 @@ struct AgentsView: View {
     private func loadDetail() async {
         guard let agent = selectedAgent else { return }
         isLoadingDetail = true
-        agentDetail = nil
-        overrideConfig = nil
 
-        // Fetch detail
         do {
             agentDetail = try await dianeAPI.fetchAgentDetail(name: agent.name)
         } catch {
             agentDetail = nil
         }
 
-        // Fetch override (if built-in)
-        if builtInAgentNames.contains(agent.name) {
+        // Fetch override if built-in
+        if isBuiltIn {
             overrideConfig = try? await dianeAPI.fetchAgentOverride(name: agent.name)
+        } else {
+            overrideConfig = nil
         }
 
+        populateForm(from: agentDetail, override: overrideConfig)
+        editHasChanges = false
+        saveStatus = nil
         isLoadingDetail = false
+    }
+
+    private func populateForm(from detail: AgentDetail?, override: AgentOverrideConfig?) {
+        let sp = override?.systemPrompt ?? detail?.systemPrompt ?? ""
+        editSystemPrompt = sp
+
+        let skills = override?.skills ?? detail?.skills ?? []
+        editSkills = skills.joined(separator: ", ")
+
+        editModelProvider = override?.modelProvider ?? ""
+        editModelName = override?.modelName ?? detail?.model?.name ?? ""
+        editTemperature = override.flatMap { $0.modelTemperature.map { String($0) } } ?? ""
+        editMaxTokens = override.flatMap { $0.modelMaxTokens.map { String($0) } } ?? ""
+        editMaxSteps = override.flatMap { $0.maxSteps.map { String($0) } } ?? detail.flatMap { $0.maxSteps.map { String($0) } } ?? ""
+        editTimeout = override.flatMap { $0.timeout.map { String($0) } } ?? detail.flatMap { $0.defaultTimeout.map { String($0) } } ?? ""
+        editVisibility = override?.visibility ?? detail?.visibility ?? "project"
+        editDisabled = override?.disabled ?? false
+        editSandboxEnabled = override?.sandboxEnabled ?? false
+    }
+
+    private func parseCommaList(_ str: String) -> [String] {
+        str.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+}
+
+// MARK: - FlowLayout (simple wrapping layout for tool tags)
+
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 4
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) -> CGSize {
+        let width = proposal.width ?? 0
+        var height: CGFloat = 0
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var maxHeight: CGFloat = 0
+
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x + size.width > width {
+                x = 0
+                y += maxHeight + spacing
+                maxHeight = 0
+            }
+            maxHeight = max(maxHeight, size.height)
+            x += size.width + spacing
+            height = y + maxHeight
+        }
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var maxHeight: CGFloat = 0
+
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x + size.width > bounds.maxX {
+                x = bounds.minX
+                y += maxHeight + spacing
+                maxHeight = 0
+            }
+            view.place(at: CGPoint(x: x, y: y), proposal: .unspecified)
+            maxHeight = max(maxHeight, size.height)
+            x += size.width + spacing
+        }
     }
 }
 
