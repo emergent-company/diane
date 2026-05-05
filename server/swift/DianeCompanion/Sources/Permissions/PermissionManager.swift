@@ -2,7 +2,7 @@ import Foundation
 import EventKit
 import Contacts
 import AppKit
-@preconcurrency import UserNotifications
+import UserNotifications
 @preconcurrency import ApplicationServices
 
 /// Types of macOS permissions the app needs to manage.
@@ -121,16 +121,21 @@ struct PermissionInfo: Identifiable, Sendable {
     var featureStatus: FeatureStatus {
         guard featureEnabled else { return .disabled }
         switch status {
-        case .granted:      return .active
-        case .denied:       return .needsPermission
+        case .granted:       return .active
+        case .denied:        return .needsPermission
         case .notDetermined: return .notDetermined
-        case .restricted:   return .restricted
+        case .restricted:    return .restricted
         }
     }
 }
 
 /// Central permission manager that checks all macOS permissions
 /// and manages app-level feature toggles (persisted to UserDefaults).
+///
+/// macOS permissions work implicitly — the system prompts when an API is first
+/// accessed, not via programmatic "request" calls. This view only shows status
+/// and guides you to System Settings. The actual permission prompt happens
+/// when you use an Apple tool (apple_list_events, apple_send_imessage, etc.).
 @MainActor
 final class PermissionManager: ObservableObject {
 
@@ -139,11 +144,6 @@ final class PermissionManager: ObservableObject {
 
     private let defaults = UserDefaults.standard
     private let togglePrefix = "feature_toggle_"
-
-    /// All features enabled by default — users opt out, not in.
-    private var toggleDefaults: [PermissionType: Bool] {
-        Dictionary(uniqueKeysWithValues: PermissionType.allCases.map { ($0, true) })
-    }
 
     // MARK: - Init / Refresh
 
@@ -185,14 +185,12 @@ final class PermissionManager: ObservableObject {
 
     func isFeatureEnabled(_ type: PermissionType) -> Bool {
         let key = togglePrefix + type.rawValue
-        // If never set, defaults to true (enabled)
         return defaults.object(forKey: key) as? Bool ?? true
     }
 
     func setFeatureEnabled(_ enabled: Bool, for type: PermissionType) {
         let key = togglePrefix + type.rawValue
         defaults.set(enabled, forKey: key)
-        // Update the published permissions array to trigger UI refresh
         if let idx = permissions.firstIndex(where: { $0.type == type }) {
             permissions[idx] = PermissionInfo(
                 type: type,
@@ -215,28 +213,9 @@ final class PermissionManager: ObservableObject {
         case .contacts:
             return mapCNStatus(CNContactStore.authorizationStatus(for: .contacts))
         case .notifications:
-            // Can't check synchronously; assume not determined
-            return .notDetermined
+            return .notDetermined  // checked async via checkNotificationStatus()
         case .automation:
-            // Can't check easily; assume not determined
-            return .notDetermined
-        }
-    }
-
-    func request(_ type: PermissionType) async -> Bool {
-        switch type {
-        case .accessibility:
-            return await requestAccessibility()
-        case .calendar:
-            return await requestCalendar()
-        case .reminders:
-            return await requestReminders()
-        case .contacts:
-            return await requestContacts()
-        case .notifications:
-            return await requestNotifications()
-        case .automation:
-            return await requestAutomation()
+            return .notDetermined  // no programmatic API exists
         }
     }
 
@@ -255,82 +234,6 @@ final class PermissionManager: ObservableObject {
             guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy") else { return }
             NSWorkspace.shared.open(url)
         }
-    }
-
-    // MARK: - Private permission request helpers
-
-    private func requestAccessibility() async -> Bool {
-        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as NSString
-        let options: NSDictionary = [key: true]
-        let trusted = AXIsProcessTrustedWithOptions(options)
-        await asyncRefresh()
-        return trusted
-    }
-
-    private func requestCalendar() async -> Bool {
-        let store = EKEventStore()
-        do {
-            if #available(macOS 14.0, *) {
-                let granted = try await store.requestFullAccessToEvents()
-                await asyncRefresh()
-                return granted
-            } else {
-                let granted = try await store.requestAccess(to: .event)
-                await asyncRefresh()
-                return granted
-            }
-        } catch {
-            logError(error, category: "Permissions")
-            return false
-        }
-    }
-
-    private func requestReminders() async -> Bool {
-        let store = EKEventStore()
-        do {
-            if #available(macOS 14.0, *) {
-                let granted = try await store.requestFullAccessToReminders()
-                await asyncRefresh()
-                return granted
-            } else {
-                let granted = try await store.requestAccess(to: .reminder)
-                await asyncRefresh()
-                return granted
-            }
-        } catch {
-            logError(error, category: "Permissions")
-            return false
-        }
-    }
-
-    private func requestContacts() async -> Bool {
-        let store = CNContactStore()
-        do {
-            let granted = try await store.requestAccess(for: .contacts)
-            await asyncRefresh()
-            return granted
-        } catch {
-            logError(error, category: "Permissions")
-            return false
-        }
-    }
-
-    private func requestNotifications() async -> Bool {
-        do {
-            let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
-            await asyncRefresh()
-            return granted
-        } catch {
-            logError(error, category: "Permissions")
-            return false
-        }
-    }
-
-    private func requestAutomation() async -> Bool {
-        // Automation can't be programmatically requested — open settings instead.
-        // Refresh to show settings link.
-        await asyncRefresh()
-        return false
     }
 
     // MARK: - Status mapping

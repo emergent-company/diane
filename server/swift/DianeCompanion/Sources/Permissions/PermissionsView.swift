@@ -2,6 +2,11 @@ import SwiftUI
 
 /// Permissions management view — shows all macOS permissions with status,
 /// app-level feature toggles, and guided setup for denied permissions.
+///
+/// macOS permissions work implicitly: the system prompts when an API is first
+/// accessed. This view only shows status and guides you to System Settings.
+/// The actual permission dialog appears when you use an Apple tool
+/// (apple_list_events, apple_send_imessage, etc.).
 struct PermissionsView: View {
     @StateObject private var manager = PermissionManager()
     @State private var selectedGuide: PermissionType? = nil
@@ -53,7 +58,7 @@ struct PermissionsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("Toggle features on/off per-card")
+                Text("macOS prompts when tools are first used")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -119,33 +124,29 @@ struct PermissionsView: View {
             }
             .foregroundStyle(permission.status.isGranted ? .green : .secondary)
 
-            // Action buttons — only when feature is ON but needs permission
-            if ft == .needsPermission || ft == .notDetermined || ft == .restricted {
-                Spacer().frame(height: 10)
+            // Action — always Open System Settings when feature is ON but not granted
+            if permission.featureEnabled && !permission.status.isGranted {
+                Spacer().frame(height: 8)
 
-                if permission.status == .notDetermined && permission.featureEnabled {
-                    Button("Request Permission") {
-                        Task { await manager.request(permission.type) }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .tint(.orange)
-                }
-
-                if permission.status == .denied && permission.featureEnabled {
-                    Button("Open Settings") {
-                        manager.openSystemSettings(permission.type)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-
-                    Button("Show Guide") {
-                        selectedGuide = permission.type
-                    }
+                Text("Use an Apple tool → macOS prompts")
                     .font(.caption2)
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Spacer().frame(height: 4)
+
+                Button("Open Settings") {
+                    manager.openSystemSettings(permission.type)
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                Button("Show Guide") {
+                    selectedGuide = permission.type
+                }
+                .font(.caption2)
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
             }
         }
         .padding(12)
