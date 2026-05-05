@@ -1,21 +1,50 @@
 #!/bin/bash
 # release.sh — Tag and create a GitHub release for Diane.
-# Usage: ./scripts/release.sh [patch|minor|major|<version>]
+# Usage: ./scripts/release.sh [options] [patch|minor|major|<version>]
+#
+# Options:
+#   -y, --yes     Non-interactive — skip all confirmations (for AI agents / CI)
+#   -n, --dry-run Print what would be done, then exit
 #
 # Ensures the version bumps past the latest GitHub release (not local tags).
 # Handles tag creation, push, and GitHub release creation.
 # Requires gh CLI with auth token at ~/.config/gh/hosts.yml.
 #
 # Examples:
-#   ./scripts/release.sh           # auto bump minor (default)
-#   ./scripts/release.sh patch     # bump patch (1.35.0 → 1.35.1)
-#   ./scripts/release.sh minor     # bump minor (1.35.0 → 1.36.0)
-#   ./scripts/release.sh 1.40.0    # explicit version
+#   ./scripts/release.sh               # auto bump minor (default)
+#   ./scripts/release.sh patch         # bump patch (1.35.0 → 1.35.1)
+#   ./scripts/release.sh -y            # non-interactive, auto bump minor
+#   ./scripts/release.sh -n            # dry-run, print what would happen
+#   ./scripts/release.sh -y patch      # non-interactive patch bump
+#   ./scripts/release.sh 1.40.0        # explicit version
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REPO="emergent-company/diane"
+
+# --- Option parsing ---
+AUTO_YES=false
+DRY_RUN=false
+POSITIONAL=()
+for arg in "$@"; do
+  case "$arg" in
+    -y|--yes) AUTO_YES=true ;;
+    -n|--dry-run) DRY_RUN=true ;;
+    *) POSITIONAL+=("$arg") ;;
+  esac
+done
+# Restore positional args: first is bump type / explicit version
+if [ ${#POSITIONAL[@]} -gt 0 ]; then
+  set -- "${POSITIONAL[@]}"
+else
+  set --
+fi
+
+if $DRY_RUN; then
+  # Override: dry-run implies yes (no prompts) but exits before doing anything
+  AUTO_YES=true
+fi
 
 # Colors
 RED='\033[0;31m'
@@ -59,11 +88,13 @@ if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
   warn "Working tree is dirty. Showing changes:"
   git status --short 2>/dev/null
   echo ""
-  read -p "Continue with dirty tree? [y/N] " -n 1 -r
-  echo
-  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    err "Aborted."
-    exit 1
+  if ! $AUTO_YES; then
+    read -p "Continue with dirty tree? [y/N] " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+      err "Aborted."
+      exit 1
+    fi
   fi
 else
   ok "Working tree is clean"
@@ -124,12 +155,28 @@ if git ls-remote --tags origin "$NEXT_VERSION" 2>/dev/null | grep -q "$NEXT_VERS
   warn "Tag $NEXT_VERSION already EXISTS on remote"
 fi
 
+# Dry-run: show what would happen and exit
+if $DRY_RUN; then
+  echo ""
+  ok "Dry-run — no changes made."
+  echo ""
+  echo "  Would create:  tag $NEXT_VERSION → push → GitHub release"
+  echo "  At commit:    $CURRENT_SHORT"
+  echo "  Release URL:  https://github.com/$REPO/releases/tag/$NEXT_VERSION"
+  echo ""
+  exit 0
+fi
+
 echo ""
-read -p "Create release ${CYAN}$NEXT_VERSION${NC} at ${CYAN}$CURRENT_SHORT${NC}? [y/N] " -n 1 -r
-echo
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-  err "Aborted."
-  exit 1
+if $AUTO_YES; then
+  info "Creating release $NEXT_VERSION at $CURRENT_SHORT (non-interactive)..."
+else
+  read -p "Create release ${CYAN}$NEXT_VERSION${NC} at ${CYAN}$CURRENT_SHORT${NC}? [y/N] " -n 1 -r
+  echo
+  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    err "Aborted."
+    exit 1
+  fi
 fi
 
 # ─── Create release ───────────────────────────────────────────
