@@ -280,6 +280,89 @@ final class DianeAPIClient: ObservableObject {
         return try JSONDecoder().decode(AgentDetail.self, from: data)
     }
 
+    // MARK: - Agent CRUD (Create, Update, Delete, Clone)
+
+    /// Create a new user-defined agent.
+    func createAgent(_ req: CreateAgentRequest) async throws -> AgentDef {
+        let body = try JSONEncoder().encode(req)
+        let data = try await post("/api/agents", body: body, timeout: 15)
+        struct Response: Decodable { let name: String?; let id: String? }
+        _ = try? JSONDecoder().decode(Response.self, from: data)
+        // Return the agent list to get the full def
+        let agents = try await fetchAgentDefs()
+        guard let created = agents.first(where: { $0.name == req.name }) else {
+            throw DianeAPIError.serverError("Agent created but not found in listing")
+        }
+        return created
+    }
+
+    /// Update a user-defined agent definition.
+    func updateAgent(name: String, changes: [String: Any]) async throws {
+        let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        let body = try JSONSerialization.data(withJSONObject: changes)
+        _ = try await patch("/api/agents/\(encoded)", body: body)
+    }
+
+    /// Delete a user-defined agent or disable a built-in agent.
+    func deleteAgent(name: String) async throws -> String {
+        let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        let data = try await delete("/api/agents/\(encoded)")
+        struct Response: Decodable { let status: String? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data), let s = resp.status {
+            return s
+        }
+        return "deleted"
+    }
+
+    /// Clone an agent as a new user-defined agent.
+    func cloneAgent(name: String, newName: String) async throws -> String {
+        let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        let body = try JSONEncoder().encode(CloneAgentRequest(name: newName))
+        let data = try await post("/api/agents/\(encoded)/clone", body: body, timeout: 15)
+        struct Response: Decodable { let name: String?; let status: String? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data), let n = resp.name {
+            return n
+        }
+        return newName
+    }
+
+    // MARK: - Agent Override Config
+
+    /// Fetch the override config for a built-in agent.
+    func fetchAgentOverride(name: String) async throws -> AgentOverrideConfig? {
+        let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        let data = try await get("/api/agents/\(encoded)/override")
+        struct Response: Decodable { let overrides: AgentOverrideConfig? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data) {
+            return resp.overrides
+        }
+        // Try direct decode
+        return try? JSONDecoder().decode(AgentOverrideConfig.self, from: data)
+    }
+
+    /// Save (upsert) an override config for a built-in agent.
+    func saveAgentOverride(name: String, override: AgentOverrideConfig) async throws {
+        let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        let body = try JSONEncoder().encode(override)
+        _ = try await put("/api/agents/\(encoded)/override", body: body)
+    }
+
+    /// Remove the override config for a built-in agent (restores built-in defaults).
+    func deleteAgentOverride(name: String) async throws {
+        let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        _ = try await delete("/api/agents/\(encoded)/override")
+    }
+
+    /// Trigger re-seed of built-in agents with current graph config.
+    func seedAgents() async throws -> Int {
+        let data = try await post("/api/agents/seed", body: nil, timeout: 60)
+        struct Response: Decodable { let count: Int?; let status: String? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data) {
+            return resp.count ?? 0
+        }
+        return 0
+    }
+
     // MARK: - Doctor Check
 
     /// Run the diane doctor diagnostics via the local API.
@@ -360,6 +443,50 @@ final class DianeAPIClient: ObservableObject {
         guard (200...299).contains(http.statusCode) else {
             let body = String(data: data, encoding: .utf8) ?? ""
             throw DianeAPIError.httpError(http.statusCode, body)
+        }
+        return data
+    }
+
+    private func put(_ path: String, body: Data?, timeout: TimeInterval? = nil) async throws -> Data {
+        guard let url = URL(string: "\(baseURL)\(path)") else {
+            throw DianeAPIError.invalidURL(path)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.timeoutInterval = timeout ?? 10
+        if let b = body {
+            request.httpBody = b
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw DianeAPIError.network("No HTTP response")
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let bodyStr = String(data: data, encoding: .utf8) ?? ""
+            throw DianeAPIError.httpError(http.statusCode, bodyStr)
+        }
+        return data
+    }
+
+    private func patch(_ path: String, body: Data?, timeout: TimeInterval? = nil) async throws -> Data {
+        guard let url = URL(string: "\(baseURL)\(path)") else {
+            throw DianeAPIError.invalidURL(path)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"
+        request.timeoutInterval = timeout ?? 10
+        if let b = body {
+            request.httpBody = b
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw DianeAPIError.network("No HTTP response")
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let bodyStr = String(data: data, encoding: .utf8) ?? ""
+            throw DianeAPIError.httpError(http.statusCode, bodyStr)
         }
         return data
     }
