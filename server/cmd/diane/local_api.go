@@ -1064,6 +1064,22 @@ func (a *localAPIServer) handleNodes(w http.ResponseWriter, r *http.Request) {
 		Healthy     bool   `json:"healthy,omitempty"`
 	}
 
+	// A node is online if it has an active relay session OR a heartbeat within the last 10 minutes.
+	heartbeatGrace := 10 * time.Minute
+	now := time.Now()
+	isOnline := func(nc memory.NodeConfig) bool {
+		if _, ok := online[nc.InstanceID]; ok {
+			return true
+		}
+		if nc.LastSeen != "" {
+			seenAt, err := time.Parse(time.RFC3339, nc.LastSeen)
+			if err == nil && now.Sub(seenAt) <= heartbeatGrace {
+				return true
+			}
+		}
+		return false
+	}
+
 	seen := make(map[string]bool)
 	nodes := make([]nodeJSON, 0)
 
@@ -1097,6 +1113,7 @@ func (a *localAPIServer) handleNodes(w http.ResponseWriter, r *http.Request) {
 				n.Version = s.Version
 			}
 		}
+		n.Online = isOnline(nc)
 		nodes = append(nodes, n)
 	}
 
