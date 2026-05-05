@@ -95,6 +95,7 @@ func schemaDefToType(def SchemaDefinition) EnrichedSchemaType {
 		Label:       label,
 		Description: desc,
 		Namespace:   def.Namespace,
+		Properties:  []EnrichedProperty{},
 	}
 
 	// Parse properties map into ordered list

@@ -838,11 +838,76 @@ func (a *localAPIServer) handleMCPServers(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// MCP server configurations are managed through the Memory Platform graph.
-	// Use the graph API to query current configurations.
+	// Query MCP proxy configs from the graph
+	entries, err := a.bridge.ListMCPProxyConfigs(r.Context())
+	if err != nil {
+		// Return empty on error — graph may not be reachable
+		log.Printf("[LOCAL-API] list MCP proxy configs: %v", err)
+		jsonResponse(w, map[string]any{
+			"servers": []any{},
+			"total":   0,
+		})
+		return
+	}
+
+	// Parse each config JSON string into a server entry
+	type serverJSON struct {
+		Name    string            `json:"name"`
+		Enabled bool              `json:"enabled"`
+		Type    string            `json:"type"`
+		URL     string            `json:"url,omitempty"`
+		Command string            `json:"command,omitempty"`
+		Args    []string          `json:"args,omitempty"`
+		Env     map[string]string `json:"env,omitempty"`
+		Timeout int               `json:"timeout,omitempty"`
+		Scope   string            `json:"scope,omitempty"`
+	}
+
+	servers := make([]serverJSON, 0)
+	seen := make(map[string]bool) // dedup by server name
+
+	for _, entry := range entries {
+		if entry.Config == "" {
+			continue
+		}
+		var cfg struct {
+			Name    string            `json:"name"`
+			Enabled bool              `json:"enabled"`
+			Type    string            `json:"type"`
+			URL     string            `json:"url,omitempty"`
+			Command string            `json:"command,omitempty"`
+			Args    []string          `json:"args,omitempty"`
+			Env     map[string]string `json:"env,omitempty"`
+			Timeout int               `json:"timeout,omitempty"`
+		}
+		if err := json.Unmarshal([]byte(entry.Config), &cfg); err != nil {
+			log.Printf("[LOCAL-API] parse MCP proxy config %q: %v", entry.Scope, err)
+			continue
+		}
+		if cfg.Name == "" {
+			continue
+		}
+		// Dedup by name — later scopes override earlier ones
+		if seen[cfg.Name] {
+			continue
+		}
+		seen[cfg.Name] = true
+		servers = append(servers, serverJSON{
+			Name:    cfg.Name,
+			Enabled: cfg.Enabled,
+			Type:    cfg.Type,
+			URL:     cfg.URL,
+			Command: cfg.Command,
+			Args:    cfg.Args,
+			Env:     cfg.Env,
+			Timeout: cfg.Timeout,
+			Scope:   entry.Scope,
+		})
+	}
+
 	jsonResponse(w, map[string]any{
-		"servers": []any{},
-		"total":   0,
+		"servers": servers,
+		"total":   len(servers),
 	})
 }
 
