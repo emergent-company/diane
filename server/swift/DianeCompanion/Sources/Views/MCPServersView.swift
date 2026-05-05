@@ -204,7 +204,7 @@ struct MCPServersView: View {
             do {
                 let relaySessions = try await apiClient.fetchRelaySessions(projectID: serverConfig.projectID)
                 nodes = relaySessions.map { r in
-                    RelayNode(instanceID: r.instanceID ?? r.id, hostname: r.nodeName, mode: nil, version: nil, toolCount: r.toolCount, connectedAt: r.connectedAt, online: false)
+                    RelayNode(instanceID: r.instanceID ?? r.id, hostname: r.nodeName, mode: nil, version: nil, toolCount: r.toolCount, connectedAt: r.connectedAt, online: false, uptime: nil, provider: nil, relayActive: nil, botActive: nil, healthy: nil)
                 }
                 nodeError = nil
             } catch {
