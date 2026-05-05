@@ -1185,6 +1185,63 @@ struct AgentDef: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+// MARK: - Agent Detail (full config from GET /api/agents/{name})
+
+/// Full agent definition detail including tools list, skills, model config, max_steps, timeout.
+struct AgentDetail: Identifiable, Codable, Hashable, Sendable {
+    let id: String
+    let name: String
+    let description: String?
+    let flowType: String
+    let visibility: String
+    let isDefault: Bool
+    let toolCount: Int
+    let tools: [String]?
+    let skills: [String]?
+    let systemPrompt: String?
+    let maxSteps: Int?
+    let defaultTimeout: Int?
+    let model: AgentDetailModel?
+    let dispatchMode: String?
+    let createdAt: String?
+    let updatedAt: String?
+
+    /// Delegation heuristics and extra config decoded from the `config` map.
+    var delegation: AgentDelegation? {
+        // Injected via diane's BuildMergedAgents into AgentDefinition.Config["delegation"]
+        nil // parsed from config map if needed
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, description, visibility, tools, skills
+        case flowType = "flow_type"
+        case isDefault = "is_default"
+        case toolCount = "tool_count"
+        case systemPrompt = "system_prompt"
+        case maxSteps = "max_steps"
+        case defaultTimeout = "default_timeout"
+        case model
+        case dispatchMode = "dispatch_mode"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+    static func == (lhs: AgentDetail, rhs: AgentDetail) -> Bool { lhs.id == rhs.id }
+}
+
+struct AgentDetailModel: Codable, Hashable, Sendable {
+    let name: String?
+    let temperature: Double?
+    let maxTokens: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case temperature
+        case maxTokens = "max_tokens"
+    }
+}
+
 // MARK: - MCP Relay Session
 struct RelaySession: Identifiable, Codable, Hashable, Sendable {
     let id: String

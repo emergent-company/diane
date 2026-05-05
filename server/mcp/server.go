@@ -73,12 +73,18 @@ func main() {
 	}
 	defer os.Remove(pidFile)
 
-	// Initialize MCP proxy
+	// Initialize MCP proxy with inline config path (no graph dependency for standalone MCP server)
 	configPath := mcpproxy.GetDefaultConfigPath()
-	proxy, err = mcpproxy.NewProxy(configPath)
-	if err != nil {
-		log.Printf("Warning: Failed to initialize MCP proxy: %v", err)
+	cfg, cfgErr := mcpproxy.LoadConfig(configPath)
+	if cfgErr != nil {
+		log.Printf("Warning: Failed to load MCP config: %v", cfgErr)
 		// Continue without proxy - built-in tools will still work
+	} else {
+		proxy, err = mcpproxy.NewProxy(cfg.Servers)
+		if err != nil {
+			log.Printf("Warning: Failed to initialize MCP proxy: %v", err)
+			// Continue without proxy - built-in tools will still work
+		}
 	}
 	defer func() {
 		if proxy != nil {
@@ -185,8 +191,12 @@ func main() {
 		go func() {
 			for range sigChan {
 				log.Printf("Received SIGUSR1, reloading MCP configuration...")
-				if err := proxy.Reload(); err != nil {
-					log.Printf("Failed to reload MCP config: %v", err)
+				if cfg, cfgErr := mcpproxy.LoadConfig(configPath); cfgErr == nil {
+					if reloadErr := proxy.Reload(cfg.Servers); reloadErr != nil {
+						log.Printf("Failed to reload MCP config: %v", reloadErr)
+					}
+				} else {
+					log.Printf("Failed to reload MCP config: %v", cfgErr)
 				}
 			}
 		}()

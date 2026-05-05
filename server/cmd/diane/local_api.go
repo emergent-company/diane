@@ -67,6 +67,7 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	mux.HandleFunc("/api/mcp-servers/toggle/", api.handleMCPToggle)
 	mux.HandleFunc("/api/mcp-servers/delete/", api.handleMCPDelete)
 	mux.HandleFunc("/api/agents", api.handleAgents)
+	mux.HandleFunc("/api/agents/", api.handleAgentDetail)
 	mux.HandleFunc("/api/nodes", api.handleNodes)
 	mux.HandleFunc("/api/nodes/", api.handleNodeByID)
 	mux.HandleFunc("/api/schema", api.handleSchema)
@@ -1749,6 +1750,97 @@ func (a *localAPIServer) handleAgents(w http.ResponseWriter, r *http.Request) {
 		"agents": items,
 		"total":  len(items),
 	})
+}
+
+// GET /api/agents/{name} — full agent definition detail including tools, skills, model config
+func (a *localAPIServer) handleAgentDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	name := strings.TrimPrefix(r.URL.Path, "/api/agents/")
+	name = strings.TrimSuffix(name, "/")
+	if name == "" {
+		jsonError(w, http.StatusBadRequest, "agent name required")
+		return
+	}
+
+	ctx := context.Background()
+
+	// Step 1: List all agent defs to find ID by name
+	defs, err := a.bridge.ListAgentDefs(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("list agents: %v", err))
+		return
+	}
+
+	var defID string
+	for _, d := range defs.Data {
+		if d.Name == name {
+			defID = d.ID
+			break
+		}
+	}
+	if defID == "" {
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("agent %q not found", name))
+		return
+	}
+
+	// Step 2: Fetch full detail
+	detail, err := a.bridge.GetAgentDef(ctx, defID)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("get agent %s: %v", name, err))
+		return
+	}
+
+	d := detail.Data
+
+	// Build response
+	resp := map[string]any{
+		"id":             d.ID,
+		"name":           d.Name,
+		"description":    d.Description,
+		"flow_type":      d.FlowType,
+		"visibility":     d.Visibility,
+		"is_default":     d.IsDefault,
+		"tool_count":     len(d.Tools),
+		"tools":          d.Tools,
+		"skills":         d.Skills,
+		"system_prompt":  d.SystemPrompt,
+		"created_at":     d.CreatedAt.Format(time.RFC3339),
+		"updated_at":     d.UpdatedAt.Format(time.RFC3339),
+	}
+
+	if d.MaxSteps != nil {
+		resp["max_steps"] = *d.MaxSteps
+	}
+	if d.DefaultTimeout != nil {
+		resp["default_timeout"] = *d.DefaultTimeout
+	}
+	if d.Model != nil {
+		model := map[string]any{
+			"name": d.Model.Name,
+		}
+		if d.Model.Temperature != nil {
+			model["temperature"] = *d.Model.Temperature
+		}
+		if d.Model.MaxTokens != nil {
+			model["max_tokens"] = *d.Model.MaxTokens
+		}
+		resp["model"] = model
+	}
+	if d.ACPConfig != nil {
+		resp["acp"] = d.ACPConfig
+	}
+	if d.Config != nil {
+		resp["config"] = d.Config
+	}
+	if d.DispatchMode != "" {
+		resp["dispatch_mode"] = d.DispatchMode
+	}
+
+	jsonResponse(w, resp)
 }
 
 // ─── MCP CRUD Handlers ────────────────────────────────────────

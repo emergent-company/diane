@@ -376,7 +376,12 @@ func TestProxy_WithHTTPServer(t *testing.T) {
 	}
 	defer func() { secretsDir = origSecretsDir }()
 
-	proxy, err := NewProxy(configPath)
+	cfg, loadErr := LoadConfig(configPath)
+	if loadErr != nil {
+		t.Fatalf("LoadConfig: %v", loadErr)
+	}
+
+	proxy, err := NewProxy(cfg.Servers)
 	if err != nil {
 		t.Fatalf("NewProxy failed: %v", err)
 	}

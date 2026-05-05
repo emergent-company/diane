@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"sync"
 )
 
@@ -332,4 +334,28 @@ func MergeServerConfigs(lists ...[]ServerConfig) []ServerConfig {
 		result[i] = byName[name]
 	}
 	return result
+}
+
+// LoadConfig reads an MCP proxy config file and returns the parsed config.
+// Kept for test and standalone binary compatibility.
+func LoadConfig(configPath string) (*Config, error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, err
+	}
+	var config Config
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil, err
+	}
+	return &config, nil
+}
+
+// GetDefaultConfigPath returns ~/.diane/mcp-servers.json.
+// Kept for test and standalone binary compatibility.
+func GetDefaultConfigPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".diane", "mcp-servers.json")
 }

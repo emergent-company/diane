@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Emergent-Comapny/diane/internal/config"
+	"github.com/Emergent-Comapny/diane/internal/filesystem"
 	"github.com/Emergent-Comapny/diane/internal/memory"
 	"github.com/Emergent-Comapny/diane/internal/mcpproxy"
 )
@@ -227,6 +228,23 @@ func handleMCPServeRequest(
 			return mcpServeResponse{Result: result}
 		}
 
+		// Try built-in filesystem tools
+		if strings.HasPrefix(params.Name, "filesystem_") {
+			result, err := filesystem.Call(params.Name, params.Arguments)
+			if err != nil {
+				return mcpServeResponse{
+					Error: &struct {
+						Code    int    `json:"code"`
+						Message string `json:"message"`
+					}{
+						Code:    -32603,
+						Message: err.Error(),
+					},
+				}
+			}
+			return mcpServeResponse{Result: result}
+		}
+
 		// Forward to proxied MCP servers
 		result, err := proxy.CallTool(params.Name, params.Arguments)
 		if err != nil {
@@ -271,8 +289,7 @@ func handleMCPServeRequest(
 }
 
 // buildMCPToolList returns the built-in MCP tools.
-// Providers have been removed — all functionality comes from proxied MCP servers.
-// MCP management tools (mcp_add, mcp_test, mcp_status) are available to all instances.
+// Combines management tools with filesystem tools.
 func buildMCPToolList() []map[string]interface{} {
 	tools := []map[string]interface{}{
 		{
@@ -360,7 +377,10 @@ func buildMCPToolList() []map[string]interface{} {
 				"properties": map[string]interface{}{},
 			},
 		},
+		// ── Filesystem Tools ──
 	}
+	fsTools := filesystem.Tools()
+	tools = append(tools, fsTools...)
 
 	return tools
 }

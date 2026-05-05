@@ -345,3 +345,30 @@ func TestCmdMCPList_MissingConfigFileError(t *testing.T) {
 		t.Errorf("Expected graceful handling of missing config, got:\n%s", output)
 	}
 }
+
+// ensureDianeDir returns ~/.diane path, creating the directory if needed.
+func ensureDianeDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	dianeDir := filepath.Join(home, ".diane")
+	if err := os.MkdirAll(dianeDir, 0755); err != nil {
+		return dianeDir
+	}
+	return dianeDir
+}
+
+// getMCPServersConfigPath returns the MCP config file path, respecting --config flag.
+func getMCPServersConfigPath(args []string) string {
+	for i, a := range args {
+		if a == "--config" && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".diane", "mcp-servers.json")
+}

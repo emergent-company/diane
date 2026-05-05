@@ -921,7 +921,7 @@ func mergeProxyConfigs(configs []scoredConfig) []mcpproxy.ServerConfig {
 	}
 	if len(configs) == 1 {
 		var cfg mcpproxy.Config
-		if err := json.Unmarshal([]byte(configs[0].config), &cfg); err != nil {
+		if err := json.Unmarshal([]byte(configs[0].config), &cfg); err != nil || len(cfg.Servers) == 0 {
 			var single mcpproxy.ServerConfig
 			if err2 := json.Unmarshal([]byte(configs[0].config), &single); err2 == nil && single.Name != "" {
 				return []mcpproxy.ServerConfig{single}
@@ -942,7 +942,7 @@ func mergeProxyConfigs(configs []scoredConfig) []mcpproxy.ServerConfig {
 
 	for _, sc := range configs {
 		var cfg mcpproxy.Config
-		if err := json.Unmarshal([]byte(sc.config), &cfg); err != nil {
+		if err := json.Unmarshal([]byte(sc.config), &cfg); err != nil || len(cfg.Servers) == 0 {
 			// Try as a single server config (not wrapped in {"servers":[...]})
 			var single mcpproxy.ServerConfig
 			if err2 := json.Unmarshal([]byte(sc.config), &single); err2 == nil && single.Name != "" {

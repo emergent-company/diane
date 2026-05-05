@@ -348,7 +348,12 @@ func TestNewProxy_WithValidConfig(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	proxy, err := NewProxy(configPath)
+	cfg, loadErr := LoadConfig(configPath)
+	if loadErr != nil {
+		t.Fatalf("LoadConfig: %v", loadErr)
+	}
+
+	proxy, err := NewProxy(cfg.Servers)
 	if err != nil {
 		t.Fatalf("NewProxy: %v", err)
 	}
@@ -371,29 +376,26 @@ func TestNewProxy_WithValidConfig(t *testing.T) {
 }
 
 func TestNewProxy_MissingConfigFile(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "does-not-exist.json")
-
-	_, err := NewProxy(configPath)
-	if err == nil {
-		t.Fatal("NewProxy should return error for missing config file")
+	// NewProxy now takes []ServerConfig directly. A nil/empty slice is valid (no servers).
+	proxy, err := NewProxy(nil)
+	if err != nil {
+		t.Fatalf("NewProxy with nil servers should succeed: %v", err)
 	}
-	t.Logf("✅ Missing config returns: %v", err)
+	proxy.Close()
+	t.Logf("✅ NewProxy with nil servers returns proxy with no clients")
 }
 
 func TestNewProxy_InvalidConfigFile(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "mcp-servers.json")
-
-	if err := os.WriteFile(configPath, []byte(`not json`), 0644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	_, err := NewProxy(configPath)
+	// NewProxy now takes []ServerConfig directly. Invalid config is now tested
+	// via LoadConfig. Verify NewProxy rejects invalid server config instead.
+	proxy, err := NewProxy([]ServerConfig{
+		{Name: "test", Type: "invalid-type"},
+	})
 	if err == nil {
-		t.Fatal("NewProxy should return error for invalid config")
+		t.Fatal("NewProxy should return error for invalid server type")
+		proxy.Close()
 	}
-	t.Logf("✅ Invalid config returns: %v", err)
+	t.Logf("✅ Invalid server type returns: %v", err)
 }
 
 // =========================================================================

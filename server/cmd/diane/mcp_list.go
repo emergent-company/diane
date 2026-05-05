@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/Emergent-Comapny/diane/internal/mcpproxy"
@@ -68,4 +69,13 @@ func plural(n int) string {
 		return "s"
 	}
 	return ""
+}
+
+// shortenHome replaces the home directory prefix with ~ for display.
+func shortenHome(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	return strings.Replace(path, home, "~", 1)
 }

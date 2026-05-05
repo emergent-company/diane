@@ -273,6 +273,13 @@ final class DianeAPIClient: ObservableObject {
         return []
     }
 
+    /// Fetch full detail for a single agent by name.
+    func fetchAgentDetail(name: String) async throws -> AgentDetail {
+        let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        let data = try await get("/api/agents/\(encoded)")
+        return try JSONDecoder().decode(AgentDetail.self, from: data)
+    }
+
     // MARK: - Doctor Check
 
     /// Run the diane doctor diagnostics via the local API.

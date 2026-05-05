@@ -766,6 +766,10 @@ Your tools:
 - entity-type-list / tag-list — explore available types and labels
 - search-hybrid / search-semantic / search-similar — semantic dedup
 - skill — load extraction patterns and bound skills`,
+			Model: &config.AgentModelConfig{
+				Provider: "deepseek",
+				Name:     "deepseek-v4-flash",
+			},
 			Tools: []string{
 				// Session inspection
 				"agent-run-list", "agent-run-get", "agent-run-messages",
