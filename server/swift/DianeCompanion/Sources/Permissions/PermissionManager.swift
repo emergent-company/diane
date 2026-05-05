@@ -2,7 +2,7 @@ import Foundation
 import EventKit
 import Contacts
 import AppKit
-import UserNotifications
+@preconcurrency import UserNotifications
 @preconcurrency import ApplicationServices
 
 /// Types of macOS permissions the app needs to manage.
