@@ -611,16 +611,17 @@ pollLoop:
 			CreatedAt:      time.Now().UTC().Format(time.RFC3339),
 		}
 
-		// Extract content from the SDK's Content map
+		// Extract content from the SDK's Content map.
+		// The "text" key can be a string, []string, or []any — handle all.
 		if val, ok := msg.Content["reasoning"]; ok {
-			if s, ok := val.(string); ok && len(s) > 0 {
+			if s := extractContentValue(val); s != "" {
 				flatMsg.ReasoningContent = s
 			}
 		}
 		if val, ok := msg.Content["text"]; ok {
-			if s, ok := val.(string); ok {
+			if s := extractContentValue(val); s != "" {
 				flatMsg.Content = s
-				if role != "user" && role != "tool" && len(s) > 0 {
+				if role != "user" && role != "tool" {
 					assistantText = s
 				}
 			}
@@ -650,6 +651,36 @@ pollLoop:
 		"messages":   messages,
 		"success":    true,
 	})
+}
+
+// extractContentValue extracts human-readable text from a value in an SDK
+// Content map. The "text" key can be stored as string, []string, or []any
+// (e.g., when the ADK executor joins multiple text parts). This handles all
+// variants so content extraction never silently fails.
+func extractContentValue(val any) string {
+	switch v := val.(type) {
+	case string:
+		return v
+	case []string:
+		if len(v) == 0 {
+			return ""
+		}
+		return strings.Join(v, "\n")
+	case []any:
+		var parts []string
+		for _, item := range v {
+			if s, ok := item.(string); ok && s != "" {
+				parts = append(parts, s)
+			}
+		}
+		return strings.Join(parts, "\n")
+	default:
+		// Unknown type — try JSON stringification as last resort
+		if b, err := json.Marshal(val); err == nil && len(b) > 2 {
+			return string(b)
+		}
+		return ""
+	}
 }
 
 // ─── Todo Handlers ───────────────────────────────────────
