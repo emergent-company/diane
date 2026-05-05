@@ -236,7 +236,161 @@ final class PermissionManager: ObservableObject {
         }
     }
 
-    // MARK: - Status mapping
+    // MARK: - Test Permission (triggers actual macOS permission dialog)
+
+    /// Attempt to use the API for a permission type.
+    /// macOS will show its system permission dialog if not yet determined.
+    /// Always refreshes status afterward.
+    func test(_ type: PermissionType) async -> String {
+        switch type {
+        case .notifications:
+            return await testNotifications()
+        case .calendar:
+            return await testCalendar()
+        case .reminders:
+            return await testReminders()
+        case .contacts:
+            return await testContacts()
+        case .accessibility:
+            return await testAccessibility()
+        case .automation:
+            return await testAutomation()
+        }
+    }
+
+    private func testNotifications() async -> String {
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+        if settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional {
+            // Already granted — send a test notification
+            let content = UNMutableNotificationContent()
+            content.title = "Diane"
+            content.body = "Notifications are working ✓"
+            content.sound = .default
+            let request = UNNotificationRequest(
+                identifier: "diane-test-notification",
+                content: content,
+                trigger: UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+            )
+            do {
+                try await center.add(request)
+                await asyncRefresh()
+                return "Test notification sent"
+            } catch {
+                await asyncRefresh()
+                return "Failed to send test notification: \(error.localizedDescription)"
+            }
+        } else {
+            // Not yet authorized — requestAuthorization triggers the system dialog
+            let granted = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
+            await asyncRefresh()
+            if granted == true {
+                // Send a test notification now that we have permission
+                return await testNotifications()
+            }
+            return "macOS dialog shown — check Notification Center"
+        }
+    }
+
+    private func testCalendar() async -> String {
+        let store = EKEventStore()
+        do {
+            if #available(macOS 14.0, *) {
+                // requestFullAccessToEvents triggers the macOS permission dialog
+                let granted = try await store.requestFullAccessToEvents()
+                await asyncRefresh()
+                if granted {
+                    let cals = store.calendars(for: .event)
+                    return "Found \(cals.count) calendar(s): \(cals.map(\.title).joined(separator: ", "))"
+                }
+                return "Calendar access denied"
+            } else {
+                let granted = try await store.requestAccess(to: .event)
+                await asyncRefresh()
+                if granted {
+                    let cals = store.calendars(for: .event)
+                    return "Found \(cals.count) calendar(s): \(cals.map(\.title).joined(separator: ", "))"
+                }
+                return "Calendar access denied"
+            }
+        } catch {
+            await asyncRefresh()
+            return "Calendar error: \(error.localizedDescription)"
+        }
+    }
+
+    private func testReminders() async -> String {
+        let store = EKEventStore()
+        do {
+            if #available(macOS 14.0, *) {
+                let granted = try await store.requestFullAccessToReminders()
+                await asyncRefresh()
+                if granted {
+                    let lists = store.calendars(for: .reminder)
+                    return "Found \(lists.count) reminder list(s): \(lists.map(\.title).joined(separator: ", "))"
+                }
+                return "Reminders access denied"
+            } else {
+                let granted = try await store.requestAccess(to: .reminder)
+                await asyncRefresh()
+                if granted {
+                    let lists = store.calendars(for: .reminder)
+                    return "Found \(lists.count) reminder list(s): \(lists.map(\.title).joined(separator: ", "))"
+                }
+                return "Reminders access denied"
+            }
+        } catch {
+            await asyncRefresh()
+            return "Reminders error: \(error.localizedDescription)"
+        }
+    }
+
+    private func testContacts() async -> String {
+        let store = CNContactStore()
+        do {
+            let granted = try await store.requestAccess(for: .contacts)
+            await asyncRefresh()
+            if granted {
+                let keys = [CNContactGivenNameKey, CNContactFamilyNameKey] as [CNKeyDescriptor]
+                let request = CNContactFetchRequest(keysToFetch: keys)
+                var count = 0
+                try store.enumerateContacts(with: request) { _, _ in count += 1 }
+                return "Found \(count) contact(s)"
+            }
+            return "Contacts access denied"
+        } catch {
+            await asyncRefresh()
+            return "Contacts error: \(error.localizedDescription)"
+        }
+    }
+
+    private func testAccessibility() async -> String {
+        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as NSString
+        let options: NSDictionary = [key: true]
+        let trusted = AXIsProcessTrustedWithOptions(options)
+        await asyncRefresh()
+        if trusted {
+            return "Accessibility is enabled ✓"
+        }
+        return "Accessibility dialog shown — check System Settings"
+    }
+
+    private func testAutomation() async -> String {
+        // Try a harmless AppleScript to trigger the automation permission dialog
+        let script = """
+        tell application "System Events"
+            get name of every process
+        end tell
+        """
+        do {
+            let result = try await AppleScriptRunner.run(script)
+            await asyncRefresh()
+            return "Automation works ✓ (found \(result.components(separatedBy: ", ").count) processes)"
+        } catch {
+            await asyncRefresh()
+            return "Automation dialog may have been shown. Error: \(error.localizedDescription)"
+        }
+    }
 
     /// Asynchronously check notification authorization status via UNNotificationSettings.
     private func checkNotificationStatus() async -> PermissionStatus {

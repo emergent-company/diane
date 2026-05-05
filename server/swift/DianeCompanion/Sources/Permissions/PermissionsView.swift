@@ -1,15 +1,16 @@
 import SwiftUI
 
 /// Permissions management view — shows all macOS permissions with status,
-/// app-level feature toggles, and guided setup for denied permissions.
+/// app-level feature toggles, and a "Test" button that actually tries the API.
 ///
 /// macOS permissions work implicitly: the system prompts when an API is first
-/// accessed. This view only shows status and guides you to System Settings.
-/// The actual permission dialog appears when you use an Apple tool
-/// (apple_list_events, apple_send_imessage, etc.).
+/// accessed. The Test button triggers this by attempting a real operation —
+/// listing calendars, fetching contacts, sending a test notification, etc.
 struct PermissionsView: View {
     @StateObject private var manager = PermissionManager()
     @State private var selectedGuide: PermissionType? = nil
+    @State private var testResults: [PermissionType: String] = [:]
+    @State private var testingTypes: Set<PermissionType> = []
 
     private let columns = [
         GridItem(.adaptive(minimum: 160, maximum: 220), spacing: 12)
@@ -58,7 +59,7 @@ struct PermissionsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("macOS prompts when tools are first used")
+                Text("Tap Test to trigger macOS permission prompt")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -75,6 +76,7 @@ struct PermissionsView: View {
 
     private func permissionCard(_ permission: PermissionInfo) -> some View {
         let ft = permission.featureStatus
+        let isTesting = testingTypes.contains(permission.type)
 
         return VStack(spacing: 0) {
             // Icon + Toggle row
@@ -124,29 +126,48 @@ struct PermissionsView: View {
             }
             .foregroundStyle(permission.status.isGranted ? .green : .secondary)
 
-            // Action — always Open System Settings when feature is ON but not granted
-            if permission.featureEnabled && !permission.status.isGranted {
-                Spacer().frame(height: 8)
-
-                Text("Use an Apple tool → macOS prompts")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
+            // Test result message
+            if let result = testResults[permission.type], !result.isEmpty {
                 Spacer().frame(height: 4)
+                Text(result)
+                    .font(.caption2)
+                    .foregroundStyle(result.contains("✓") || result.contains("works") || result.contains("Found") ? .green : .secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .lineLimit(3)
+            }
 
-                Button("Open Settings") {
-                    manager.openSystemSettings(permission.type)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+            Spacer().frame(height: 6)
 
-                Button("Show Guide") {
-                    selectedGuide = permission.type
+            // Actions row
+            if permission.featureEnabled {
+                HStack(spacing: 8) {
+                    // Test button — triggers actual macOS permission dialog
+                    if isTesting {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .scaleEffect(0.6)
+                    } else {
+                        Button("Test") {
+                            runTest(permission.type)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    }
+
+                    Button("Settings") {
+                        manager.openSystemSettings(permission.type)
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+
+                    Button("Guide") {
+                        selectedGuide = permission.type
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
                 }
-                .font(.caption2)
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
             }
         }
         .padding(12)
@@ -159,6 +180,18 @@ struct PermissionsView: View {
                         .stroke(cardBorder(ft), lineWidth: 1)
                 )
         )
+    }
+
+    // MARK: - Test Action
+
+    private func runTest(_ type: PermissionType) {
+        testingTypes.insert(type)
+        testResults[type] = ""
+        Task {
+            let result = await manager.test(type)
+            testResults[type] = result
+            testingTypes.remove(type)
+        }
     }
 
     // MARK: - Feature status badge
@@ -257,7 +290,6 @@ struct SetupGuideView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    // Description
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Why this is needed")
                             .font(.subheadline)
@@ -267,7 +299,6 @@ struct SetupGuideView: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    // Step-by-step guide
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Setup Instructions")
                             .font(.subheadline)
@@ -278,7 +309,6 @@ struct SetupGuideView: View {
                             .lineSpacing(4)
                     }
 
-                    // Quick action
                     HStack(spacing: 12) {
                         Button("Open System Settings") {
                             if let url = permissionType.settingsURL {
