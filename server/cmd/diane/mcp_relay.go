@@ -24,9 +24,7 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -126,9 +124,39 @@ func upsertNodeConfigInGraph(pc *config.ProjectConfig, instanceID string) {
 
 	if _, err := bridge.UpsertNodeConfig(ctx, nc); err != nil {
 		log.Printf("[mcp-relay] Warning: failed to upsert node config: %v", err)
-	} else {
-		log.Printf("[mcp-relay] Node config registered in graph (instance=%s, mode=%s)", instanceID, mode)
+		return
 	}
+	log.Printf("[mcp-relay] Node config registered in graph (instance=%s, mode=%s)", instanceID, mode)
+
+	// Clean up stale node configs with the same hostname but different instance_id.
+	// This prevents accumulation of orphan entries from test runs or config changes.
+	if err := pruneStaleNodeConfigs(ctx, bridge, hostname, instanceID); err != nil {
+		log.Printf("[mcp-relay] Warning: failed to prune stale node configs: %v", err)
+	}
+}
+
+// pruneStaleNodeConfigs deletes DianeNodeConfig entries that share the same
+// hostname but have a different instance_id than the current one.
+func pruneStaleNodeConfigs(ctx context.Context, bridge *memory.Bridge, hostname, currentInstanceID string) error {
+	nodes, err := bridge.ListNodeConfigs(ctx)
+	if err != nil {
+		return fmt.Errorf("list node configs: %w", err)
+	}
+
+	for _, n := range nodes {
+		if n.Hostname == hostname && n.InstanceID != currentInstanceID {
+			if n.EntityID == "" {
+				continue
+			}
+			if err := bridge.Client().Graph.DeleteObject(ctx, n.EntityID, nil); err != nil {
+				log.Printf("[mcp-relay] Warning: failed to delete stale node config %s (instance=%s): %v",
+					n.EntityID, n.InstanceID, err)
+			} else {
+				log.Printf("[mcp-relay] Deleted stale node config (instance=%s, hostname=%s)", n.InstanceID, hostname)
+			}
+		}
+	}
+	return nil
 }
 
 func cmdMCPRelay(cfg MCPRelayConfig, servers []mcpproxy.ServerConfig) {
@@ -854,12 +882,12 @@ func mergeProxyConfigs(configs []scoredConfig) []mcpproxy.ServerConfig {
 
 // generateInstanceID creates a random instance ID like "diane-a4fd".
 func generateInstanceID() string {
-	bytes := make([]byte, 2)
-	if _, err := rand.Read(bytes); err != nil {
-		log.Printf("[mcp-relay] Failed to generate random instance ID: %v", err)
-		return "diane-" + fmt.Sprintf("%04x", time.Now().UnixNano()&0xFFFF)
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		log.Printf("[mcp-relay] Failed to get hostname for instance ID: %v", err)
+		hostname = fmt.Sprintf("diane-%04x", time.Now().UnixNano()&0xFFFF)
 	}
-	return "diane-" + hex.EncodeToString(bytes)
+	return hostname
 }
 
 // ── Actual CLI integration ──
