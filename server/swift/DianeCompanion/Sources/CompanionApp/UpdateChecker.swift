@@ -10,6 +10,11 @@ final class UpdateChecker: ObservableObject {
     @Published private(set) var isUpdating = false
     @Published private(set) var updateOutput: String = ""
     @Published private(set) var downloadProgress: Double = 0
+    @Published var autoUpdateEnabled = true {
+        didSet { UserDefaults.standard.set(autoUpdateEnabled, forKey: "autoUpdateEnabled") }
+    }
+    @Published private(set) var previousVersion: String?
+    @Published private(set) var rollbackAvailable = false
 
     weak var statusMonitor: StatusMonitor?
     weak var cliManager: CLIManager?
@@ -20,6 +25,7 @@ final class UpdateChecker: ObservableObject {
     private nonisolated(unsafe) var timer: Timer?
     private var hasStarted = false
     private var releaseData: GitHubRelease?
+    private var shouldAutoUpdate = false
 
     deinit { timer?.invalidate() }
 
@@ -35,6 +41,11 @@ final class UpdateChecker: ObservableObject {
             currentVersion = "unknown"
         }
 
+        autoUpdateEnabled = UserDefaults.standard.object(forKey: "autoUpdateEnabled") as? Bool ?? true
+
+        // Check for rollback availability
+        checkRollbackAvailability()
+
         await checkForUpdates()
         timer = Timer.scheduledTimer(withTimeInterval: checkInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in await self?.checkForUpdates() }
@@ -46,9 +57,6 @@ final class UpdateChecker: ObservableObject {
         isChecking = true
         defer { isChecking = false }
 
-        // Fetch recent releases and pick the highest semver — don't rely on
-        // GitHub's /releases/latest endpoint which returns by publish date,
-        // not semver order.
         guard let url = URL(string: "https://api.github.com/repos/\(repoOwner)/\(repoName)/releases?per_page=20") else { return }
 
         do {
@@ -88,6 +96,13 @@ final class UpdateChecker: ObservableObject {
                     logInfo("UpdateChecker: No update available. Current version: \(installed).", category: "Updates")
                 }
             }
+
+            // Auto-update if enabled and update is available
+            if updateAvailable && autoUpdateEnabled && !isUpdating {
+                logInfo("UpdateChecker: Auto-update enabled — starting download", category: "Updates")
+                shouldAutoUpdate = true
+                performUpdate()
+            }
         } catch {
             logDebug("UpdateChecker: checkForUpdates failed: \(error.localizedDescription)", category: "Updates")
         }
@@ -105,7 +120,6 @@ final class UpdateChecker: ObservableObject {
         guard let dmgAsset = release.assets?.first(where: { $0.name.hasSuffix(".dmg") && $0.name.hasPrefix("Diane-") }),
               let dmgURL = URL(string: dmgAsset.browserDownloadUrl) else {
             logError("UpdateChecker: No DMG asset found in release", category: "Updates")
-            // Fallback: open release page
             if let url = URL(string: release.htmlUrl) {
                 NSWorkspace.shared.open(url)
             }
@@ -117,16 +131,83 @@ final class UpdateChecker: ObservableObject {
         }
     }
 
+    /// Revert to the previous app version's backup
+    func performRollback() {
+        guard let prevVersion = previousVersion else {
+            updateOutput = "No backup available for rollback"
+            return
+        }
+
+        let backupPath = appBackupPath(version: prevVersion)
+        guard FileManager.default.fileExists(atPath: backupPath.path) else {
+            updateOutput = "Backup not found at \(backupPath.path)"
+            rollbackAvailable = false
+            return
+        }
+
+        isUpdating = true
+        updateOutput = "Rolling back to \(prevVersion)…"
+
+        Task {
+            do {
+                // Create installer script that swaps backup → active, then relaunches
+                let tempDir = FileManager.default.temporaryDirectory
+                let scriptPath = tempDir.appendingPathComponent("diane-rollback.sh")
+                let appPath = "/Applications/Diane.app"
+
+                let script = """
+#!/bin/bash
+sleep 2
+# Remove current app
+rm -rf "\(appPath)"
+# Copy backup to active location
+cp -R "\(backupPath.path)" "\(appPath)"
+# Fix permissions
+chmod -R a=u+rX "\(appPath)"
+# Relaunch
+open -n -a "\(appPath)"
+# Clean up
+rm -f "\(scriptPath.path)"
+"""
+                try script.write(to: scriptPath, atomically: true, encoding: .utf8)
+                try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptPath.path)
+
+                updateOutput = "Rolling back… (will relaunch)"
+                logInfo("UpdateChecker: Launching rollback installer script", category: "Updates")
+
+                let installer = Process()
+                installer.executableURL = URL(fileURLWithPath: "/bin/bash")
+                installer.arguments = [scriptPath.path]
+                installer.standardOutput = FileHandle.nullDevice
+                installer.standardError = FileHandle.nullDevice
+                try installer.run()
+
+                // Terminate the current app so macOS lets us replace the bundle
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    NSApplication.shared.terminate(nil)
+                }
+            } catch {
+                logError("UpdateChecker: Rollback failed: \(error.localizedDescription)", category: "Updates")
+                updateOutput = "Rollback failed: \(error.localizedDescription)"
+                isUpdating = false
+            }
+        }
+    }
+
     // MARK: - DMG Download & Install
 
     /// Install using a post-termination script so macOS lets us replace the running app bundle.
-    /// Steps: download → mount → create installer script → terminate → script copies + relaunches
+    /// Steps: backup → download → mount → create installer script → terminate → script copies + relaunches
     private func performDMGUpdate(dmgURL: URL, version: String) async {
         isUpdating = true
-        updateOutput = "Downloading \(version)…"
+        updateOutput = shouldAutoUpdate ? "Auto-updating to \(version)…" : "Downloading \(version)…"
         logInfo("UpdateChecker: Starting DMG download from \(dmgURL)", category: "Updates")
 
         do {
+            // Step 0: Backup current app before installing
+            updateOutput = "Backing up current app…"
+            backupCurrentApp()
+
             // Step 1: Download DMG to temp directory
             let tempDir = FileManager.default.temporaryDirectory
             let dmgPath = tempDir.appendingPathComponent("Diane-\(version).dmg")
@@ -135,7 +216,7 @@ final class UpdateChecker: ObservableObject {
             try? FileManager.default.removeItem(at: dmgPath)
 
             let (_, _) = try await downloadWithProgress(from: dmgURL, to: dmgPath)
-            updateOutput = "Download complete. Installing…"
+            updateOutput = shouldAutoUpdate ? "Download complete. Installing…" : "Download complete. Installing…"
             logInfo("UpdateChecker: DMG downloaded to \(dmgPath.path)", category: "Updates")
 
             // Step 2: Mount DMG to find the .app name
@@ -168,6 +249,8 @@ sleep 1
 rm -rf "\(appPath)"
 # Copy new app
 cp -R "\(mountPoint.path)/\(appName)" "\(appPath)"
+# Fix permissions
+chmod -R a=u+rX "\(appPath)"
 # Detach DMG
 /usr/bin/hdiutil detach "\(mountPoint.path)" -quiet
 # Relaunch
@@ -200,6 +283,7 @@ rm -f "\(scriptPath.path)"
             logError("UpdateChecker: Update failed: \(error.localizedDescription)", category: "Updates")
             updateOutput = "Update failed: \(error.localizedDescription)"
             isUpdating = false
+            shouldAutoUpdate = false
 
             // Report update failure
             reportError(
@@ -211,16 +295,75 @@ rm -f "\(scriptPath.path)"
             )
 
             // Fallback: open release page so user can manually install
-            if let url = URL(string: releaseData?.htmlUrl ?? "https://github.com/\(repoOwner)/\(repoName)/releases/latest") {
+            if !shouldAutoUpdate, let url = URL(string: releaseData?.htmlUrl ?? "https://github.com/\(repoOwner)/\(repoName)/releases/latest") {
                 NSWorkspace.shared.open(url)
             }
+            shouldAutoUpdate = false
         }
+    }
+
+    // MARK: - Backup & Rollback
+
+    /// Backup the current app bundle before installing an update.
+    private func backupCurrentApp() {
+        let appPath = "/Applications/Diane.app"
+        guard let version = currentVersion, version != "unknown" else { return }
+
+        let backupPath = appBackupPath(version: version)
+        let fm = FileManager.default
+
+        // Remove old backup if exists
+        try? fm.removeItem(at: backupPath)
+
+        do {
+            try fm.copyItem(atPath: appPath, toPath: backupPath.path)
+            previousVersion = version
+            rollbackAvailable = true
+            logInfo("UpdateChecker: Backed up \(appPath) → \(backupPath.path)", category: "Updates")
+        } catch {
+            logError("UpdateChecker: Backup failed: \(error.localizedDescription)", category: "Updates")
+        }
+    }
+
+    /// Check if a backup exists for rollback.
+    private func checkRollbackAvailability() {
+        guard let appVersion = currentVersion else {
+            rollbackAvailable = false
+            return
+        }
+
+        // Check if there's a backup from a previous version
+        let backupPath = appBackupPath(version: appVersion)
+        let fm = FileManager.default
+
+        if fm.fileExists(atPath: backupPath.path) {
+            previousVersion = appVersion
+            rollbackAvailable = true
+            logInfo("UpdateChecker: Rollback available for \(appVersion)", category: "Updates")
+        } else {
+            // Also check for any Diane.v*.backup.app in /Applications/
+            if let apps = try? fm.contentsOfDirectory(atPath: "/Applications") {
+                for app in apps where app.hasPrefix("Diane.v") && app.hasSuffix(".backup.app") {
+                    let ver = app
+                        .replacingOccurrences(of: "Diane.v", with: "")
+                        .replacingOccurrences(of: ".backup.app", with: "")
+                    previousVersion = ver
+                    rollbackAvailable = true
+                    logInfo("UpdateChecker: Rollback available: \(ver)", category: "Updates")
+                    return
+                }
+            }
+        }
+    }
+
+    private func appBackupPath(version: String) -> URL {
+        let cleaned = version.hasPrefix("v") ? String(version.dropFirst()) : version
+        return URL(fileURLWithPath: "/Applications/Diane.v\(cleaned).backup.app")
     }
 
     /// Download a file and report progress
     private func downloadWithProgress(from url: URL, to destination: URL) async throws -> (URL, URLResponse) {
         let session = URLSession(configuration: .default)
-        // Simple download without progress delegate for now
         let (tempURL, response) = try await session.download(from: url)
 
         // Move to our destination
@@ -310,8 +453,6 @@ private struct GitHubAsset: Decodable {
 #if DEBUG
 extension UpdateChecker {
     /// Create an instance pre-configured for preview canvases.
-    /// Can only live in this file because `@Published private(set)` properties
-    /// are file-private for writes.
     static func forPreviews(
         updateAvailable: Bool = false,
         currentVersion: String? = nil,

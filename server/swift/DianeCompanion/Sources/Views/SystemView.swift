@@ -77,6 +77,17 @@ struct SystemView: View {
                 updatingBanner
             }
 
+            if !updateChecker.isUpdating {
+                Toggle("Auto-Update", isOn: $updateChecker.autoUpdateEnabled)
+                    .toggleStyle(.switch)
+                    .font(.subheadline)
+                    .disabled(updateChecker.isUpdating)
+            }
+
+            if updateChecker.rollbackAvailable && !updateChecker.isUpdating {
+                rollbackBanner
+            }
+
             HStack(spacing: Design.Spacing.sm) {
                 Button(action: {
                     Task { await updateChecker.checkForUpdates() }
@@ -126,6 +137,37 @@ struct SystemView: View {
                     .progressViewStyle(.linear)
                     .tint(.orange)
             }
+        }
+        .padding(Design.Padding.banner)
+        .background(Design.Surface.elevatedBackground)
+        .cornerRadius(Design.CornerRadius.medium)
+    }
+
+    private var rollbackBanner: some View {
+        HStack(spacing: Design.Spacing.sm) {
+            Image(systemName: "arrow.uturn.backward.circle.fill")
+                .foregroundStyle(.secondary)
+                .font(.system(size: Design.IconSize.medium))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Rollback available: \(updateChecker.previousVersion ?? "?")")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                Text("Previous version backed up")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button(action: { updateChecker.performRollback() }) {
+                Text("Revert")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Color.secondary)
+                    .cornerRadius(5)
+            }
+            .buttonStyle(.plain)
         }
         .padding(Design.Padding.banner)
         .background(Design.Surface.elevatedBackground)

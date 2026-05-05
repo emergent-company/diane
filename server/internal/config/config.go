@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -50,6 +51,10 @@ type ProjectConfig struct {
 
 	// Relay Instance
 	InstanceID string `yaml:"instance_id,omitempty"` // stable relay instance ID, auto-generated if empty
+
+	// Auto-upgrade
+	AutoUpgrade           bool          `yaml:"auto_upgrade,omitempty"`           // auto-upgrade on new release (default true)
+	UpgradeCheckInterval  time.Duration `yaml:"upgrade_check_interval,omitempty"` // how often to check (default 6h)
 
 	// Bot behavior
 	SystemPrompt string `yaml:"system_prompt,omitempty"`

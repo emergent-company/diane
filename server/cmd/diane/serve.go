@@ -171,6 +171,20 @@ func cmdServe() {
 	// Re-upserts every 5 minutes to keep last_seen fresh.
 	go startNodeHeartbeat(shutdownCtx, pc, instanceID, startRelay, startBot)
 
+	// ── Auto-upgrade background check ──
+	// Runs on all nodes. Checks for new releases at startup and periodically.
+	// If auto_upgrade is enabled (default true), downloads and installs automatically.
+	if pc.AutoUpgrade || !hasAutoUpgradeConfig(pc) {
+		interval := pc.UpgradeCheckInterval
+		if interval <= 0 {
+			interval = 6 * time.Hour
+		}
+		log.Printf("[SERVE] Auto-upgrade: ✓ (check every %v)", interval)
+		go autoUpgradeLoop(shutdownCtx, interval)
+	} else {
+		log.Printf("[SERVE] Auto-upgrade: disabled (set auto_upgrade: true in config)")
+	}
+
 	// Watch for AgentToolConfig changes via SSE and auto-seed agents
 	// Runs on any node with a valid project config (not relay-dependent)
 	go agentToolConfigWatch(shutdownCtx, pc.ServerURL, pc.Token, pc.ProjectID, pc.OrgID)
@@ -205,4 +219,118 @@ func resolveInstanceID(pc *config.ProjectConfig, flagInstance string) string {
 func init() {
 	// Make sure serve is listed in the help output
 	_ = fmt.Sprintf("  serve           Start both Discord bot and MCP relay (unified service)")
+}
+
+// autoUpgradeLoop periodically checks for updates and applies them automatically.
+func autoUpgradeLoop(ctx context.Context, interval time.Duration) {
+	// Wait a few seconds for the relay to start before checking
+	select {
+	case <-time.After(10 * time.Second):
+	case <-ctx.Done():
+		return
+	}
+
+	// Run one check immediately at startup
+	log.Printf("[UPGRADE] Checking for updates at startup...")
+	runAutoUpgrade()
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			log.Printf("[UPGRADE] Checking for updates...")
+			runAutoUpgrade()
+		case <-ctx.Done():
+			log.Printf("[UPGRADE] Stopped")
+			return
+		}
+	}
+}
+
+// runAutoUpgrade performs a single auto-upgrade check and applies the update if available.
+// Logs results but does NOT exit on failure (runs in background).
+func runAutoUpgrade() {
+	latestVer, currentVer, available := checkVersion()
+	if !available {
+		log.Printf("[UPGRADE] Already up to date (%s)", currentVer)
+		return
+	}
+
+	// Don't auto-upgrade if current version is "dev" (local build)
+	if currentVer == "vdev" || currentVer == "dev" {
+		log.Printf("[UPGRADE] Skipping auto-upgrade: local build (dev)")
+		return
+	}
+
+	log.Printf("[UPGRADE] Update available: %s → %s", currentVer, latestVer)
+
+	// Download new binary
+	if err := downloadAndStage(latestVer); err != nil {
+		log.Printf("[UPGRADE] Download failed: %v", err)
+		return
+	}
+	log.Printf("[UPGRADE] Downloaded %s, staging...", latestVer)
+
+	// Backup current binary
+	if err := backupCurrentBinary(currentVer); err != nil {
+		log.Printf("[UPGRADE] Backup failed: %v", err)
+	}
+
+	// Resolve symlinks
+	targetPath := upgradeBinaryPath()
+	var symlinkTarget string
+	if fi, err := os.Lstat(targetPath); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		if resolved, err := os.Readlink(targetPath); err == nil && filepath.IsAbs(resolved) {
+			symlinkTarget = resolved
+			targetPath = resolved
+		}
+	}
+
+	// Swap staged → active
+	staged := stagedBinaryPath()
+	if err := swapBinary(staged, targetPath); err != nil {
+		log.Printf("[UPGRADE] Install failed: %v", err)
+		tryRollback()
+		return
+	}
+
+	if symlinkTarget != "" {
+		os.Remove(upgradeBinaryPath())
+		os.Symlink(targetPath, upgradeBinaryPath())
+	}
+
+	// Verify
+	if _, err := verifyBinary(targetPath); err != nil {
+		log.Printf("[UPGRADE] Verification failed: %v", err)
+		tryRollback()
+		return
+	}
+
+	// Update state
+	st := readUpgradeState()
+	st.Current = latestVer
+	st.Previous = currentVer
+	st.PrevPath = previousBinaryPath()
+	writeUpgradeState(st)
+
+	log.Printf("[UPGRADE] ✅ Auto-upgraded to %s — restarting serve", latestVer)
+
+	// Restart serve to pick up the new binary
+	if err := restartServeProcess(); err != nil {
+		log.Printf("[UPGRADE] Restart failed: %v", err)
+	}
+}
+
+// hasAutoUpgradeConfig returns true if the user has explicitly set auto_upgrade in config.
+// The zero value of bool is 'false', which we interpret as "not set" vs "explicitly disabled".
+func hasAutoUpgradeConfig(pc *config.ProjectConfig) bool {
+	// Check if config was loaded from file with auto_upgrade explicitly set
+	// We can check this by re-reading the raw YAML
+	data, err := os.ReadFile(config.Path())
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(data), "auto_upgrade:")
 }
