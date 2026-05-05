@@ -28,10 +28,9 @@ final class UpdateChecker: ObservableObject {
     private var shouldAutoUpdate = false
     private let dianeDir: String
 
-    override init() {
+    init() {
         self.dianeDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".diane").path
-        super.init()
     }
 
     deinit { timer?.invalidate() }
