@@ -20,6 +20,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Emergent-Comapny/diane/internal/agents"
+
 	sdk "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk"
 	"github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/chat"
 	"github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/graph"
@@ -1591,4 +1593,141 @@ func safePropVersion(props map[string]any, key string) int {
 	default:
 		return 0
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Agent Override Config (AgentOverrideConfig graph entities)
+// ---------------------------------------------------------------------------
+
+// AgentOverrideConfigType is the graph object type name for agent override configs.
+const AgentOverrideConfigType = "AgentOverrideConfig"
+
+// GetAgentOverride retrieves the override config for a specific agent from the graph.
+// Returns nil if no override exists.
+func (b *Bridge) GetAgentOverride(ctx context.Context, agentName string) (*agents.AgentOverrideConfig, error) {
+	resp, err := b.client.Graph.ListObjects(ctx, &graph.ListObjectsOptions{
+		Type: "AgentOverrideConfig",
+		Key:  agentName,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list agent overrides: %w", err)
+	}
+	if len(resp.Items) == 0 {
+		return nil, nil
+	}
+
+	obj := resp.Items[0]
+	return &agents.AgentOverrideConfig{
+		AgentName:        agentName,
+		SystemPrompt:     safePropStr(obj.Properties, "system_prompt"),
+		Skills:           safePropStrSlice(obj.Properties, "skills"),
+		ModelProvider:    safePropStr(obj.Properties, "model_provider"),
+		ModelName:        safePropStr(obj.Properties, "model_name"),
+		ModelTemperature: safePropFloat(obj.Properties, "model_temperature"),
+		ModelMaxTokens:   safePropVersion(obj.Properties, "model_max_tokens"),
+		MaxSteps:         safePropVersion(obj.Properties, "max_steps"),
+		Timeout:          safePropVersion(obj.Properties, "timeout"),
+		Visibility:       safePropStr(obj.Properties, "visibility"),
+		SandboxEnabled:   safePropBoolPtr(obj.Properties, "sandbox_enabled"),
+		Disabled:         safePropBool(obj.Properties, "disabled"),
+	}, nil
+}
+
+// UpsertAgentOverride creates or updates an agent override config in the graph.
+func (b *Bridge) UpsertAgentOverride(ctx context.Context, override *agents.AgentOverrideConfig) error {
+	if override.AgentName == "" {
+		return fmt.Errorf("agent_name is required")
+	}
+
+	props := override.ToProperties()
+
+	// Try to find existing by key (agent name)
+	existing, err := b.client.Graph.ListObjects(ctx, &graph.ListObjectsOptions{
+		Type: AgentOverrideConfigType,
+		Key:  override.AgentName,
+	})
+	if err != nil {
+		return fmt.Errorf("list agent overrides: %w", err)
+	}
+
+	if len(existing.Items) > 0 {
+		_, err = b.client.Graph.UpdateObject(ctx, existing.Items[0].EntityID, &graph.UpdateObjectRequest{
+			Properties: props,
+		})
+		if err != nil {
+			return fmt.Errorf("update agent override %s: %w", override.AgentName, err)
+		}
+		return nil
+	}
+
+	key := override.AgentName
+	_, err = b.client.Graph.CreateObject(ctx, &graph.CreateObjectRequest{
+		Type:       AgentOverrideConfigType,
+		Key:        &key,
+		Properties: props,
+	})
+	if err != nil {
+		return fmt.Errorf("create agent override %s: %w", override.AgentName, err)
+	}
+	return nil
+}
+
+// DeleteAgentOverride removes an agent override config from the graph.
+func (b *Bridge) DeleteAgentOverride(ctx context.Context, agentName string) error {
+	existing, err := b.client.Graph.ListObjects(ctx, &graph.ListObjectsOptions{
+		Type: AgentOverrideConfigType,
+		Key:  agentName,
+	})
+	if err != nil {
+		return fmt.Errorf("list agent overrides: %w", err)
+	}
+	if len(existing.Items) == 0 {
+		return fmt.Errorf("no agent override found for %q", agentName)
+	}
+	return b.client.Graph.DeleteObject(ctx, existing.Items[0].EntityID, nil)
+}
+
+// safePropStrSlice extracts a []string from graph object properties.
+func safePropStrSlice(props map[string]any, key string) []string {
+	v, ok := props[key]
+	if !ok {
+		return nil
+	}
+	raw, ok := v.([]interface{})
+	if !ok {
+		return nil
+	}
+	result := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if s, ok := item.(string); ok {
+			result = append(result, s)
+		}
+	}
+	return result
+}
+
+// safePropFloat extracts a float64 from graph object properties.
+func safePropFloat(props map[string]any, key string) float64 {
+	v, ok := props[key]
+	if !ok {
+		return 0
+	}
+	f, ok := v.(float64)
+	if !ok {
+		return 0
+	}
+	return f
+}
+
+// safePropBoolPtr extracts a *bool from graph object properties.
+func safePropBoolPtr(props map[string]any, key string) *bool {
+	v, ok := props[key]
+	if !ok {
+		return nil
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return nil
+	}
+	return &b
 }

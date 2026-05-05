@@ -1206,11 +1206,8 @@ struct AgentDetail: Identifiable, Codable, Hashable, Sendable {
     let createdAt: String?
     let updatedAt: String?
 
-    /// Delegation heuristics and extra config decoded from the `config` map.
-    var delegation: AgentDelegation? {
-        // Injected via diane's BuildMergedAgents into AgentDefinition.Config["delegation"]
-        nil // parsed from config map if needed
-    }
+    // Delegation model (parsed from config map if needed)
+    // TODO: define AgentDelegation struct with max_concurrent_children, max_spawn_depth etc.
 
     enum CodingKeys: String, CodingKey {
         case id, name, description, visibility, tools, skills
@@ -1403,4 +1400,62 @@ public struct DoctorCheckItem: Codable, Sendable, Identifiable {
         default:                return check.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }
+}
+
+// MARK: - Agent Override Config
+
+struct AgentOverrideConfig: Codable, Hashable, Sendable {
+    var agentName: String
+    var systemPrompt: String?
+    var skills: [String]?
+    var modelProvider: String?
+    var modelName: String?
+    var modelTemperature: Double?
+    var modelMaxTokens: Int?
+    var maxSteps: Int?
+    var timeout: Int?
+    var visibility: String?
+    var sandboxEnabled: Bool?
+    var disabled: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case agentName = "agent_name"
+        case systemPrompt = "system_prompt"
+        case skills, disabled, visibility
+        case modelProvider = "model_provider"
+        case modelName = "model_name"
+        case modelTemperature = "model_temperature"
+        case modelMaxTokens = "model_max_tokens"
+        case maxSteps = "max_steps"
+        case timeout
+        case sandboxEnabled = "sandbox_enabled"
+    }
+}
+
+// MARK: - Create Agent Request
+
+struct CreateAgentRequest: Codable {
+    let name: String
+    var description: String?
+    var systemPrompt: String?
+    var tools: [String]?
+    var skills: [String]?
+    var flowType: String?
+    var visibility: String?
+    var maxSteps: Int?
+    var defaultTimeout: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case name, description, tools, skills, visibility
+        case systemPrompt = "system_prompt"
+        case flowType = "flow_type"
+        case maxSteps = "max_steps"
+        case defaultTimeout = "default_timeout"
+    }
+}
+
+// MARK: - Clone Agent Request
+
+struct CloneAgentRequest: Codable {
+    let name: String
 }
