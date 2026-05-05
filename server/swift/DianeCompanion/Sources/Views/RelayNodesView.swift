@@ -160,11 +160,42 @@ struct RelayNodesView: View {
             }
             .buttonStyle(.plain)
 
-            // Expanded tools section
+            // Expanded section: info + tools
             if isExpanded {
                 Divider().padding(.horizontal, 12)
 
                 VStack(alignment: .leading, spacing: Design.Spacing.xs) {
+                    // ── Node Info Section ──
+                    HStack {
+                        Text("Node Info")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.secondary)
+                            .textCase(.uppercase)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.top, Design.Spacing.sm)
+
+                    if let uptime = node.uptime, !uptime.isEmpty {
+                        infoRow(label: "Uptime", value: formatTime(uptime))
+                    }
+                    if let provider = node.provider, !provider.isEmpty {
+                        infoRow(label: "Provider", value: provider)
+                    }
+                    if let relayActive = node.relayActive {
+                        infoRow(label: "Relay", value: relayActive ? "Active" : "Inactive", valueColor: relayActive ? .green : .secondary)
+                    }
+                    if let botActive = node.botActive {
+                        infoRow(label: "Discord Bot", value: botActive ? "Active" : "Inactive", valueColor: botActive ? .green : .secondary)
+                    }
+                    if let healthy = node.healthy {
+                        infoRow(label: "Health", value: healthy ? "Healthy" : "Unhealthy", valueColor: healthy ? .green : .red)
+                    }
+
+                    Divider().padding(.horizontal, 12)
+
+                    // ── MCP Tools Section ──
                     HStack {
                         Text("MCP Tools")
                             .font(.caption)
@@ -278,6 +309,23 @@ struct RelayNodesView: View {
 
     private func formatTime(_ iso: String) -> String {
         DateUtils.formatTimestamp(iso)
+    }
+
+    /// A labeled info row for the expanded node card.
+    private func infoRow(label: String, value: String, valueColor: Color = .primary) -> some View {
+        HStack(spacing: Design.Spacing.sm) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 80, alignment: .leading)
+            Text(value)
+                .font(.caption)
+                .fontWeight(.medium)
+                .foregroundStyle(valueColor)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 2)
     }
 
     // MARK: - Data Loading

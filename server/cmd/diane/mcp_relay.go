@@ -47,6 +47,9 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// processStartTime records when this process started, used for node uptime reporting.
+var processStartTime = time.Now()
+
 // MCPRelayConfig holds the configuration for the relay connection.
 type MCPRelayConfig struct {
 	// RelayURL is the WebSocket endpoint on the Memory Platform.
@@ -108,30 +111,93 @@ func upsertNodeConfigInGraph(pc *config.ProjectConfig, instanceID string) {
 	}
 	defer bridge.Close()
 
+	nc := nodeConfigFromPC(pc, instanceID)
+	nc.LastSeen = time.Now().UTC().Format(time.RFC3339)
+
+	if _, err := bridge.UpsertNodeConfig(ctx, nc); err != nil {
+		log.Printf("[mcp-relay] Warning: failed to upsert node config: %v", err)
+		return
+	}
+	log.Printf("[node] Registered in graph (instance=%s, mode=%s)", instanceID, nc.Mode)
+
+	// Clean up stale node configs with the same hostname but different instance_id.
+	if err := pruneStaleNodeConfigs(ctx, bridge, nc.Hostname, instanceID); err != nil {
+		log.Printf("[node] Warning: failed to prune stale node configs: %v", err)
+	}
+}
+
+// nodeConfigFromPC builds a NodeConfig from project config with all status fields.
+func nodeConfigFromPC(pc *config.ProjectConfig, instanceID string) *memory.NodeConfig {
 	hostname, _ := os.Hostname()
 	mode := "master"
 	if pc.IsSlave() {
 		mode = "slave"
 	}
 
-	nc := &memory.NodeConfig{
-		InstanceID: instanceID,
-		Hostname:   hostname,
-		Mode:       mode,
-		Version:    Version,
-		LastSeen:   time.Now().UTC().Format(time.RFC3339),
+	provider := ""
+	if pc.GenerativeProvider != nil {
+		p := pc.GenerativeProvider
+		if p.Model != "" {
+			provider = p.Provider + "/" + p.Model
+		} else {
+			provider = p.Provider
+		}
 	}
 
-	if _, err := bridge.UpsertNodeConfig(ctx, nc); err != nil {
-		log.Printf("[mcp-relay] Warning: failed to upsert node config: %v", err)
-		return
+	// uptime is the process start time — set once at startup
+	now := time.Now().UTC()
+	return &memory.NodeConfig{
+		InstanceID:  instanceID,
+		Hostname:    hostname,
+		Mode:        mode,
+		Version:     Version,
+		LastSeen:    now.Format(time.RFC3339),
+		Uptime:      processStartTime.Format(time.RFC3339),
+		Provider:    provider,
+		RelayActive: false, // updated by caller if relay is active
+		BotActive:   false, // updated by caller if bot is active
+		Healthy:     true,
 	}
-	log.Printf("[mcp-relay] Node config registered in graph (instance=%s, mode=%s)", instanceID, mode)
+}
 
-	// Clean up stale node configs with the same hostname but different instance_id.
-	// This prevents accumulation of orphan entries from test runs or config changes.
-	if err := pruneStaleNodeConfigs(ctx, bridge, hostname, instanceID); err != nil {
-		log.Printf("[mcp-relay] Warning: failed to prune stale node configs: %v", err)
+// startNodeHeartbeat periodically re-upserts the node config to keep last_seen fresh.
+// Runs until ctx is cancelled.
+func startNodeHeartbeat(ctx context.Context, pc *config.ProjectConfig, instanceID string, relayActive, botActive bool) {
+	// Initial registration
+	upsertNodeConfigInGraph(pc, instanceID)
+
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			ctx2, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			bridge, err := memory.New(memory.Config{
+				ServerURL:         pc.ServerURL,
+				APIKey:            pc.Token,
+				ProjectID:         pc.ProjectID,
+				OrgID:             pc.OrgID,
+				HTTPClientTimeout: 10 * time.Second,
+			})
+			if err != nil {
+				cancel()
+				continue
+			}
+
+			nc := nodeConfigFromPC(pc, instanceID)
+			nc.RelayActive = relayActive
+			nc.BotActive = botActive
+			nc.LastSeen = time.Now().UTC().Format(time.RFC3339)
+
+			if _, err := bridge.UpsertNodeConfig(ctx2, nc); err != nil {
+				log.Printf("[node] Heartbeat: failed to update node config: %v", err)
+			}
+			bridge.Close()
+			cancel()
+		}
 	}
 }
 

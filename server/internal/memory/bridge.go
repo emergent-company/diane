@@ -32,12 +32,17 @@ import (
 // NodeConfig represents a Diane node's configuration stored in the MP graph.
 // Each node creates/updates its config on startup for cross-node discovery.
 type NodeConfig struct {
-	InstanceID string `json:"instance_id"`
-	Hostname   string `json:"hostname,omitempty"`
-	Mode       string `json:"mode"` // "master" or "slave"
-	Version    string `json:"version,omitempty"`
-	LastSeen   string `json:"last_seen,omitempty"` // ISO 8601
-	EntityID   string `json:"entity_id,omitempty"` // graph object EntityID, populated on read
+	InstanceID   string `json:"instance_id"`
+	Hostname     string `json:"hostname,omitempty"`
+	Mode         string `json:"mode"` // "master" or "slave"
+	Version      string `json:"version,omitempty"`
+	LastSeen     string `json:"last_seen,omitempty"`     // ISO 8601
+	Uptime       string `json:"uptime,omitempty"`        // ISO 8601 — process start time
+	Provider     string `json:"provider,omitempty"`      // e.g. "deepseek/deepseek-v4-flash"
+	RelayActive  bool   `json:"relay_active,omitempty"`  // MCP relay connected
+	BotActive    bool   `json:"bot_active,omitempty"`    // Discord bot connected
+	Healthy      bool   `json:"healthy,omitempty"`       // overall health
+	EntityID     string `json:"entity_id,omitempty"`     // graph object EntityID, populated on read
 }
 
 // bridgeHTTPClient is a shared HTTP client with a 15-second timeout.
@@ -754,11 +759,16 @@ const NodeConfigType = "DianeNodeConfig"
 // Nodes call this on startup so other nodes can discover them via the MP.
 func (b *Bridge) UpsertNodeConfig(ctx context.Context, cfg *NodeConfig) (*NodeConfig, error) {
 	props := map[string]any{
-		"instance_id": cfg.InstanceID,
-		"hostname":    cfg.Hostname,
-		"mode":        cfg.Mode,
-		"version":     cfg.Version,
-		"last_seen":   cfg.LastSeen,
+		"instance_id":  cfg.InstanceID,
+		"hostname":     cfg.Hostname,
+		"mode":         cfg.Mode,
+		"version":      cfg.Version,
+		"last_seen":    cfg.LastSeen,
+		"uptime":       cfg.Uptime,
+		"provider":     cfg.Provider,
+		"relay_active": cfg.RelayActive,
+		"bot_active":   cfg.BotActive,
+		"healthy":      cfg.Healthy,
 	}
 
 	// Try to find existing object by key (instance_id)
@@ -813,12 +823,17 @@ func (b *Bridge) ListNodeConfigs(ctx context.Context) ([]NodeConfig, error) {
 			continue
 		}
 		nc := NodeConfig{
-			InstanceID: safePropStr(props, "instance_id"),
-			Hostname:   safePropStr(props, "hostname"),
-			Mode:       safePropStr(props, "mode"),
-			Version:    safePropStr(props, "version"),
-			LastSeen:   safePropStr(props, "last_seen"),
-			EntityID:   obj.EntityID,
+			InstanceID:  safePropStr(props, "instance_id"),
+			Hostname:    safePropStr(props, "hostname"),
+			Mode:        safePropStr(props, "mode"),
+			Version:     safePropStr(props, "version"),
+			LastSeen:    safePropStr(props, "last_seen"),
+			Uptime:      safePropStr(props, "uptime"),
+			Provider:    safePropStr(props, "provider"),
+			RelayActive: safePropBool(props, "relay_active"),
+			BotActive:   safePropBool(props, "bot_active"),
+			Healthy:     safePropBool(props, "healthy"),
+			EntityID:    obj.EntityID,
 		}
 		if nc.InstanceID == "" {
 			continue
@@ -1468,6 +1483,22 @@ func safePropStr(props map[string]any, key string) string {
 		return ""
 	}
 	return safeAnyToStr(v)
+}
+
+// safePropBool extracts a bool from a map by key, defaulting to false.
+func safePropBool(props map[string]any, key string) bool {
+	if props == nil {
+		return false
+	}
+	v, ok := props[key]
+	if !ok {
+		return false
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return false
+	}
+	return b
 }
 
 // safeAnyToStr converts an any value to a string, handling all JSON-compatible types.

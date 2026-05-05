@@ -136,10 +136,15 @@ func cmdServe() {
 		}()
 	}
 
+	// ── Compute instance ID ──
+	instanceID := resolveInstanceID(pc, *instancePtr)
+	if startRelay {
+		log.Printf("[SERVE] Relay:    ✓ instance=%s", instanceID)
+	}
+
 	// ── Start MCP relay ──
 	if startRelay {
 		go func() {
-			instanceID := resolveInstanceID(pc, *instancePtr)
 			relayURL := "wss://" + strings.TrimPrefix(pc.ServerURL, "https://") + "/api/mcp-relay/connect"
 
 			log.Printf("[SERVE] Starting MCP relay (instance=%s)...", instanceID)
@@ -155,13 +160,16 @@ func cmdServe() {
 			// Sync config from graph and pass servers to relay
 			servers := syncConfigFromGraph(pc.ServerURL, pc.Token, pc.ProjectID, instanceID)
 
-			// Register this node's config in the graph
-			upsertNodeConfigInGraph(pc, instanceID)
-
 			cmdMCPRelay(relayCfg, servers)
 			errCh <- nil // relay exited cleanly
 		}()
 	}
+
+	// ── Node status registration + heartbeat ──
+	// Registers this node in the MP graph with version, provider, uptime, etc.
+	// Runs on ALL serve instances (not just relay) so every node is discoverable.
+	// Re-upserts every 5 minutes to keep last_seen fresh.
+	go startNodeHeartbeat(shutdownCtx, pc, instanceID, startRelay, startBot)
 
 	// Watch for AgentToolConfig changes via SSE and auto-seed agents
 	// Runs on any node with a valid project config (not relay-dependent)

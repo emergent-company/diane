@@ -384,6 +384,11 @@ struct RelayNode: Identifiable, Codable, Hashable, Sendable {
     let toolCount: Int?
     let connectedAt: String?
     let online: Bool           // whether node has an active relay connection
+    let uptime: String?        // ISO 8601 — process start time
+    let provider: String?      // e.g. "deepseek/deepseek-v4-flash"
+    let relayActive: Bool?     // MCP relay connected
+    let botActive: Bool?       // Discord bot connected
+    let healthy: Bool?         // overall health
 
     var id: String { instanceID }
 
@@ -392,7 +397,10 @@ struct RelayNode: Identifiable, Codable, Hashable, Sendable {
         case hostname, mode, version
         case toolCount = "tool_count"
         case connectedAt = "connected_at"
-        case online
+        case online, uptime, provider
+        case relayActive = "relay_active"
+        case botActive = "bot_active"
+        case healthy
     }
 
     func hash(into hasher: inout Hasher) { hasher.combine(instanceID) }

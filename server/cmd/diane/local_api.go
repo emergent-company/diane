@@ -1052,11 +1052,16 @@ func (a *localAPIServer) handleNodes(w http.ResponseWriter, r *http.Request) {
 	type nodeJSON struct {
 		InstanceID  string `json:"instance_id"`
 		Hostname    string `json:"hostname,omitempty"`
-		Mode        string `json:"mode,omitempty"` // from graph config
+		Mode        string `json:"mode,omitempty"`
 		Version     string `json:"version,omitempty"`
 		ToolCount   int    `json:"tool_count,omitempty"`
 		ConnectedAt string `json:"connected_at,omitempty"`
 		Online      bool   `json:"online"`
+		Uptime      string `json:"uptime,omitempty"`
+		Provider    string `json:"provider,omitempty"`
+		RelayActive bool   `json:"relay_active,omitempty"`
+		BotActive   bool   `json:"bot_active,omitempty"`
+		Healthy     bool   `json:"healthy,omitempty"`
 	}
 
 	seen := make(map[string]bool)
@@ -1066,10 +1071,15 @@ func (a *localAPIServer) handleNodes(w http.ResponseWriter, r *http.Request) {
 	for _, nc := range registeredNodes {
 		seen[nc.InstanceID] = true
 		n := nodeJSON{
-			InstanceID: nc.InstanceID,
-			Hostname:   nc.Hostname,
-			Mode:       nc.Mode,
-			Version:    nc.Version,
+			InstanceID:  nc.InstanceID,
+			Hostname:    nc.Hostname,
+			Mode:        nc.Mode,
+			Version:     nc.Version,
+			Uptime:      nc.Uptime,
+			Provider:    nc.Provider,
+			RelayActive: nc.RelayActive,
+			BotActive:   nc.BotActive,
+			Healthy:     nc.Healthy,
 		}
 		if s, ok := online[nc.InstanceID]; ok {
 			n.Online = true
