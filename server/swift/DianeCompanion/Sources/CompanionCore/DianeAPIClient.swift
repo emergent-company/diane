@@ -1,4 +1,5 @@
 import Foundation
+import Sentry
 
 /// Client for Diane's local companion API (served by `diane serve` on 127.0.0.1:8890).
 ///
@@ -386,6 +387,34 @@ final class DianeAPIClient: ObservableObject {
 
     // MARK: - HTTP
 
+    /// Capture an HTTP response in Sentry — adds breadcrumb + captures errors.
+    private func captureSentinel(method: String, path: String, status: Int, body: String) {
+        let breadcrumb = Breadcrumb()
+        breadcrumb.category = "http"
+        breadcrumb.type = "http"
+        breadcrumb.data = [
+            "method": method,
+            "url": "\(baseURL)\(path)",
+            "status_code": status,
+            "response_body": String(body.prefix(500)),
+        ]
+        SentrySDK.addBreadcrumb(crumb: breadcrumb)
+
+        if status >= 400 {
+            let error = NSError(
+                domain: "DianeAPIError",
+                code: status,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "HTTP \(status) \(method) \(path)",
+                    "method": method,
+                    "path": path,
+                    "response": String(body.prefix(2000)),
+                ]
+            )
+            SentrySDK.capture(error: error)
+        }
+    }
+
     private func get(_ path: String) async throws -> Data {
         guard let url = URL(string: "\(baseURL)\(path)") else {
             throw DianeAPIError.invalidURL(path)
@@ -400,6 +429,7 @@ final class DianeAPIClient: ObservableObject {
         }
         guard (200...299).contains(http.statusCode) else {
             let body = String(data: data, encoding: .utf8) ?? ""
+            captureSentinel(method: "GET", path: path, status: http.statusCode, body: body)
             throw DianeAPIError.httpError(http.statusCode, body)
         }
         return data
@@ -423,6 +453,7 @@ final class DianeAPIClient: ObservableObject {
         }
         guard (200...299).contains(http.statusCode) else {
             let body = String(data: data, encoding: .utf8) ?? ""
+            captureSentinel(method: "POST", path: path, status: http.statusCode, body: body)
             throw DianeAPIError.httpError(http.statusCode, body)
         }
         return data
@@ -442,6 +473,7 @@ final class DianeAPIClient: ObservableObject {
         }
         guard (200...299).contains(http.statusCode) else {
             let body = String(data: data, encoding: .utf8) ?? ""
+            captureSentinel(method: "DELETE", path: path, status: http.statusCode, body: body)
             throw DianeAPIError.httpError(http.statusCode, body)
         }
         return data
@@ -464,6 +496,7 @@ final class DianeAPIClient: ObservableObject {
         }
         guard (200...299).contains(http.statusCode) else {
             let bodyStr = String(data: data, encoding: .utf8) ?? ""
+            captureSentinel(method: "PUT", path: path, status: http.statusCode, body: bodyStr)
             throw DianeAPIError.httpError(http.statusCode, bodyStr)
         }
         return data
@@ -486,6 +519,7 @@ final class DianeAPIClient: ObservableObject {
         }
         guard (200...299).contains(http.statusCode) else {
             let bodyStr = String(data: data, encoding: .utf8) ?? ""
+            captureSentinel(method: "PATCH", path: path, status: http.statusCode, body: bodyStr)
             throw DianeAPIError.httpError(http.statusCode, bodyStr)
         }
         return data
