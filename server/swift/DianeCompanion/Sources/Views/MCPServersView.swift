@@ -1,10 +1,11 @@
 import SwiftUI
 
-/// MCP Servers view — reads from Diane's local API (served by `diane serve`).
+/// MCP Servers view — reads from Diane's local API (served by `diane serve`) or remote fallback.
 struct MCPServersView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var serverConfig: ServerConfiguration
     @EnvironmentObject var dianeAPI: DianeAPIClient
+    @EnvironmentObject var apiClient: EmergentAPIClient
 
     @State private var servers: [MCPServer] = []
     @State private var selectedServer: MCPServer? = nil
@@ -15,22 +16,23 @@ struct MCPServersView: View {
     @State private var nodeError: String? = nil
 
     var body: some View {
-        HSplitView {
-            serversList
-                .frame(minWidth: 280)
-
-            if let server = selectedServer {
-                serverDetailPanel(server)
-                    .frame(minWidth: 280)
-            } else {
-                EmptyStateView(
-                    title: "Select a Server",
-                    icon: "plug",
-                    description: "Select an MCP server to inspect its configuration."
-                )
-                .frame(minWidth: 280)
+        SplitListDetailView(
+            emptyTitle: "Select a Server",
+            emptyIcon: "plug",
+            emptyDescription: "Select an MCP server to inspect its configuration and tools.",
+            listContent: { serversList },
+            detailContent: {
+                if let server = selectedServer {
+                    serverDetailPanel(server)
+                } else {
+                    EmptyStateView(
+                        title: "Select a Server",
+                        icon: "plug",
+                        description: "Select an MCP server to inspect its configuration and tools."
+                    )
+                }
             }
-        }
+        )
         .navigationTitle("MCP Servers")
         .task { await load() }
     }
@@ -164,7 +166,78 @@ struct MCPServersView: View {
     // MARK: - Server Detail Panel
 
     private func serverDetailPanel(_ server: MCPServer) -> some View {
+        MCPServerDetailView(server: server, dianeAPI: dianeAPI)
+    }
+
+    // MARK: - Data Loading
+
+    @MainActor
+    private func load() async {
+        isLoading = true
+        do {
+            // Always try local API first — it's fresh for each request
+            servers = try await dianeAPI.fetchMCPServers()
+            await loadNodes()
+            error = nil
+        } catch let localError {
+            // Fall back to remote API if local fails
+            logWarning("Local API failed: \(localError.localizedDescription), trying remote...", category: "MCPView")
+            do {
+                servers = try await apiClient.fetchMCPServers(projectID: serverConfig.projectID)
+                await loadNodes()
+                error = nil
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+        isLoading = false
+    }
+
+    @MainActor
+    private func loadNodes() async {
+        isLoadingNodes = true
+        do {
+            // Always try local API first
+            nodes = try await dianeAPI.fetchRelayNodes()
+            nodeError = nil
+        } catch {
+            do {
+                let relaySessions = try await apiClient.fetchRelaySessions(projectID: serverConfig.projectID)
+                nodes = relaySessions.map { r in
+                    RelayNode(instanceID: r.instanceID ?? r.id, hostname: r.nodeName, mode: nil, version: nil, toolCount: r.toolCount, connectedAt: r.connectedAt, online: false, uptime: nil, provider: nil, relayActive: nil, botActive: nil, healthy: nil)
+                }
+                nodeError = nil
+            } catch {
+                nodeError = error.localizedDescription
+            }
+        }
+        isLoadingNodes = false
+    }
+}
+
+// MARK: - Server Detail View with Tools/Prompts Tabs
+
+private struct MCPServerDetailView: View {
+    let server: MCPServer
+    let dianeAPI: DianeAPIClient
+
+    @State private var selectedTab: DetailTab = .connection
+    @State private var tools: [MCPTool] = []
+    @State private var prompts: [MCPPrompt] = []
+    @State private var isLoadingTools = false
+    @State private var isLoadingPrompts = false
+    @State private var toolsError: String? = nil
+    @State private var promptsError: String? = nil
+
+    private enum DetailTab: String, CaseIterable {
+        case connection = "Connection"
+        case tools = "Tools"
+        case prompts = "Prompts"
+    }
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // Header
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(server.name)
@@ -186,82 +259,293 @@ struct MCPServersView: View {
 
             Divider()
 
-            List {
-                Section("Connection") {
-                    detailRow(label: "Type", value: server.type.uppercased())
-                    if let url = server.url, !url.isEmpty {
-                        detailRow(label: "URL", value: url)
-                    }
-                    if let cmd = server.command {
-                        detailRow(label: "Command", value: cmd)
-                    }
-                    if let args = server.args, !args.isEmpty {
-                        detailRow(label: "Args", value: args.joined(separator: " "))
-                    }
-                    if let timeout = server.timeout, timeout > 0 {
-                        detailRow(label: "Timeout", value: "\(timeout)s")
-                    }
-                }
-
-                if let env = server.env, !env.isEmpty {
-                    Section("Environment (\(env.count))") {
-                        ForEach(Array(env.keys.sorted()), id: \.self) { key in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(key)
-                                    .font(.caption)
-                                    .fontWeight(.medium)
-                                Text(env[key] ?? "")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                            }
-                            .padding(.vertical, 2)
-                        }
-                    }
+            // Tab bar
+            Picker("", selection: $selectedTab) {
+                ForEach(DetailTab.allCases, id: \.self) { tab in
+                    Text(tab.rawValue).tag(tab)
                 }
             }
-            .listStyle(.plain)
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            // Tab content
+            ScrollView {
+                switch selectedTab {
+                case .connection:
+                    connectionContent
+                case .tools:
+                    toolsContent
+                case .prompts:
+                    promptsContent
+                }
+            }
+        }
+        .task(id: server.name) {
+            await loadTools()
+            await loadPrompts()
         }
     }
 
-    private func detailRow(label: String, value: String) -> some View {
-        HStack {
+    // MARK: - Connection Tab
+
+    @ViewBuilder
+    private var connectionContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            connectionRow(label: "Type", value: server.type.uppercased())
+            if let url = server.url, !url.isEmpty {
+                connectionRow(label: "URL", value: url)
+            }
+            if let cmd = server.command {
+                connectionRow(label: "Command", value: cmd)
+            }
+            if let args = server.args, !args.isEmpty {
+                connectionRow(label: "Args", value: args.joined(separator: " "))
+            }
+            if let timeout = server.timeout, timeout > 0 {
+                connectionRow(label: "Timeout", value: "\(timeout)s")
+            }
+
+            if let env = server.env, !env.isEmpty {
+                Divider().padding(.horizontal, 12)
+                Text("Environment (\(env.count))")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+                ForEach(Array(env.keys.sorted()), id: \.self) { key in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(key)
+                            .font(.caption)
+                            .fontWeight(.medium)
+                        Text(env[key] ?? "")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 2)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func connectionRow(label: String, value: String) -> some View {
+        HStack(alignment: .top) {
             Text(label)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(width: 60, alignment: .leading)
             Text(value)
                 .font(.system(.caption, design: .monospaced))
-                .lineLimit(1)
-                .truncationMode(.middle)
+                .lineLimit(nil)
+                .textSelection(.enabled)
+            Spacer()
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 3)
+    }
+
+    // MARK: - Tools Tab
+
+    @ViewBuilder
+    private var toolsContent: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if isLoadingTools {
+                HStack {
+                    Spacer()
+                    ProgressView("Loading tools…")
+                        .controlSize(.small)
+                        .padding(20)
+                    Spacer()
+                }
+            } else if let err = toolsError {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                    Text(err)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Retry") { Task { await loadTools() } }
+                        .font(.caption)
+                        .buttonStyle(.borderless)
+                }
+                .padding(12)
+            } else if tools.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "wrench.adjustable")
+                        .font(.title2)
+                        .foregroundStyle(.tertiary)
+                    Text("No tools registered")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Text("This server exposes no MCP tools.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(24)
+            } else {
+                Text("\(tools.count) tool\(tools.count == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+                ForEach(tools) { tool in
+                    toolRow(tool)
+                }
+            }
+        }
+    }
+
+    private func toolRow(_ tool: MCPTool) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Image(systemName: "wrench.adjustable")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(tool.name)
+                    .font(.system(.caption, design: .monospaced))
+                    .fontWeight(.medium)
+            }
+            if let desc = tool.description, !desc.isEmpty {
+                Text(desc)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+
+    // MARK: - Prompts Tab
+
+    @ViewBuilder
+    private var promptsContent: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if isLoadingPrompts {
+                HStack {
+                    Spacer()
+                    ProgressView("Loading prompts…")
+                        .controlSize(.small)
+                        .padding(20)
+                    Spacer()
+                }
+            } else if let err = promptsError {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                    Text(err)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Retry") { Task { await loadPrompts() } }
+                        .font(.caption)
+                        .buttonStyle(.borderless)
+                }
+                .padding(12)
+            } else if prompts.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "text.bubble")
+                        .font(.title2)
+                        .foregroundStyle(.tertiary)
+                    Text("No prompts registered")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Text("This server exposes no MCP prompts.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(24)
+            } else {
+                Text("\(prompts.count) prompt\(prompts.count == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+                ForEach(prompts) { prompt in
+                    promptRow(prompt)
+                }
+            }
+        }
+    }
+
+    private func promptRow(_ prompt: MCPPrompt) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Image(systemName: "text.bubble")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(prompt.name)
+                    .font(.system(.caption, design: .monospaced))
+                    .fontWeight(.medium)
+            }
+            if let desc = prompt.description, !desc.isEmpty {
+                Text(desc)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+            }
+            if let args = prompt.arguments, !args.isEmpty {
+                HStack(spacing: 4) {
+                    ForEach(args) { arg in
+                        Text(arg.name)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .badgeStyle(color: .secondary)
+                    }
+                }
+                .padding(.top, 2)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
     }
 
     // MARK: - Data Loading
 
     @MainActor
-    private func load() async {
-        isLoading = true
+    private func loadTools() async {
+        isLoadingTools = true
+        toolsError = nil
         do {
-            servers = try await dianeAPI.fetchMCPServers()
-            await loadNodes()
-            error = nil
+            tools = try await dianeAPI.fetchMCPTools(serverName: server.name)
         } catch {
-            self.error = error.localizedDescription
+            toolsError = error.localizedDescription
+            tools = []
         }
-        isLoading = false
+        isLoadingTools = false
     }
 
     @MainActor
-    private func loadNodes() async {
-        isLoadingNodes = true
+    private func loadPrompts() async {
+        isLoadingPrompts = true
+        promptsError = nil
         do {
-            nodes = try await dianeAPI.fetchRelayNodes()
-            nodeError = nil
+            prompts = try await dianeAPI.fetchMCPPrompts(serverName: server.name)
         } catch {
-            nodeError = error.localizedDescription
+            promptsError = error.localizedDescription
+            prompts = []
         }
-        isLoadingNodes = false
+        isLoadingPrompts = false
     }
+}
+
+// MARK: - Previews
+
+#Preview {
+    MCPServersView()
+        .environmentObject(AppState())
+        .environmentObject(ServerConfiguration())
+        .environmentObject(DianeAPIClient())
+        .environmentObject(EmergentAPIClient())
+        .frame(width: 800, height: 600)
 }

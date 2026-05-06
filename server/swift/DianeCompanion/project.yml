@@ -2,31 +2,33 @@ name: Diane
 options:
   bundleIdPrefix: com.emergent-company
   deploymentTarget:
-    macOS: "13.0"
-  xcodeVersion: "16.0"
+    macOS: "15.0"
+  xcodeVersion: "26.4"
   generateEmptyDirectories: true
   indentWidth: 4
   tabWidth: 4
 
 settings:
-  base:
-    SWIFT_VERSION: "5.9"
-    MACOSX_DEPLOYMENT_TARGET: "13.0"
-    PRODUCT_BUNDLE_IDENTIFIER: com.emergent-company.diane-companion
-    DEVELOPMENT_TEAM: ""
-    CODE_SIGN_STYLE: Automatic
-    ENABLE_HARDENED_RUNTIME: YES
+    base:
+        SWIFT_VERSION: "6.0"
+        MACOSX_DEPLOYMENT_TARGET: "15.0"
+        PRODUCT_BUNDLE_IDENTIFIER: com.emergent-company.diane-companion
+        DEVELOPMENT_TEAM: ""
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_HARDENED_RUNTIME: YES
+        OTHER_LDFLAGS: "-Wl,-w"
+        OTHER_SWIFT_FLAGS: "-Xlinker -w"
 
 packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
-    version: 2.7.0
+    version: 2.9.1
 
 targets:
   Diane:
     type: application
     platform: macOS
-    deploymentTarget: "13.0"
+    deploymentTarget: "15.0"
     sources:
       - path: Sources
         excludes:
@@ -46,16 +48,26 @@ targets:
       configs:
         Debug:
           CODE_SIGN_IDENTITY: "-"
+          OTHER_LDFLAGS: "-Wl,-w"
         Release:
           CODE_SIGN_IDENTITY: "Apple Distribution"
     postbuildScripts:
       - script: |
-          # Download diane CLI for current architecture (skip if already present from CI)
+          # Bundle diane CLI binary into the app bundle's Resources directory.
+          # CI places the binary at SRCROOT/Resources/diane before building; local
+          # builds fall back to downloading the latest release binary.
           ARCH=$(uname -m)
           RESOURCES="${TARGET_BUILD_DIR}/${PRODUCT_NAME}.app/Contents/Resources"
           mkdir -p "$RESOURCES"
-          if [ -f "${RESOURCES}/diane" ] && [ -s "${RESOURCES}/diane" ]; then
-            echo "diane binary already present (size: $(stat -f%z "${RESOURCES}/diane")) — skipping download"
+
+          # Prefer CI-provided binary from source Resources/ (correct version for this build)
+          if [ -f "${SRCROOT}/Resources/diane" ] && [ -s "${SRCROOT}/Resources/diane" ]; then
+            echo "diane binary found in source Resources/ (CI) — copying to build output"
+            cp "${SRCROOT}/Resources/diane" "${RESOURCES}/diane"
+            chmod +x "${RESOURCES}/diane"
+          # Next, check if already in build output (e.g. re-run)
+          elif [ -f "${RESOURCES}/diane" ] && [ -s "${RESOURCES}/diane" ]; then
+            echo "diane binary already present in build output (size: $(stat -f%z "${RESOURCES}/diane")) — skipping"
             chmod +x "${RESOURCES}/diane"
           else
             if [ "$ARCH" = "arm64" ]; then
@@ -70,6 +82,8 @@ targets:
             chmod +x "${RESOURCES}/diane" 2>/dev/null || true
           fi
         name: "Download diane CLI"
+        outputFiles:
+          - "$(TARGET_BUILD_DIR)/$(PRODUCT_NAME).app/Contents/Resources/diane"
     info:
       path: DianeCompanion/Info.plist
     entitlements:
@@ -78,7 +92,7 @@ targets:
   DianeTests:
     type: bundle.unit-test
     platform: macOS
-    deploymentTarget: "13.0"
+    deploymentTarget: "15.0"
     sources:
       - path: DianeTests
     dependencies:

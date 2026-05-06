@@ -1,12 +1,10 @@
 import Foundation
 import EventKit
-import OSLog
 
 /// Manages macOS Reminders access via EventKit.
 @MainActor
 final class RemindersManager: ObservableObject {
-    private let logger = Logger(subsystem: "com.emergent-company.diane-companion", category: "Reminders")
-    private let store = EKEventStore()
+    private nonisolated(unsafe) let store = EKEventStore()
     
     @Published private(set) var isAuthorized = false
     @Published private(set) var lists: [EKCalendar] = []
@@ -27,7 +25,7 @@ final class RemindersManager: ObservableObject {
                 return granted
             }
         } catch {
-            logger.error("Reminders permission request failed: \(error.localizedDescription)")
+            logError("Reminders permission request failed: \(error.localizedDescription)", category: "Reminders")
             return false
         }
     }
@@ -59,7 +57,11 @@ final class RemindersManager: ObservableObject {
             reminder.dueDateComponents = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: due)
         }
         try store.save(reminder, commit: true)
-        logger.info("Created reminder: \(title)")
+        logInfo("Created reminder: \(title)", category: "Reminders")
         return reminder
+    }
+
+    func saveReminder(_ reminder: EKReminder) throws {
+        try store.save(reminder, commit: true)
     }
 }

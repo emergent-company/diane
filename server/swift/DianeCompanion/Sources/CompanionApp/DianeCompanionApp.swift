@@ -1,9 +1,7 @@
 import SwiftUI
-import OSLog
 
 @main
 struct DianeCompanionApp: App {
-    private let logger = Logger(subsystem: "com.emergent-company.diane-companion", category: "App")
 
     @StateObject private var statusMonitor  = StatusMonitor()
     @StateObject private var updateChecker  = UpdateChecker()
@@ -12,10 +10,14 @@ struct DianeCompanionApp: App {
     @StateObject private var appState       = AppState()
     @StateObject private var dianeAPI       = DianeAPIClient()
     @StateObject private var apiClient      = EmergentAPIClient()
+    @StateObject private var apiServer      = APIServerManager()
     @State private var hasStarted           = false
 
     init() {
-        logger.info("Diane is launching.")
+        AppLogger.shared.info("Diane Companion app launching", category: "App")
+        // Log environment info for crash diagnostics
+        let sysInfo = ProcessInfo.processInfo
+        AppLogger.shared.debug("macOS \(sysInfo.operatingSystemVersionString), \(sysInfo.processName) v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")", category: "App")
     }
 
     private var menuBarIconName: String {
@@ -28,7 +30,8 @@ struct DianeCompanionApp: App {
     }
 
     var body: some Scene {
-        // Main application window (task 5.x)
+        // Main application window — shows onboarding when not configured,
+        // or full sidebar + content when configured and connected.
         Window("Diane", id: "main") {
             MainWindowView()
                 .environmentObject(appState)
@@ -36,6 +39,7 @@ struct DianeCompanionApp: App {
                 .environmentObject(statusMonitor)
                 .environmentObject(serverConfig)
                 .environmentObject(dianeAPI)
+                .environmentObject(updateChecker)
                 .task { await startIfNeeded() }
         }
         .windowStyle(.titleBar)
@@ -57,28 +61,6 @@ struct DianeCompanionApp: App {
                 .symbolRenderingMode(.hierarchical)
         }
         .menuBarExtraStyle(.window)
-
-        // Dedicated settings window opened via openWindow(id: "settings").
-        Window("Diane Settings", id: "settings") {
-            SettingsView()
-                .environmentObject(statusMonitor)
-                .environmentObject(serverConfig)
-                .environmentObject(apiClient)
-        }
-        .windowResizability(.contentSize)
-        .defaultPosition(.center)
-
-        // Document content viewer — opened via openWindow(id: "document-content").
-        // The document to display is stored on AppState.contentViewDocument.
-        Window("Document Content", id: "document-content") {
-            DocumentContentView()
-                .environmentObject(appState)
-                .environmentObject(apiClient)
-        }
-        .windowStyle(.titleBar)
-        .windowToolbarStyle(.unified)
-        .defaultSize(width: 1000, height: 680)
-        .defaultPosition(.center)
     }
 
     @MainActor
@@ -86,17 +68,35 @@ struct DianeCompanionApp: App {
         guard !hasStarted else { return }
         hasStarted = true
 
+        AppLogger.shared.info("App startup sequence beginning", category: "App")
+
+        // Send any crash reports from previous sessions
+        ErrorReporter.shared.sendPendingReports()
+
         updateChecker.statusMonitor = statusMonitor
         updateChecker.cliManager = cliManager
         statusMonitor.configure(from: serverConfig)
 
+        // Configuration
+        AppLogger.shared.info("Server URL: \(serverConfig.serverURL)", category: "App")
+        AppLogger.shared.debug("API key set: \(!serverConfig.apiKey.isEmpty)", category: "App")
+
         // Configure the API client from persisted server settings
         apiClient.configure(serverURL: serverConfig.serverURL, apiKey: serverConfig.apiKey)
 
-        // Check if the local Diane API is reachable
+        // Configure the API server manager and ensure local diane serve is running
+        apiServer.configure(apiClient: dianeAPI)
+        AppLogger.shared.info("Ensuring local diane serve is running", category: "App")
+        await apiServer.ensureRunning(dianeAPI: dianeAPI)
+
+        // Check reachability after trying to start
         let reachable = await dianeAPI.checkReachability()
-        logger.info("Local Diane API reachable: \(reachable)")
+        AppLogger.shared.info("Local Diane API reachable: \(reachable)", category: "App")
+        if !reachable {
+            AppLogger.shared.warning("Local API not reachable — will use remote fallback", category: "App")
+        }
 
         await updateChecker.start()
+        AppLogger.shared.info("App startup complete", category: "App")
     }
 }

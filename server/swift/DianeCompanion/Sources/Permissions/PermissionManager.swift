@@ -2,8 +2,8 @@ import Foundation
 import EventKit
 import Contacts
 import AppKit
-import OSLog
 import UserNotifications
+@preconcurrency import ApplicationServices
 
 /// Types of macOS permissions the app needs to manage.
 enum PermissionType: String, CaseIterable, Identifiable, Sendable {
@@ -13,9 +13,39 @@ enum PermissionType: String, CaseIterable, Identifiable, Sendable {
     case calendar
     case reminders
     case contacts
-    
+
     var id: String { rawValue }
-    
+
+    var settingsURL: URL? {
+        switch self {
+        case .accessibility:
+            return URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        case .automation:
+            return URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")
+        case .notifications:
+            return URL(string: "x-apple.systempreferences:com.apple.preference.notifications")
+        default:
+            return URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy")
+        }
+    }
+
+    var setupGuide: String {
+        switch self {
+        case .accessibility:
+            return "1. Open System Settings → Privacy & Security → Accessibility\n2. Find \"Diane\" in the app list\n3. Toggle the switch to enable"
+        case .automation:
+            return "1. Open System Settings → Privacy & Security → Automation\n2. Find \"Diane\" in the app list\n3. Toggle the switch to allow control of other apps"
+        case .notifications:
+            return "1. Open System Settings → Notifications\n2. Find \"Diane\" in the app list\n3. Enable \"Allow Notifications\""
+        case .calendar:
+            return "1. Open System Settings → Privacy & Security → Calendar\n2. Find \"Diane\" in the app list\n3. Toggle the switch to enable"
+        case .reminders:
+            return "1. Open System Settings → Privacy & Security → Reminders\n2. Find \"Diane\" in the app list\n3. Toggle the switch to enable"
+        case .contacts:
+            return "1. Open System Settings → Privacy & Security → Contacts\n2. Find \"Diane\" in the app list\n3. Toggle the switch to enable"
+        }
+    }
+
     var displayName: String {
         switch self {
         case .accessibility: return "Accessibility"
@@ -26,7 +56,7 @@ enum PermissionType: String, CaseIterable, Identifiable, Sendable {
         case .contacts: return "Contacts"
         }
     }
-    
+
     var description: String {
         switch self {
         case .accessibility: return "Required for controlling other apps and UI automation"
@@ -37,7 +67,7 @@ enum PermissionType: String, CaseIterable, Identifiable, Sendable {
         case .contacts: return "Required for searching and reading contacts"
         }
     }
-    
+
     var systemIcon: String {
         switch self {
         case .accessibility: return "figure.arm.seatbelt"
@@ -55,9 +85,28 @@ enum PermissionStatus: Sendable {
     case denied
     case notDetermined
     case restricted
-    
+
     var isGranted: Bool {
         if case .granted = self { return true }
+        return false
+    }
+}
+
+/// Combined feature-level status — merges OS permission grant with app-level toggle.
+enum FeatureStatus: Sendable {
+    /// Toggle ON + macOS granted → ready to use
+    case active
+    /// Toggle OFF → feature is intentionally disabled by user
+    case disabled
+    /// Toggle ON but macOS permission denied → needs user action
+    case needsPermission
+    /// Toggle ON but macOS hasn't prompted yet
+    case notDetermined
+    /// Toggle ON but macOS permission is restricted (parental controls, MDM, etc.)
+    case restricted
+
+    var isUsable: Bool {
+        if case .active = self { return true }
         return false
     }
 }
@@ -66,26 +115,93 @@ enum PermissionStatus: Sendable {
 struct PermissionInfo: Identifiable, Sendable {
     let type: PermissionType
     var status: PermissionStatus
+    var featureEnabled: Bool
     var id: String { type.rawValue }
-}
 
-/// Central permission manager that checks and requests all macOS permissions.
-@MainActor
-final class PermissionManager: ObservableObject {
-    private let logger = Logger(subsystem: "com.emergent-company.diane-companion", category: "Permissions")
-    
-    @Published var permissions: [PermissionInfo] = []
-    
-    init() {
-        refresh()
-    }
-    
-    func refresh() {
-        permissions = PermissionType.allCases.map { type in
-            PermissionInfo(type: type, status: checkStatus(type))
+    var featureStatus: FeatureStatus {
+        guard featureEnabled else { return .disabled }
+        switch status {
+        case .granted:       return .active
+        case .denied:        return .needsPermission
+        case .notDetermined: return .notDetermined
+        case .restricted:    return .restricted
         }
     }
-    
+}
+
+/// Central permission manager that checks all macOS permissions
+/// and manages app-level feature toggles (persisted to UserDefaults).
+///
+/// macOS permissions work implicitly — the system prompts when an API is first
+/// accessed, not via programmatic "request" calls. This view only shows status
+/// and guides you to System Settings. The actual permission prompt happens
+/// when you use an Apple tool (apple_list_events, apple_send_imessage, etc.).
+@MainActor
+final class PermissionManager: ObservableObject {
+
+    @Published var permissions: [PermissionInfo] = []
+    @Published var isRefreshing = false
+
+    private let defaults = UserDefaults.standard
+    private let togglePrefix = "feature_toggle_"
+
+    // MARK: - Init / Refresh
+
+    init() {
+        refresh()
+        // Kick off an async refresh to get notification status post-init
+        Task { await asyncRefresh() }
+    }
+
+    /// Synchronous refresh — fast, uses only sync-checkable permissions.
+    func refresh() {
+        isRefreshing = true
+        permissions = PermissionType.allCases.map { type in
+            PermissionInfo(
+                type: type,
+                status: checkStatus(type),
+                featureEnabled: isFeatureEnabled(type)
+            )
+        }
+        isRefreshing = false
+    }
+
+    /// Async refresh — calls sync refresh first, then checks
+    /// permissions that require async queries (notifications).
+    func asyncRefresh() async {
+        refresh()
+        // Update notification status asynchronously
+        let notifStatus = await checkNotificationStatus()
+        if let idx = permissions.firstIndex(where: { $0.type == .notifications }) {
+            permissions[idx] = PermissionInfo(
+                type: .notifications,
+                status: notifStatus,
+                featureEnabled: permissions[idx].featureEnabled
+            )
+        }
+    }
+
+    // MARK: - Feature Toggles
+
+    func isFeatureEnabled(_ type: PermissionType) -> Bool {
+        let key = togglePrefix + type.rawValue
+        return defaults.object(forKey: key) as? Bool ?? true
+    }
+
+    func setFeatureEnabled(_ enabled: Bool, for type: PermissionType) {
+        let key = togglePrefix + type.rawValue
+        defaults.set(enabled, forKey: key)
+        if let idx = permissions.firstIndex(where: { $0.type == type }) {
+            permissions[idx] = PermissionInfo(
+                type: type,
+                status: permissions[idx].status,
+                featureEnabled: enabled
+            )
+        }
+    }
+
+    // MARK: - macOS Permission Status
+
     func checkStatus(_ type: PermissionType) -> PermissionStatus {
         switch type {
         case .accessibility:
@@ -97,132 +213,212 @@ final class PermissionManager: ObservableObject {
         case .contacts:
             return mapCNStatus(CNContactStore.authorizationStatus(for: .contacts))
         case .notifications:
-            // Can't check synchronously; assume not determined
-            return .notDetermined
+            return .notDetermined  // checked async via checkNotificationStatus()
         case .automation:
-            // Can't check easily; assume not determined
-            return .notDetermined
+            return .notDetermined  // no programmatic API exists
         }
     }
-    
-    func request(_ type: PermissionType) async -> Bool {
-        switch type {
-        case .accessibility:
-            return await requestAccessibility()
-        case .calendar:
-            return await requestCalendar()
-        case .reminders:
-            return await requestReminders()
-        case .contacts:
-            return await requestContacts()
-        case .notifications:
-            return await requestNotifications()
-        case .automation:
-            return await requestAutomation()
-        }
-    }
-    
+
     func openSystemSettings(_ type: PermissionType) {
         switch type {
         case .accessibility:
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+            guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") else { return }
+            NSWorkspace.shared.open(url)
         case .automation:
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!)
+            guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") else { return }
+            NSWorkspace.shared.open(url)
         case .notifications:
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.notifications")!)
+            guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") else { return }
+            NSWorkspace.shared.open(url)
         default:
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy")!)
+            guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy") else { return }
+            NSWorkspace.shared.open(url)
         }
     }
-    
-    // MARK: - Private permission request helpers
-    
-    private func requestAccessibility() async -> Bool {
-        // Accessibility cannot be programmatically requested — user must enable manually
-        let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as NSString: true]
-        let trusted = AXIsProcessTrustedWithOptions(options)
-        refresh()
-        return trusted
+
+    // MARK: - Test Permission (triggers actual macOS permission dialog)
+
+    /// Attempt to use the API for a permission type.
+    /// macOS will show its system permission dialog if not yet determined.
+    /// Always refreshes status afterward.
+    func test(_ type: PermissionType) async -> String {
+        switch type {
+        case .notifications:
+            return await testNotifications()
+        case .calendar:
+            return await testCalendar()
+        case .reminders:
+            return await testReminders()
+        case .contacts:
+            return await testContacts()
+        case .accessibility:
+            return await testAccessibility()
+        case .automation:
+            return await testAutomation()
+        }
     }
-    
-    private func requestCalendar() async -> Bool {
+
+    private func testNotifications() async -> String {
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+        if settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional {
+            // Already granted — send a test notification
+            let content = UNMutableNotificationContent()
+            content.title = "Diane"
+            content.body = "Notifications are working ✓"
+            content.sound = .default
+            let request = UNNotificationRequest(
+                identifier: "diane-test-notification",
+                content: content,
+                trigger: UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+            )
+            do {
+                try await center.add(request)
+                await asyncRefresh()
+                return "Test notification sent"
+            } catch {
+                await asyncRefresh()
+                return "Failed to send test notification: \(error.localizedDescription)"
+            }
+        } else {
+            // Not yet authorized — requestAuthorization triggers the system dialog
+            let granted = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
+            await asyncRefresh()
+            if granted == true {
+                // Send a test notification now that we have permission
+                return await testNotifications()
+            }
+            return "macOS dialog shown — check Notification Center"
+        }
+    }
+
+    private func testCalendar() async -> String {
         let store = EKEventStore()
         do {
             if #available(macOS 14.0, *) {
+                // requestFullAccessToEvents triggers the macOS permission dialog
                 let granted = try await store.requestFullAccessToEvents()
-                refresh()
-                return granted
+                await asyncRefresh()
+                if granted {
+                    let cals = store.calendars(for: .event)
+                    return "Found \(cals.count) calendar(s): \(cals.map(\.title).joined(separator: ", "))"
+                }
+                return "Calendar access denied"
             } else {
                 let granted = try await store.requestAccess(to: .event)
-                refresh()
-                return granted
+                await asyncRefresh()
+                if granted {
+                    let cals = store.calendars(for: .event)
+                    return "Found \(cals.count) calendar(s): \(cals.map(\.title).joined(separator: ", "))"
+                }
+                return "Calendar access denied"
             }
         } catch {
-            logger.error("Calendar permission error: \(error.localizedDescription)")
-            return false
+            await asyncRefresh()
+            return "Calendar error: \(error.localizedDescription)"
         }
     }
-    
-    private func requestReminders() async -> Bool {
+
+    private func testReminders() async -> String {
         let store = EKEventStore()
         do {
             if #available(macOS 14.0, *) {
                 let granted = try await store.requestFullAccessToReminders()
-                refresh()
-                return granted
+                await asyncRefresh()
+                if granted {
+                    let lists = store.calendars(for: .reminder)
+                    return "Found \(lists.count) reminder list(s): \(lists.map(\.title).joined(separator: ", "))"
+                }
+                return "Reminders access denied"
             } else {
                 let granted = try await store.requestAccess(to: .reminder)
-                refresh()
-                return granted
+                await asyncRefresh()
+                if granted {
+                    let lists = store.calendars(for: .reminder)
+                    return "Found \(lists.count) reminder list(s): \(lists.map(\.title).joined(separator: ", "))"
+                }
+                return "Reminders access denied"
             }
         } catch {
-            logger.error("Reminders permission error: \(error.localizedDescription)")
-            return false
+            await asyncRefresh()
+            return "Reminders error: \(error.localizedDescription)"
         }
     }
-    
-    private func requestContacts() async -> Bool {
+
+    private func testContacts() async -> String {
         let store = CNContactStore()
         do {
             let granted = try await store.requestAccess(for: .contacts)
-            refresh()
-            return granted
+            await asyncRefresh()
+            if granted {
+                let keys = [CNContactGivenNameKey, CNContactFamilyNameKey] as [CNKeyDescriptor]
+                let request = CNContactFetchRequest(keysToFetch: keys)
+                var count = 0
+                try store.enumerateContacts(with: request) { _, _ in count += 1 }
+                return "Found \(count) contact(s)"
+            }
+            return "Contacts access denied"
         } catch {
-            logger.error("Contacts permission error: \(error.localizedDescription)")
-            return false
+            await asyncRefresh()
+            return "Contacts error: \(error.localizedDescription)"
         }
     }
-    
-    private func requestNotifications() async -> Bool {
+
+    private func testAccessibility() async -> String {
+        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as NSString
+        let options: NSDictionary = [key: true]
+        let trusted = AXIsProcessTrustedWithOptions(options)
+        await asyncRefresh()
+        if trusted {
+            return "Accessibility is enabled ✓"
+        }
+        return "Accessibility dialog shown — check System Settings"
+    }
+
+    private func testAutomation() async -> String {
+        // Try a harmless AppleScript to trigger the automation permission dialog
+        let script = """
+        tell application "System Events"
+            get name of every process
+        end tell
+        """
         do {
-            let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
-            refresh()
-            return granted
+            let result = try await AppleScriptRunner.run(script)
+            await asyncRefresh()
+            return "Automation works ✓ (found \(result.components(separatedBy: ", ").count) processes)"
         } catch {
-            logger.error("Notification permission error: \(error.localizedDescription)")
-            return false
+            await asyncRefresh()
+            return "Automation dialog may have been shown. Error: \(error.localizedDescription)"
         }
     }
-    
-    private func requestAutomation() async -> Bool {
-        // Automation can't be programmatically requested — user must enable in System Settings
-        // We just show the settings link
-        refresh()
-        return false
+
+    /// Asynchronously check notification authorization status via UNNotificationSettings.
+    private func checkNotificationStatus() async -> PermissionStatus {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        switch settings.authorizationStatus {
+        case .authorized, .provisional, .ephemeral:
+            return .granted
+        case .denied:
+            return .denied
+        case .notDetermined:
+            return .notDetermined
+        @unknown default:
+            return .notDetermined
+        }
     }
-    
-    // MARK: - Status mapping
-    
+
     private func mapEKStatus(_ status: EKAuthorizationStatus) -> PermissionStatus {
         switch status {
         case .authorized: return .granted
         case .denied: return .denied
         case .notDetermined: return .notDetermined
         case .restricted: return .restricted
+        case .fullAccess: return .granted
+        case .writeOnly: return .granted
         @unknown default: return .notDetermined
         }
     }
-    
+
     private func mapCNStatus(_ status: CNAuthorizationStatus) -> PermissionStatus {
         switch status {
         case .authorized: return .granted
