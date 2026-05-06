@@ -32,7 +32,7 @@ struct SettingsView: View {
                     TextField("https://your-server:8080", text: $urlDraft)
                         .textFieldStyle(.roundedBorder)
                         .onSubmit { saveSettings() }
-                        .onChange(of: urlDraft) { _ in testState = .idle }
+                        .onChange(of: urlDraft) { testState = .idle }
 
                     if let error = urlError {
                         Label(error, systemImage: "exclamationmark.circle")
