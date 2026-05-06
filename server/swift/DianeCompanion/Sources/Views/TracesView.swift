@@ -42,7 +42,7 @@ struct TracesView: View {
             await load(isBackground: false)
             startAutoRefresh()
         }
-        .onChange(of: appState.selectedProject) { _ in
+        .onChange(of: appState.selectedProject) {
             traces = []
             selectedTrace = nil
             Task { await load(isBackground: false) }

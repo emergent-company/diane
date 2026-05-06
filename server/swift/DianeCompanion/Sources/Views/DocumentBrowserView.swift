@@ -36,7 +36,7 @@ struct DocumentBrowserView: View {
             setupDebounce()
             await performSearch("")
         }
-        .onChange(of: appState.selectedProject) { _ in
+        .onChange(of: appState.selectedProject) {
             documents = []
             selectedDocument = nil
             Task { await performSearch(searchText) }
@@ -61,8 +61,8 @@ struct DocumentBrowserView: View {
                     .imageScale(.small)
                 TextField("Search documents…", text: $searchText)
                     .textFieldStyle(.plain)
-                    .onChange(of: searchText) { newValue in
-                        searchSubject.send(newValue)
+                    .onChange(of: searchText) {
+                        searchSubject.send(searchText)
                     }
                 if !searchText.isEmpty {
                     Button {

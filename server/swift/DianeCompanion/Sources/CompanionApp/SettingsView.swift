@@ -56,13 +56,13 @@ struct SettingsView: View {
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(.body, design: .monospaced))
                                 .onSubmit { saveSettings() }
-                                .onChange(of: apiKeyDraft) { _ in testState = .idle }
+                                .onChange(of: apiKeyDraft) { testState = .idle }
                         } else {
                             SecureField("Account API key", text: $apiKeyDraft)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(.body, design: .monospaced))
                                 .onSubmit { saveSettings() }
-                                .onChange(of: apiKeyDraft) { _ in testState = .idle }
+                                .onChange(of: apiKeyDraft) { testState = .idle }
                         }
                         Button {
                             isAPIKeyVisible.toggle()
@@ -143,7 +143,7 @@ struct SettingsView: View {
             GroupBox("Startup") {
                 VStack(alignment: .leading, spacing: 8) {
                     Toggle("Launch at Login", isOn: $serverConfig.launchAtLogin)
-                        .onChange(of: serverConfig.launchAtLogin) { newValue in
+                        .onChange(of: serverConfig.launchAtLogin) { _, newValue in
                             applyLaunchAtLogin(newValue)
                         }
                     Text("Automatically start Diane when you log in.")

@@ -139,8 +139,6 @@ final class ErrorReporter: @unchecked Sendable {
 
         // Write to disk — the app is about to crash so async send won't work
         let filename = "crash_\(ISO8601DateFormatter().string(from: Date())).json"
-        let fileURL = reportsDir.appendingPathComponent(filename)
-
         // Sanitize filename to avoid issues with colons on macOS
         let safeFilename = filename.replacingOccurrences(of: ":", with: "-")
         let safeURL = reportsDir.appendingPathComponent(safeFilename)
