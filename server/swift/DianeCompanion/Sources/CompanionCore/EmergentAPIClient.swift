@@ -8,7 +8,7 @@ import OSLog
 /// graph objects, agents, MCP servers, and user profile.
 @MainActor
 final class EmergentAPIClient: ObservableObject {
-    private let logger = Logger(subsystem: "com.emergent-company.emergent-mac", category: "APIClient")
+    private let logger = Logger(subsystem: "com.emergent-company.diane-companion", category: "APIClient")
 
     private let session: URLSession
     private var baseURL: URL?
