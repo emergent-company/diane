@@ -36,8 +36,8 @@ struct ObjectsBrowserView: View {
                         .foregroundStyle(.secondary)
                     TextField("Search objects…", text: $searchText)
                         .textFieldStyle(.plain)
-                        .onChange(of: searchText) { newValue in
-                            searchSubject.send(newValue)
+                        .onChange(of: searchText) {
+                            searchSubject.send(searchText)
                         }
                     if !searchText.isEmpty {
                         Button {
@@ -108,7 +108,7 @@ struct ObjectsBrowserView: View {
             guard let projectID = appState.activeProjectID, !projectID.isEmpty else { return }
             await performSearch("")
         }
-        .onChange(of: appState.selectedProject) { _ in
+        .onChange(of: appState.selectedProject) {
             objects = []
             selectedObject = nil
             Task { await performSearch(searchText) }

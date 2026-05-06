@@ -69,8 +69,8 @@ struct SearchableListView<Item: Identifiable & Hashable, RowContent: View>: View
             }
         }
         .searchable(text: $searchText, placement: .toolbar)
-        .onChange(of: searchText) { newValue in
-            Task { await onSearch?(newValue) }
+        .onChange(of: searchText) {
+            Task { await onSearch?(searchText) }
         }
     }
 }
