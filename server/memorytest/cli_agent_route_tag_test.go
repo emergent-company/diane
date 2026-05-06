@@ -4,6 +4,8 @@
 // Test 'diane agent tag <name> <tags>' — sets agent tags
 //
 // Run: cd ~/diane/server && /usr/local/go/bin/go test -v -count=1 -run TestCLI_AgentRoute ./memorytest/
+//go:build integration
+
 package memorytest
 
 import (

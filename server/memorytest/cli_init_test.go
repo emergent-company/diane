@@ -4,6 +4,8 @@
 // created correctly. Original config is backed up and restored after the test.
 //
 // Run: cd ~/diane/server && /usr/local/go/bin/go test -v -count=1 -run TestCLI_Init ./memorytest/
+//go:build integration
+
 package memorytest
 
 import (

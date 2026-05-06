@@ -6,6 +6,8 @@
 // allowing Diane to maintain context across multiple messages.
 //
 // Run: cd ~/diane/server && /usr/local/go/bin/go test -v -count=1 -run TestAgentSession ./memorytest/
+//go:build integration
+
 package memorytest
 
 import (

@@ -128,7 +128,58 @@ tar xzf diane-*.tar.gz
 mkdir -p ~/.diane/bin && mv diane ~/.diane/bin/
 ```
 
-## Build from Source
+## Development
+
+### Prerequisites
+
+- **Go 1.25+** — download from [go.dev/dl](https://go.dev/dl/)
+- **golangci-lint** (optional, for `make lint`): `brew install golangci-lint`
+
+### Quick Start
+
+```bash
+git clone https://github.com/emergent-company/diane.git
+cd diane
+make setup      # install git hooks once per clone
+make build      # build binary
+make install    # install to ~/.diane/bin/
+```
+
+### Make Targets
+
+| Command | What it does |
+|---------|-------------|
+| `make setup` | Install git pre-commit hooks |
+| `make test` | Run unit tests (171 tests, ~8s, no external deps) |
+| `make test-all` | Run all tests including integration |
+| `make test-quick TestName` | Run tests matching a pattern |
+| `make build` | Build the diane binary |
+| `make install` | Copy binary to `~/.diane/bin/` |
+| `make vet` | Run `go vet` — catches nil ptrs, unreachable code |
+| `make lint` | Run `golangci-lint` — full static analysis |
+| `make lint-fix` | Auto-fix common lint issues |
+| `make check` | Full gate: vet → lint → test |
+
+### Pre-commit Hook
+
+The hook runs `go vet` + unit tests on every commit that touches Go files.
+
+```bash
+# Bypass for urgent commits:
+GIT_SKIP_TESTS=1 git commit -m "..."
+
+# Install on a fresh clone:
+git config core.hooksPath .githooks
+```
+
+### Test Structure
+
+| Group | Package | When to run |
+|-------|---------|-------------|
+| **Unit tests** | `./internal/... ./cmd/...` | Every commit — fast, no deps |
+| **Integration tests** | `./memorytest/...` | Needs live MP credentials (`-tags=integration`) |
+
+### Build from Source
 
 ```bash
 git clone https://github.com/emergent-company/diane.git

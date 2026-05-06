@@ -4,6 +4,8 @@
 // memory.emergent-company.ai.
 //
 // Run: cd ~/diane/server && MEMORY_TEST_TOKEN=emt_*** /usr/local/go/bin/go test -v -count=1 ./memorytest/
+//go:build integration
+
 package memorytest
 
 import (

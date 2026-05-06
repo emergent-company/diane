@@ -1,0 +1,48 @@
+# Diane — golangci-lint configuration
+# https://golangci-lint.run/usage/configuration/
+#
+# Install: brew install golangci-lint
+# Run:     golangci-lint run ./internal/... ./cmd/...
+
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck       # check for unchecked errors
+    - gosimple       # simplify code
+    - govet          # go vet (built-in)
+    - ineffassign    # detect unused assignments
+    - staticcheck    # go vet on steroids
+    - unused         # detect unused code
+    - containedctx   # detect structs containing context.Context
+    - goconst        # find repeated constants that could be pulled out
+    - prealloc       # suggest pre-allocating slices
+    - unconvert      # remove unnecessary type conversions
+    - misspell       # correct common misspellings
+  settings:
+    staticcheck:
+      checks:
+        - all
+        - -QF1008  # ignore: could remove embedded field by value -> method receiver
+        - -S1002   # ignore: should omit comparison to bool constant
+        - -ST1000  # ignore: missing package doc comment
+        - -ST1003  # ignore: identifier naming rules
+        - -ST1005  # ignore: error strings should not be capitalized
+        - -ST1016  # ignore: use consistent method receiver names
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+    prealloc:
+      simple: true
+      range-loops: true
+      for-loops: false
+    misspell:
+      locale: US
+
+issues:
+  max-issues-per-linter: 50
+  max-same-issues: 10
+
+run:
+  timeout: 2m

@@ -4,6 +4,8 @@
 // read credentials from ~/.config/diane.yml — Diane's canonical config file.
 //
 // Run: cd ~/diane/server && /usr/local/go/bin/go test -v -count=1 -run TestAgent ./memorytest/
+//go:build integration
+
 package memorytest
 
 import (

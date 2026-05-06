@@ -10,6 +10,8 @@
 //   - #183: CLI sessions command shadowed → ADK sessions alias removed (FIXED v0.36.1)
 //
 // Run: cd server && MEMORY_TEST_TOKEN=<token> /usr/local/go/bin/go test -v -count=1 ./memorytest/
+//go:build integration
+
 package memorytest
 
 import (

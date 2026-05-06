@@ -6,6 +6,8 @@
 // and 'diane agent runs'.
 //
 // Run: cd ~/diane/server && /usr/local/go/bin/go test -v -count=1 -run TestRunTrace ./memorytest/
+//go:build integration
+
 package memorytest
 
 import (

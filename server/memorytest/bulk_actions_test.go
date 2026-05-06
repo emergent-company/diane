@@ -5,6 +5,8 @@
 // add_labels (additive vs set_labels which replaces).
 //
 // Run: cd ~/diane/server && MEMORY_TEST_TOKEN=*** /usr/local/go/bin/go test -v -count=1 -run TestBulkAction ./memorytest/
+//go:build integration
+
 package memorytest
 
 import (

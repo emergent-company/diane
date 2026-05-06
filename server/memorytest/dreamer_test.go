@@ -4,6 +4,8 @@
 // and performs the full pipeline: decay, patterns, hallucination, narrative.
 //
 // Run: cd ~/diane/server && /usr/local/go/bin/go test -v -count=1 -run TestAgentDreamer ./memorytest/
+//go:build integration
+
 package memorytest
 
 import (

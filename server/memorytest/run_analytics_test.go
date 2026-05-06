@@ -8,6 +8,8 @@
 //   - Error handling for non-existent runs
 //
 // Run: cd ~/diane/server && /usr/local/go/bin/go test -v -count=1 -run TestRunAnalytics ./memorytest/
+//go:build integration
+
 package memorytest
 
 import (

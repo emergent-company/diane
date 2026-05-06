@@ -6,6 +6,8 @@
 // large sessions with pagination, and extracted-from relationships.
 //
 // Run: cd server && MEMORY_TEST_TOKEN=*** /usr/local/go/bin/go test -v -count=1 ./memorytest/
+//go:build integration
+
 package memorytest
 
 import (

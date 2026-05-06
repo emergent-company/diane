@@ -4,6 +4,8 @@
 // (individual agent), verifying the output format and data completeness.
 //
 // Run: cd ~/diane/server && /usr/local/go/bin/go test -v -count=1 -run TestCLI_AgentStats ./memorytest/
+//go:build integration
+
 package memorytest
 
 import (

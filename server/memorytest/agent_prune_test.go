@@ -3,6 +3,8 @@
 // and that --force actually deletes orphaned agent definitions.
 //
 // Run: cd ~/diane/server && /usr/local/go/bin/go test -v -count=1 -run TestCLI_AgentPrune ./memorytest/
+//go:build integration
+
 package memorytest
 
 import (

@@ -6,6 +6,8 @@
 // bridge tests.
 //
 // Run: cd ~/diane/server && MEMORY_TEST_TOKEN=*** /usr/local/go/bin/go test -v -count=1 -run TestBridge_ ./memorytest/
+//go:build integration
+
 package memorytest
 
 import (

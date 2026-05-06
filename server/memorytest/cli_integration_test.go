@@ -6,6 +6,8 @@
 // valid API token.
 //
 // Run: cd ~/diane/server && /usr/local/go/bin/go test -v -count=1 -run TestCLI ./memorytest/
+//go:build integration
+
 package memorytest
 
 import (

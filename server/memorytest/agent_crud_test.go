@@ -6,6 +6,8 @@
 // that the actual diane agent sync command uses.
 //
 // Run: cd ~/diane/server && /usr/local/go/bin/go test -v -count=1 -run TestAgentDef ./memorytest/
+//go:build integration
+
 package memorytest
 
 import (

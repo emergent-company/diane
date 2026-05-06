@@ -6,6 +6,8 @@
 //   - 'diane provider list' — lists configured providers
 //
 // Run: cd ~/diane/server && /usr/local/go/bin/go test -v -count=1 -run TestCLI_Nodes ./memorytest/
+//go:build integration
+
 package memorytest
 
 import (

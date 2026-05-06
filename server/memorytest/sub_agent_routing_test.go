@@ -10,6 +10,8 @@
 //   - Runtime trigger verifies agents are discoverable via list_available_agents
 //
 // Run: cd ~/diane/server && /usr/local/go/bin/go test -v -count=1 -run TestSubAgent ./memorytest/
+//go:build integration
+
 package memorytest
 
 import (

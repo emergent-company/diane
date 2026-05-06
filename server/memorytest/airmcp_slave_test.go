@@ -5,6 +5,8 @@
 // server exposing Apple ecosystem tools.
 //
 // Run: cd ~/diane/server && /usr/local/go/bin/go test -v -count=1 -run TestAirMCP ./memorytest/
+//go:build integration
+
 package memorytest
 
 import (

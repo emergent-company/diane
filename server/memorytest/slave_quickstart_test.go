@@ -4,6 +4,8 @@
 // DIANE_TOKEN, DIANE_SERVER, DIANE_PROJECT.
 //
 // Run: cd ~/diane/server && /usr/local/go/bin/go test -v -count=1 -run TestSlave ./memorytest/
+//go:build integration
+
 package memorytest
 
 import (

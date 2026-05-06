@@ -10,6 +10,8 @@
 // API surface correctness without needing valid provider API keys.
 //
 // Run: cd ~/diane/server && /usr/local/go/bin/go test -v -count=1 -run TestProvider ./memorytest/
+//go:build integration
+
 package memorytest
 
 import (
