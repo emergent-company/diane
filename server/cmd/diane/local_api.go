@@ -6,12 +6,16 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Emergent-Comapny/diane/internal/config"
 	"github.com/Emergent-Comapny/diane/internal/mcpproxy"
 	"github.com/Emergent-Comapny/diane/internal/memory"
+	sdkagents "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agentdefinitions"
+	sdkagentrun "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agents"
 	"github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/graph"
 )
 
@@ -34,6 +38,9 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 
 	api := &apiHandlers{pc: pc}
 	mux.HandleFunc("/api/status", api.handleStatus)
+	mux.HandleFunc("/api/stats", api.handleStats)
+	mux.HandleFunc("/api/stats/providers", api.handleProviderStats)
+	mux.HandleFunc("/api/stats/objects", api.handleGraphObjectStats)
 	mux.HandleFunc("/api/sessions", api.handleSessions)
 	mux.HandleFunc("/api/sessions/", api.handleSessionMessages)
 	mux.HandleFunc("/api/mcp-servers", api.handleMCPServers)
@@ -235,6 +242,258 @@ func (h *apiHandlers) handleNodes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, map[string]any{"nodes": nodes})
+}
+
+// GET /api/stats — agent run statistics from the Memory Platform.
+func (h *apiHandlers) handleStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	hours, _ := strconv.Atoi(r.URL.Query().Get("hours"))
+	if hours <= 0 || hours > 720 {
+		hours = 24
+	}
+
+	ctx := context.Background()
+	since := time.Now().Add(-time.Duration(hours) * time.Hour)
+	opts := &sdkagentrun.RunStatsOptions{Since: &since}
+
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("bridge: %v", err))
+		return
+	}
+	defer bridge.Close()
+
+	statsResp, err := bridge.GetProjectRunStats(ctx, opts)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("query stats: %v", err))
+		return
+	}
+	stats := statsResp.Data
+
+	// Fetch agent definitions to enrich stats
+	defs, defsErr := bridge.ListAgentDefs(ctx)
+	defLookup := make(map[string]sdkagents.AgentDefinitionSummary)
+	if defsErr == nil && defs != nil && defs.Data != nil {
+		for _, d := range defs.Data {
+			defLookup[d.Name] = d
+		}
+	}
+
+	// Match a run stats agent name to an agent definition.
+	matchAgent := func(runName string) *sdkagents.AgentDefinitionSummary {
+		if d, ok := defLookup[runName]; ok {
+			return &d
+		}
+		return nil
+	}
+
+	// Aggregate stats keyed by agent definition ID (or raw name if unmatched).
+	type mergedStat struct {
+		agentName       string
+		agentID         string
+		agentDesc       string
+		agentFlowType   string
+		totalRuns       int
+		successRuns     int
+		errorRuns       int
+		totalDurationMs float64
+		totalInput      float64
+		totalOutput     float64
+		totalCostUSD    float64
+	}
+
+	merged := make(map[string]*mergedStat)
+
+	for runName, as := range stats.ByAgent {
+		totalRuns := int(as.Total)
+		successRuns := int(as.Success)
+		errorRuns := int(as.Failed) + int(as.Errored)
+
+		def := matchAgent(runName)
+		key := runName
+		if def != nil {
+			key = def.ID
+		}
+
+		existing, exists := merged[key]
+		if !exists {
+			existing = &mergedStat{agentName: runName}
+			if def != nil {
+				existing.agentName = def.Name
+				existing.agentID = def.ID
+				if def.Description != nil {
+					existing.agentDesc = *def.Description
+				}
+				existing.agentFlowType = def.FlowType
+			}
+			merged[key] = existing
+		}
+
+		existing.totalRuns += totalRuns
+		existing.successRuns += successRuns
+		existing.errorRuns += errorRuns
+		existing.totalDurationMs += float64(totalRuns) * as.AvgDurationMs
+		existing.totalInput += as.AvgInputTokens * float64(totalRuns)
+		existing.totalOutput += as.AvgOutputTokens * float64(totalRuns)
+		existing.totalCostUSD += as.TotalCostUSD
+	}
+
+	// Add zeroed entries for agent definitions with no runs
+	if defsErr == nil && defs != nil && defs.Data != nil {
+		for _, d := range defs.Data {
+			if _, ok := merged[d.ID]; !ok {
+				merged[d.ID] = &mergedStat{
+					agentName:     d.Name,
+					agentID:       d.ID,
+					agentFlowType: d.FlowType,
+				}
+				if d.Description != nil {
+					merged[d.ID].agentDesc = *d.Description
+				}
+			}
+		}
+	}
+
+	// Build JSON response types
+	type summaryJSON struct {
+		AgentName         string  `json:"agent_name"`
+		AgentID           string  `json:"agent_id,omitempty"`
+		AgentDescription  string  `json:"agent_description,omitempty"`
+		AgentFlowType     string  `json:"agent_flow_type,omitempty"`
+		TotalRuns         int     `json:"total_runs"`
+		SuccessRuns       int     `json:"success_runs"`
+		ErrorRuns         int     `json:"error_runs"`
+		AvgDurationMs     float64 `json:"avg_duration_ms"`
+		AvgStepCount      float64 `json:"avg_step_count"`
+		AvgToolCalls      float64 `json:"avg_tool_calls"`
+		AvgInputTokens    float64 `json:"avg_input_tokens"`
+		AvgOutputTokens   float64 `json:"avg_output_tokens"`
+		TotalDurationMs   int     `json:"total_duration_ms"`
+		TotalInputTokens  int     `json:"total_input_tokens"`
+		TotalOutputTokens int     `json:"total_output_tokens"`
+		TotalCostUSD      float64 `json:"total_cost_usd"`
+		AvgCostUSD        float64 `json:"avg_cost_usd"`
+		SuccessRate       float64 `json:"success_rate"`
+	}
+
+	type totalsJSON struct {
+		TotalRuns       int     `json:"total_runs"`
+		TotalSuccess    int     `json:"total_success"`
+		TotalErrors     int     `json:"total_errors"`
+		TotalDurationMs int     `json:"total_duration_ms"`
+		TotalInput      int     `json:"total_input_tokens"`
+		TotalOutput     int     `json:"total_output_tokens"`
+		TotalCostUSD    float64 `json:"total_cost_usd"`
+		OverallAvgDurMs float64 `json:"overall_avg_duration_ms"`
+		OverallSuccess  float64 `json:"overall_success_rate"`
+	}
+
+	items := make([]summaryJSON, 0, len(merged))
+	var totals totalsJSON
+
+	for _, m := range merged {
+		successRate := float64(0)
+		if m.totalRuns > 0 {
+			successRate = float64(m.successRuns) / float64(m.totalRuns) * 100
+		}
+		avgCost := float64(0)
+		if m.totalRuns > 0 {
+			avgCost = m.totalCostUSD / float64(m.totalRuns)
+		}
+
+		items = append(items, summaryJSON{
+			AgentName:         m.agentName,
+			AgentID:           m.agentID,
+			AgentDescription:  m.agentDesc,
+			AgentFlowType:     m.agentFlowType,
+			TotalRuns:         m.totalRuns,
+			SuccessRuns:       m.successRuns,
+			ErrorRuns:         m.errorRuns,
+			AvgDurationMs:     safeAvg(m.totalDurationMs, m.totalRuns),
+			AvgInputTokens:    safeAvg(m.totalInput, m.totalRuns),
+			AvgOutputTokens:   safeAvg(m.totalOutput, m.totalRuns),
+			TotalDurationMs:   int(m.totalDurationMs),
+			TotalInputTokens:  int(m.totalInput),
+			TotalOutputTokens: int(m.totalOutput),
+			TotalCostUSD:      m.totalCostUSD,
+			AvgCostUSD:        avgCost,
+			SuccessRate:       successRate,
+		})
+		totals.TotalRuns += m.totalRuns
+		totals.TotalSuccess += m.successRuns
+		totals.TotalErrors += m.errorRuns
+		totals.TotalDurationMs += int(m.totalDurationMs)
+		totals.TotalInput += int(m.totalInput)
+		totals.TotalOutput += int(m.totalOutput)
+		totals.TotalCostUSD += m.totalCostUSD
+	}
+
+	if totals.TotalRuns > 0 {
+		totals.OverallAvgDurMs = float64(totals.TotalDurationMs) / float64(totals.TotalRuns)
+		totals.OverallSuccess = float64(totals.TotalSuccess) / float64(totals.TotalRuns) * 100
+	}
+
+	// Sort: agents with runs first, then alphabetically
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].TotalRuns != items[j].TotalRuns {
+			return items[i].TotalRuns > items[j].TotalRuns
+		}
+		return items[i].AgentName < items[j].AgentName
+	})
+
+	writeJSON(w, map[string]any{
+		"agents": items,
+		"totals": totals,
+		"hours":  hours,
+	})
+}
+
+// safeAvg returns avg = total / count, or 0 if count is 0.
+func safeAvg(total float64, count int) float64 {
+	if count == 0 {
+		return 0
+	}
+	return total / float64(count)
+}
+
+func jsonError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"error": msg}) //nolint:errcheck
+}
+
+// GET /api/stats/providers — provider/model usage summary.
+func (h *apiHandlers) handleProviderStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	writeJSON(w, map[string]any{
+		"providers":           []any{},
+		"total_runs":          0,
+		"total_success":       0,
+		"total_errors":        0,
+		"total_input_tokens":  0,
+		"total_output_tokens": 0,
+		"total_cost_usd":      0.0,
+		"hours":               0,
+	})
+}
+
+// GET /api/stats/objects — graph object counts from the Memory Platform.
+func (h *apiHandlers) handleGraphObjectStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	writeJSON(w, map[string]any{
+		"total":   0,
+		"by_type": []any{},
+	})
 }
 
 // writeJSON marshals v as JSON and writes it to w with Content-Type header.
