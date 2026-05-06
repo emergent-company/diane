@@ -116,7 +116,6 @@ jobs:
       - name: Build and package (signed if cert available)
         id: build_package
         run: |
-          set -o pipefail
           mkdir -p build
           chmod +x Scripts/build-dmg.sh
           if [ -n "$DEVELOPMENT_TEAM" ]; then
@@ -124,6 +123,12 @@ jobs:
           else
             ./Scripts/build-dmg.sh --no-sign 2>&1 | tee build/build-log.txt
           fi
+          exit_code=${PIPESTATUS[0]}
+          echo "## Build exit code: $exit_code" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat build/build-log.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          exit $exit_code
         working-directory: server/swift/DianeCompanion
         env:
           VERSION: ${{ github.ref_name }}
@@ -139,7 +144,7 @@ jobs:
           path: server/swift/DianeCompanion/build/Diane-*.dmg
 
       - name: Upload build log on failure
-        if: failure() && steps.build_package.outcome == 'failure'
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: companion-build-log
