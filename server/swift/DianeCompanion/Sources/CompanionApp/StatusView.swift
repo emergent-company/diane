@@ -75,7 +75,7 @@ struct CLIStatusRow: View {
                 }
                 .frame(maxHeight: 60)
                 .background(Color(NSColor.textBackgroundColor))
-                .cornerRadius(4)
+                .cornerRadius(Design.CornerRadius.small)
             }
         }
     }

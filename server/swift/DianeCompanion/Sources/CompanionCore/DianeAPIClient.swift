@@ -1,5 +1,4 @@
 import Foundation
-import OSLog
 
 /// Client for Diane's local companion API (served by `diane serve` on 127.0.0.1:8890).
 ///
@@ -8,7 +7,6 @@ import OSLog
 /// config for MCP servers, Memory Platform relay for nodes).
 @MainActor
 final class DianeAPIClient: ObservableObject {
-    private let logger = Logger(subsystem: "com.emergent-company.diane-companion", category: "DianeAPI")
     private let session: URLSession
     private let baseURL: String
 
@@ -22,7 +20,28 @@ final class DianeAPIClient: ObservableObject {
         session = URLSession(configuration: config)
     }
 
-    // MARK: - Health / Reachability
+    // MARK: - Health / Server Status
+
+    struct ServerStatus: Codable, Sendable {
+        let ok: Bool
+        let version: String?
+        let startedAt: String?
+        let serverURL: String?
+        let projectID: String?
+
+        enum CodingKeys: String, CodingKey {
+            case ok
+            case version
+            case startedAt = "started_at"
+            case serverURL = "server_url"
+            case projectID = "project_id"
+        }
+    }
+
+    func fetchServerStatus() async throws -> ServerStatus {
+        let data = try await get("/api/status")
+        return try JSONDecoder().decode(ServerStatus.self, from: data)
+    }
 
     func checkReachability() async -> Bool {
         guard let url = URL(string: "\(baseURL)/api/status") else { return false }
@@ -51,6 +70,12 @@ final class DianeAPIClient: ObservableObject {
 
     // MARK: - Sessions
 
+    /// Log a snippet of response data when JSON decoding fails, so we can debug API mismatches.
+    private func logDecodeFailure<T>(_ type: T.Type, data: Data, context: String) {
+        let prefix = String(data: data.prefix(1024), encoding: .utf8) ?? "<non-utf8>"
+        logWarning("JSON decode failed for \(context) — expected \(T.self). Response prefix: \(prefix)", category: "DianeAPI")
+    }
+
     func fetchSessions(status: String? = nil) async throws -> [DianeSession] {
         var path = "/api/sessions"
         if let s = status {
@@ -61,6 +86,7 @@ final class DianeAPIClient: ObservableObject {
         if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.items {
             return list
         }
+        logDecodeFailure([DianeSession].self, data: data, context: "fetchSessions")
         return (try? JSONDecoder().decode([DianeSession].self, from: data)) ?? []
     }
 
@@ -71,7 +97,44 @@ final class DianeAPIClient: ObservableObject {
         if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.items {
             return list
         }
+        logDecodeFailure([DianeMessage].self, data: data, context: "fetchSessionMessages")
         return (try? JSONDecoder().decode([DianeMessage].self, from: data)) ?? []
+    }
+
+    func fetchSessionDetail(sessionID: String) async throws -> SessionDetailResponse {
+        let encoded = sessionID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionID
+        let data = try await get("/api/sessions/\(encoded)")
+        return try JSONDecoder().decode(SessionDetailResponse.self, from: data)
+    }
+
+    // MARK: - Chat Send
+
+    /// Send a chat message and wait for the full agent response via the agent pipeline.
+    func sendChatMessage(sessionID: String?, content: String, agentName: String = "diane-default") async throws -> ChatSendResponse {
+        let body: [String: Any] = [
+            "session_id": sessionID as Any,
+            "content": content,
+            "agent_name": agentName
+        ]
+        let jsonData = try JSONSerialization.data(withJSONObject: body)
+        let data = try await post("/api/chat/send", body: jsonData, timeout: 180)
+        return try JSONDecoder().decode(ChatSendResponse.self, from: data)
+    }
+
+    // MARK: - Session Write
+
+    func createSession(title: String? = nil) async throws -> DianeSession {
+        var body: Data? = nil
+        if let t = title {
+            body = try JSONEncoder().encode(["title": t])
+        }
+        let data = try await post("/api/sessions", body: body)
+        return try JSONDecoder().decode(DianeSession.self, from: data)
+    }
+
+    func closeSession(sessionID: String) async throws {
+        let encoded = sessionID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionID
+        _ = try await delete("/api/sessions/\(encoded)")
     }
 
     // MARK: - MCP Servers
@@ -82,6 +145,7 @@ final class DianeAPIClient: ObservableObject {
         if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.servers {
             return list
         }
+        logDecodeFailure([MCPServer].self, data: data, context: "fetchMCPServers")
         return (try? JSONDecoder().decode([MCPServer].self, from: data)) ?? []
     }
 
@@ -93,7 +157,231 @@ final class DianeAPIClient: ObservableObject {
         if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.nodes {
             return list
         }
+        logDecodeFailure([RelayNode].self, data: data, context: "fetchRelayNodes")
         return (try? JSONDecoder().decode([RelayNode].self, from: data)) ?? []
+    }
+
+    // MARK: - MCP Tools & Prompts
+
+    /// Fetch tools exposed by a specific MCP server.
+    func fetchMCPTools(serverName: String) async throws -> [MCPTool] {
+        let encoded = serverName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? serverName
+        let data = try await get("/api/mcp-servers/\(encoded)/tools")
+        struct Response: Decodable { let tools: [MCPTool]?; let error: String? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data) {
+            if let errMsg = resp.error {
+                throw DianeAPIError.serverError(errMsg)
+            }
+            if let list = resp.tools {
+                return list
+            }
+        }
+        logDecodeFailure([MCPTool].self, data: data, context: "fetchMCPTools")
+        return (try? JSONDecoder().decode([MCPTool].self, from: data)) ?? []
+    }
+
+    /// Fetch prompts exposed by a specific MCP server.
+    func fetchMCPPrompts(serverName: String) async throws -> [MCPPrompt] {
+        let encoded = serverName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? serverName
+        let data = try await get("/api/mcp-servers/\(encoded)/prompts")
+        struct Response: Decodable { let prompts: [MCPPrompt]?; let error: String? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data) {
+            if let errMsg = resp.error {
+                throw DianeAPIError.serverError(errMsg)
+            }
+            if let list = resp.prompts {
+                return list
+            }
+        }
+        return (try? JSONDecoder().decode([MCPPrompt].self, from: data)) ?? []
+    }
+
+    // MARK: - MCP Server CRUD
+
+    /// Toggle an MCP server's enabled/disabled state.
+    func toggleMCPServer(serverName: String) async throws -> Bool {
+        let encoded = serverName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? serverName
+        let data = try await post("/api/mcp-servers/toggle/\(encoded)", body: nil)
+        struct Response: Decodable { let ok: Bool?; let enabled: Bool? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data) {
+            return resp.enabled ?? false
+        }
+        return false
+    }
+
+    /// Save (add or update) an MCP server configuration.
+    func saveMCPServer(_ server: MCPServer) async throws {
+        let body = try JSONEncoder().encode(server)
+        _ = try await post("/api/mcp-servers/store", body: body)
+    }
+
+    /// Delete an MCP server configuration.
+    func deleteMCPServer(serverName: String) async throws {
+        let encoded = serverName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? serverName
+        _ = try await post("/api/mcp-servers/delete/\(encoded)", body: nil)
+    }
+
+    // MARK: - Stats
+
+    func fetchAgentStats(hours: Int = 24) async throws -> AgentStatsResponse {
+        let data = try await get("/api/stats?hours=\(hours)")
+        return try JSONDecoder().decode(AgentStatsResponse.self, from: data)
+    }
+
+    func fetchProviderStats(hours: Int = 24) async throws -> ProviderStatsResponse {
+        let data = try await get("/api/stats/providers?hours=\(hours)")
+        return try JSONDecoder().decode(ProviderStatsResponse.self, from: data)
+    }
+
+    func fetchProjectProviders() async throws -> [ProjectProviderInfo] {
+        let data = try await get("/api/providers")
+        struct Response: Decodable { let providers: [ProjectProviderInfo]? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.providers {
+            return list
+        }
+        return []
+    }
+
+    func fetchGraphObjectStats() async throws -> GraphObjectStatsResponse {
+        let data = try await get("/api/stats/objects")
+        return try JSONDecoder().decode(GraphObjectStatsResponse.self, from: data)
+    }
+
+    // MARK: - Graph Schema
+
+    /// Fetch the embedded graph schema definitions (object types + relationships).
+    func fetchGraphSchema() async throws -> SchemaResponse {
+        let data = try await get("/api/schema")
+        return try JSONDecoder().decode(SchemaResponse.self, from: data)
+    }
+
+    /// Fetch recent objects of a given schema type from the project's memory graph.
+    func fetchSchemaObjects(typeName: String, limit: Int = 20) async throws -> SchemaObjectsResponse {
+        let data = try await get("/api/schema/objects/\(typeName)?limit=\(limit)")
+        return try JSONDecoder().decode(SchemaObjectsResponse.self, from: data)
+    }
+
+    // MARK: - Agent Definitions
+
+    func fetchAgentDefs() async throws -> [AgentDef] {
+        let data = try await get("/api/agents")
+        struct Response: Decodable { let agents: [AgentDef]? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.agents {
+            return list
+        }
+        logDecodeFailure([AgentDef].self, data: data, context: "fetchAgentDefs")
+        return []
+    }
+
+    /// Fetch full detail for a single agent by name.
+    func fetchAgentDetail(name: String) async throws -> AgentDetail {
+        let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        let data = try await get("/api/agents/\(encoded)")
+        return try JSONDecoder().decode(AgentDetail.self, from: data)
+    }
+
+    // MARK: - Agent CRUD (Create, Update, Delete, Clone)
+
+    /// Create a new user-defined agent.
+    func createAgent(_ req: CreateAgentRequest) async throws -> AgentDef {
+        let body = try JSONEncoder().encode(req)
+        let data = try await post("/api/agents", body: body, timeout: 15)
+        struct Response: Decodable { let name: String?; let id: String? }
+        _ = try? JSONDecoder().decode(Response.self, from: data)
+        // Return the agent list to get the full def
+        let agents = try await fetchAgentDefs()
+        guard let created = agents.first(where: { $0.name == req.name }) else {
+            throw DianeAPIError.serverError("Agent created but not found in listing")
+        }
+        return created
+    }
+
+    /// Update a user-defined agent definition.
+    func updateAgent(name: String, changes: [String: Any]) async throws {
+        let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        let body = try JSONSerialization.data(withJSONObject: changes)
+        _ = try await patch("/api/agents/\(encoded)", body: body)
+    }
+
+    /// Delete a user-defined agent or disable a built-in agent.
+    func deleteAgent(name: String) async throws -> String {
+        let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        let data = try await delete("/api/agents/\(encoded)")
+        struct Response: Decodable { let status: String? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data), let s = resp.status {
+            return s
+        }
+        return "deleted"
+    }
+
+    /// Clone an agent as a new user-defined agent.
+    func cloneAgent(name: String, newName: String) async throws -> String {
+        let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        let body = try JSONEncoder().encode(CloneAgentRequest(name: newName))
+        let data = try await post("/api/agents/\(encoded)/clone", body: body, timeout: 15)
+        struct Response: Decodable { let name: String?; let status: String? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data), let n = resp.name {
+            return n
+        }
+        return newName
+    }
+
+    // MARK: - Agent Override Config
+
+    /// Fetch the override config for a built-in agent.
+    func fetchAgentOverride(name: String) async throws -> AgentOverrideConfig? {
+        let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        let data = try await get("/api/agents/\(encoded)/override")
+        struct Response: Decodable { let overrides: AgentOverrideConfig? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data) {
+            return resp.overrides
+        }
+        // Try direct decode
+        return try? JSONDecoder().decode(AgentOverrideConfig.self, from: data)
+    }
+
+    /// Save (upsert) an override config for a built-in agent.
+    func saveAgentOverride(name: String, override: AgentOverrideConfig) async throws {
+        let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        let body = try JSONEncoder().encode(override)
+        _ = try await put("/api/agents/\(encoded)/override", body: body)
+    }
+
+    /// Remove the override config for a built-in agent (restores built-in defaults).
+    func deleteAgentOverride(name: String) async throws {
+        let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        _ = try await delete("/api/agents/\(encoded)/override")
+    }
+
+    /// Trigger re-seed of built-in agents with current graph config.
+    func seedAgents() async throws -> Int {
+        let data = try await post("/api/agents/seed", body: nil, timeout: 60)
+        struct Response: Decodable { let count: Int?; let status: String? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data) {
+            return resp.count ?? 0
+        }
+        return 0
+    }
+
+    // MARK: - Doctor Check
+
+    /// Run the diane doctor diagnostics via the local API.
+    func fetchDoctorReport() async throws -> DoctorResponse {
+        let data = try await get("/api/doctor")
+        return try JSONDecoder().decode(DoctorResponse.self, from: data)
+    }
+
+    // MARK: - Relay Nodes
+
+    func fetchNodeTools(instanceID: String) async throws -> [MCPToolInfo] {
+        let encoded = instanceID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? instanceID
+        let data = try await get("/api/nodes/\(encoded)/tools")
+        struct Response: Decodable { let tools: [MCPToolInfo]? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.tools {
+            return list
+        }
+        logDecodeFailure([MCPToolInfo].self, data: data, context: "fetchNodeTools")
+        return []
     }
 
     // MARK: - HTTP
@@ -116,18 +404,106 @@ final class DianeAPIClient: ObservableObject {
         }
         return data
     }
+
+    private func post(_ path: String, body: Data?, timeout: TimeInterval? = nil) async throws -> Data {
+        guard let url = URL(string: "\(baseURL)\(path)") else {
+            throw DianeAPIError.invalidURL(path)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = timeout ?? 10
+        if let b = body {
+            request.httpBody = b
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw DianeAPIError.network("No HTTP response")
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw DianeAPIError.httpError(http.statusCode, body)
+        }
+        return data
+    }
+
+    private func delete(_ path: String) async throws -> Data {
+        guard let url = URL(string: "\(baseURL)\(path)") else {
+            throw DianeAPIError.invalidURL(path)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.timeoutInterval = 10
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw DianeAPIError.network("No HTTP response")
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw DianeAPIError.httpError(http.statusCode, body)
+        }
+        return data
+    }
+
+    private func put(_ path: String, body: Data?, timeout: TimeInterval? = nil) async throws -> Data {
+        guard let url = URL(string: "\(baseURL)\(path)") else {
+            throw DianeAPIError.invalidURL(path)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.timeoutInterval = timeout ?? 10
+        if let b = body {
+            request.httpBody = b
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw DianeAPIError.network("No HTTP response")
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let bodyStr = String(data: data, encoding: .utf8) ?? ""
+            throw DianeAPIError.httpError(http.statusCode, bodyStr)
+        }
+        return data
+    }
+
+    private func patch(_ path: String, body: Data?, timeout: TimeInterval? = nil) async throws -> Data {
+        guard let url = URL(string: "\(baseURL)\(path)") else {
+            throw DianeAPIError.invalidURL(path)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"
+        request.timeoutInterval = timeout ?? 10
+        if let b = body {
+            request.httpBody = b
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw DianeAPIError.network("No HTTP response")
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let bodyStr = String(data: data, encoding: .utf8) ?? ""
+            throw DianeAPIError.httpError(http.statusCode, bodyStr)
+        }
+        return data
+    }
 }
 
 enum DianeAPIError: Error, LocalizedError {
     case invalidURL(String)
     case network(String)
     case httpError(Int, String)
+    case serverError(String)
 
     var errorDescription: String? {
         switch self {
         case .invalidURL(let p): return "Invalid URL: \(p)"
         case .network(let msg):  return "Network error: \(msg)"
         case .httpError(let c, let b): return "HTTP \(c): \(b)"
+        case .serverError(let msg): return "Server error: \(msg)"
         }
     }
 }
@@ -137,19 +513,37 @@ enum DianeAPIError: Error, LocalizedError {
 struct RelayNode: Identifiable, Codable, Hashable, Sendable {
     let instanceID: String
     let hostname: String?
+    let mode: String?          // "master" or "slave" (from graph config)
     let version: String?
     let toolCount: Int?
     let connectedAt: String?
+    let online: Bool           // whether node has an active relay connection
+    let uptime: String?        // ISO 8601 — process start time
+    let provider: String?      // e.g. "deepseek/deepseek-v4-flash"
+    let relayActive: Bool?     // MCP relay connected
+    let botActive: Bool?       // Discord bot connected
+    let healthy: Bool?         // overall health
 
     var id: String { instanceID }
 
     enum CodingKeys: String, CodingKey {
         case instanceID = "instance_id"
-        case hostname, version
+        case hostname, mode, version
         case toolCount = "tool_count"
         case connectedAt = "connected_at"
+        case online, uptime, provider
+        case relayActive = "relay_active"
+        case botActive = "bot_active"
+        case healthy
     }
 
     func hash(into hasher: inout Hasher) { hasher.combine(instanceID) }
     static func == (lhs: RelayNode, rhs: RelayNode) -> Bool { lhs.instanceID == rhs.instanceID }
+}
+
+struct MCPToolInfo: Identifiable, Codable, Sendable {
+    let name: String
+    let description: String?
+
+    var id: String { name }
 }

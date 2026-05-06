@@ -164,6 +164,14 @@ public struct GraphObject: Identifiable, Codable, Hashable, Sendable {
     public let properties: [String: AnyCodable]?
     public let createdAt: String?
 
+    /// Display name extracted from properties, falling back to type + id.
+    public var displayName: String {
+        if let name = properties?["name"]?.stringValue, !name.isEmpty {
+            return name
+        }
+        return "\(type ?? "?"): \(id.prefix(8))"
+    }
+
     enum CodingKeys: String, CodingKey {
         case id, type, score, properties
         case createdAt = "created_at"
@@ -174,10 +182,20 @@ public struct GraphObject: Identifiable, Codable, Hashable, Sendable {
 }
 
 /// Type-erased Codable wrapper for mixed-type JSON values.
-public struct AnyCodable: Codable, Sendable {
+public struct AnyCodable: Codable, @unchecked Sendable {
     public let value: Any
 
     public init(_ value: Any) { self.value = value }
+
+    /// Extract string value regardless of internal type.
+    public var stringValue: String? {
+        switch value {
+        case let s as String: return s
+        case let i as Int:    return String(i)
+        case let d as Double: return String(d)
+        default:              return nil
+        }
+    }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
@@ -193,18 +211,48 @@ public struct AnyCodable: Codable, Sendable {
     }
 
     public func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
         switch value {
-        case let b as Bool:   try container.encode(b)
-        case let i as Int:    try container.encode(i)
-        case let d as Double: try container.encode(d)
-        case let s as String: try container.encode(s)
-        default: try container.encodeNil()
+        case let b as Bool:
+            var container = encoder.singleValueContainer()
+            try container.encode(b)
+        case let i as Int:
+            var container = encoder.singleValueContainer()
+            try container.encode(i)
+        case let d as Double:
+            var container = encoder.singleValueContainer()
+            try container.encode(d)
+        case let s as String:
+            var container = encoder.singleValueContainer()
+            try container.encode(s)
+        case let arr as [Any]:
+            var container = encoder.unkeyedContainer()
+            for item in arr {
+                try container.encode(AnyCodable(item))
+            }
+        case let dict as [String: Any]:
+            var container = encoder.container(keyedBy: AnyCodingKey.self)
+            for (key, val) in dict {
+                if let k = AnyCodingKey(stringValue: key) {
+                    try container.encode(AnyCodable(val), forKey: k)
+                }
+            }
+        default:
+            var container = encoder.singleValueContainer()
+            try container.encodeNil()
         }
     }
 }
 
-// MARK: - Agent
+/// Dynamic coding key used by AnyCodable for dictionary encoding.
+private struct AnyCodingKey: CodingKey {
+    var stringValue: String
+    var intValue: Int?
+
+    init?(stringValue: String) { self.stringValue = stringValue; self.intValue = nil }
+    init?(intValue: Int) { self.stringValue = "\(intValue)"; self.intValue = intValue }
+}
+
+// MARK: - Agent Definitions
 
 public struct Agent: Identifiable, Codable, Hashable, Sendable {
     public let id: String
@@ -250,6 +298,33 @@ public struct MCPTool: Identifiable, Codable, Sendable {
     public let description: String?
 }
 
+public struct MCPPrompt: Identifiable, Codable, Sendable {
+    public let id: String
+    public let name: String
+    public let description: String?
+    public let arguments: [MCPPromptArgument]?
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = (try? container.decodeIfPresent(String.self, forKey: .id)) ?? ""
+        self.name = try container.decode(String.self, forKey: .name)
+        self.description = try container.decodeIfPresent(String.self, forKey: .description)
+        self.arguments = try container.decodeIfPresent([MCPPromptArgument].self, forKey: .arguments)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, description, arguments
+    }
+}
+
+public struct MCPPromptArgument: Identifiable, Codable, Sendable {
+    public let name: String
+    public let description: String?
+    public let required: Bool?
+
+    public var id: String { name }
+}
+
 // MARK: - User Profile
 
 public struct UserProfile: Codable, Sendable {
@@ -272,7 +347,7 @@ public struct UserProfile: Codable, Sendable {
 // MARK: - Document
 
 /// A document stored in the Emergent platform.
-public struct Document: Identifiable, Codable, Sendable {
+public struct Document: Identifiable, Codable, Hashable, Sendable {
     public let id: String
     public let projectId: String?
     public let filename: String
@@ -282,6 +357,7 @@ public struct Document: Identifiable, Codable, Sendable {
     public let sourceType: String?
     public let conversionStatus: String?
     public let extractionStatus: String?
+    public let processingStatus: String?
     public let storageKey: String?
     public let storageUrl: String?
     public let fileSizeBytes: Int?
@@ -289,29 +365,61 @@ public struct Document: Identifiable, Codable, Sendable {
     public let chunks: Int?
     public let embeddedChunks: Int?
     public let totalChars: Int?
+    public let objectsCreated: Int?
+    public let relationshipsCreated: Int?
     public let content: String?
     public let createdAt: String?
     public let updatedAt: String?
 
     enum CodingKeys: String, CodingKey {
         case id, filename, content
-        case projectId        = "projectId"
-        case mimeType         = "mimeType"
-        case fileHash         = "fileHash"
-        case contentHash      = "contentHash"
-        case sourceType       = "source_type"
-        case conversionStatus = "conversionStatus"
-        case extractionStatus = "extractionStatus"
-        case storageKey       = "storageKey"
-        case storageUrl       = "storageUrl"
-        case fileSizeBytes    = "fileSizeBytes"
-        case syncVersion      = "syncVersion"
-        case chunks           = "chunks"
-        case embeddedChunks   = "embeddedChunks"
-        case totalChars       = "totalChars"
-        case createdAt        = "created_at"
-        case updatedAt        = "updated_at"
+        case projectId         = "projectId"
+        case mimeType          = "mimeType"
+        case fileHash          = "fileHash"
+        case contentHash       = "contentHash"
+        case sourceType        = "sourceType"
+        case conversionStatus  = "conversionStatus"
+        case extractionStatus  = "extractionStatus"
+        case processingStatus  = "processingStatus"
+        case storageKey        = "storageKey"
+        case storageUrl        = "storageUrl"
+        case fileSizeBytes     = "fileSizeBytes"
+        case syncVersion       = "syncVersion"
+        case chunks            = "chunks"
+        case embeddedChunks    = "embeddedChunks"
+        case totalChars        = "totalChars"
+        case objectsCreated    = "objectsCreated"
+        case relationshipsCreated = "relationshipsCreated"
+        case createdAt         = "createdAt"
+        case updatedAt         = "updatedAt"
     }
+}
+
+// MARK: - Extraction Summary
+
+/// Decoded from GET /api/documents/{id}/extraction-summary
+public struct ExtractionSummary: Codable, Sendable {
+    public let jobId: String
+    public let completedAt: String
+    public let objectsCreated: Int
+    public let relationshipsCreated: Int
+    public let objectsByType: [String: Int]?
+    public let objectIds: [String]?
+    public let chunksProcessed: Int
+    public let totalChunks: Int
+    public let hasErrors: Bool
+    public let errorSummary: String?
+}
+
+// MARK: - Extraction Summary Error (404 when no extraction done yet)
+
+public struct ExtractionSummaryError: Codable, Sendable {
+    public let error: ExtractionSummaryErrorDetail?
+}
+
+public struct ExtractionSummaryErrorDetail: Codable, Sendable {
+    public let code: String?
+    public let message: String?
 }
 
 // MARK: - Document Chunks
@@ -491,10 +599,241 @@ public struct ProjectPolicy: Identifiable, Codable, Hashable, Sendable {
     public static func == (lhs: ProjectPolicy, rhs: ProjectPolicy) -> Bool { lhs.id == rhs.id }
 }
 
-// MARK: - Query Result
+// MARK: - Agent Stats (from local /api/stats)
 
-/// Response from POST /api/graph/search
-/// Returns ranked graph objects with semantic + lexical scores.
+public struct AgentStatsSummary: Identifiable, Codable, Sendable {
+    public let agentName: String
+    public let agentId: String?
+    public let agentDescription: String?
+    public let agentFlowType: String?
+    public let totalRuns: Int
+    public let successRuns: Int
+    public let errorRuns: Int
+    public let avgDurationMs: Double
+    public let avgStepCount: Double
+    public let avgToolCalls: Double
+    public let avgInputTokens: Double
+    public let avgOutputTokens: Double
+    public let totalDurationMs: Int
+    public let totalInputTokens: Int
+    public let totalOutputTokens: Int
+    public let totalCostUsd: Double
+    public let avgCostUsd: Double
+    public let successRate: Double
+
+    /// The display name: uses the matched agent definition name (set by the
+    /// API when a definition is found), falls back to the raw run name.
+    public var displayName: String {
+        if agentId != nil { return agentName }
+        // Remove trailing timestamp-like suffix: -<digits>
+        if let range = agentName.range(of: "-\\d+$", options: .regularExpression) {
+            return String(agentName[..<range.lowerBound])
+        }
+        return agentName
+    }
+
+    public var id: String { agentName }
+
+    enum CodingKeys: String, CodingKey {
+        case agentName        = "agent_name"
+        case agentId          = "agent_id"
+        case agentDescription = "agent_description"
+        case agentFlowType    = "agent_flow_type"
+        case totalRuns        = "total_runs"
+        case successRuns      = "success_runs"
+        case errorRuns        = "error_runs"
+        case avgDurationMs    = "avg_duration_ms"
+        case avgStepCount     = "avg_step_count"
+        case avgToolCalls     = "avg_tool_calls"
+        case avgInputTokens   = "avg_input_tokens"
+        case avgOutputTokens  = "avg_output_tokens"
+        case totalDurationMs  = "total_duration_ms"
+        case totalInputTokens = "total_input_tokens"
+        case totalOutputTokens = "total_output_tokens"
+        case totalCostUsd     = "total_cost_usd"
+        case avgCostUsd       = "avg_cost_usd"
+        case successRate      = "success_rate"
+    }
+}
+
+public struct AgentStatsTotals: Codable, Sendable {
+    public let totalRuns: Int
+    public let totalSuccess: Int
+    public let totalErrors: Int
+    public let totalDurationMs: Int
+    public let totalInputTokens: Int
+    public let totalOutputTokens: Int
+    public let totalCostUsd: Double
+    public let overallAvgDurationMs: Double
+    public let overallSuccessRate: Double
+
+    enum CodingKeys: String, CodingKey {
+        case totalRuns           = "total_runs"
+        case totalSuccess        = "total_success"
+        case totalErrors         = "total_errors"
+        case totalDurationMs     = "total_duration_ms"
+        case totalInputTokens    = "total_input_tokens"
+        case totalOutputTokens   = "total_output_tokens"
+        case totalCostUsd        = "total_cost_usd"
+        case overallAvgDurationMs = "overall_avg_duration_ms"
+        case overallSuccessRate  = "overall_success_rate"
+    }
+}
+
+public struct AgentStatsResponse: Codable, Sendable {
+    public let agents: [AgentStatsSummary]
+    public let totals: AgentStatsTotals
+    public let hours: Int
+}
+
+// MARK: - Provider Stats (from GET /api/stats/providers)
+
+public struct ProviderStatsSummary: Identifiable, Codable, Sendable {
+    public let providerName: String
+    public let modelName: String
+    public let totalRuns: Int
+    public let successRuns: Int
+    public let errorRuns: Int
+    public let totalInputTokens: UInt64
+    public let totalOutputTokens: UInt64
+    public let totalCostUsd: Double
+
+    public var id: String { "\(providerName)|\(modelName)" }
+
+    enum CodingKeys: String, CodingKey {
+        case providerName     = "provider_name"
+        case modelName        = "model_name"
+        case totalRuns        = "total_runs"
+        case successRuns      = "success_runs"
+        case errorRuns        = "error_runs"
+        case totalInputTokens = "total_input_tokens"
+        case totalOutputTokens = "total_output_tokens"
+        case totalCostUsd     = "total_cost_usd"
+    }
+}
+
+public struct ProviderStatsResponse: Codable, Sendable {
+    public let providers: [ProviderStatsSummary]
+    public let totalRuns: Int
+    public let totalSuccess: Int
+    public let totalErrors: Int
+    public let totalInputTokens: UInt64
+    public let totalOutputTokens: UInt64
+    public let totalCostUsd: Double
+    public let hours: Int
+
+    enum CodingKeys: String, CodingKey {
+        case providers        = "providers"
+        case totalRuns        = "total_runs"
+        case totalSuccess     = "total_success"
+        case totalErrors      = "total_errors"
+        case totalInputTokens = "total_input_tokens"
+        case totalOutputTokens = "total_output_tokens"
+        case totalCostUsd     = "total_cost_usd"
+        case hours            = "hours"
+    }
+}
+
+// MARK: - Graph Object Stats (from GET /api/stats/objects)
+
+public struct TypeCountInfo: Codable, Sendable, Identifiable {
+    public let typeName: String
+    public let count: Int
+
+    public var id: String { typeName }
+
+    enum CodingKeys: String, CodingKey {
+        case typeName = "type_name"
+        case count    = "count"
+    }
+}
+
+public struct GraphObjectStatsResponse: Codable, Sendable {
+    public let total: Int
+    public let byType: [TypeCountInfo]
+
+    enum CodingKeys: String, CodingKey {
+        case total  = "total"
+        case byType = "by_type"
+    }
+}
+
+// MARK: - Project-Level Providers (from GET /api/providers)
+
+public struct ProjectProviderInfo: Codable, Sendable, Identifiable {
+    public let provider: String
+    public let baseUrl: String?
+    public let generativeModel: String?
+    public let embeddingModel: String?
+
+    public var id: String { provider }
+
+    enum CodingKeys: String, CodingKey {
+        case provider        = "provider"
+        case baseUrl         = "base_url"
+        case generativeModel = "generative_model"
+        case embeddingModel  = "embedding_model"
+    }
+}
+
+// MARK: - Session Aggregates (from GET /api/sessions/{id})
+
+public struct SessionRunAggregates: Codable, Sendable {
+    public let totalRuns: Int
+    public let totalInputTokens: Int64
+    public let totalOutputTokens: Int64
+    public let estimatedCostUsd: Double
+    public let agentNames: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case totalRuns        = "total_runs"
+        case totalInputTokens = "total_input_tokens"
+        case totalOutputTokens = "total_output_tokens"
+        case estimatedCostUsd = "estimated_cost_usd"
+        case agentNames       = "agent_names"
+    }
+}
+
+/// Response from GET /api/sessions/{id} — session metadata + aggregated run stats.
+public struct SessionDetailResponse: Codable, Sendable {
+    public let id: String
+    public let key: String?
+    public let title: String?
+    public let status: String?
+    public let messageCount: Int
+    public let totalTokens: Int
+    public let createdAt: String?
+    public let updatedAt: String?
+    public let aggregates: SessionRunAggregates?
+
+    enum CodingKeys: String, CodingKey {
+        case id, key, title, status
+        case messageCount = "message_count"
+        case totalTokens  = "total_tokens"
+        case createdAt    = "created_at"
+        case updatedAt    = "updated_at"
+        case aggregates
+    }
+}
+
+// MARK: - Chat Send Response
+
+/// Response from POST /api/chat/send — session metadata + run messages.
+struct ChatSendResponse: Codable, Sendable {
+    let sessionID: String
+    let runID: String
+    let messages: [DianeMessage]
+    let success: Bool
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case sessionID = "session_id"
+        case runID     = "run_id"
+        case messages, success, error
+    }
+}
+
+// MARK: - GraphObject JSON Helpers
 public struct QueryResult: Codable, Sendable {
     public let data: [QueryResultItem]?
     public let total: Int?
@@ -587,19 +926,62 @@ struct DianeSession: Identifiable, Codable, Hashable, Sendable {
     let messageCount: Int?
     let totalTokens: Int?
     let createdAt: String?
+    let updatedAt: String?
+    
+    // Server-side properties we don't store as fields but decode gracefully
+    private let properties: [String: AnyValue]?
     
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
     static func == (lhs: DianeSession, rhs: DianeSession) -> Bool { lhs.id == rhs.id }
     
+    enum CodingKeys: String, CodingKey {
+        case id, key, title, status
+        case messageCount = "message_count"
+        case totalTokens = "total_tokens"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case properties
+        case entityID = "entity_id"
+    }
+    
     init(from decoder: Decoder) throws {
-        let graph = try GraphObjectJSON(from: decoder)
-        self.id = graph.entityID
-        self.key = graph.key
-        self.createdAt = graph.createdAt
-        self.title = graph.properties?["title"]?.stringValue
-        self.status = graph.properties?["status"]?.stringValue
-        self.messageCount = graph.properties?["message_count"]?.intValue
-        self.totalTokens = graph.properties?["total_tokens"]?.intValue
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        // Support both flat (id) and graph (entity_id) formats
+        if let flatID = try? container.decode(String.self, forKey: .id) {
+            self.id = flatID
+        } else {
+            self.id = try container.decode(String.self, forKey: .entityID)
+        }
+        self.key = try container.decodeIfPresent(String.self, forKey: .key)
+        self.createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
+        self.properties = try container.decodeIfPresent([String: AnyValue].self, forKey: .properties)
+        
+        // Flat JSON format
+        if let t = try? container.decodeIfPresent(String.self, forKey: .title) {
+            self.title = t
+        } else {
+            self.title = self.properties?["title"]?.stringValue
+        }
+        if let s = try? container.decodeIfPresent(String.self, forKey: .status) {
+            self.status = s
+        } else {
+            self.status = self.properties?["status"]?.stringValue
+        }
+        if let mc = try? container.decodeIfPresent(Int.self, forKey: .messageCount) {
+            self.messageCount = mc
+        } else {
+            self.messageCount = self.properties?["message_count"]?.intValue
+        }
+        if let tt = try? container.decodeIfPresent(Int.self, forKey: .totalTokens) {
+            self.totalTokens = tt
+        } else {
+            self.totalTokens = self.properties?["total_tokens"]?.intValue
+        }
+        if let ua = try? container.decodeIfPresent(String.self, forKey: .updatedAt) {
+            self.updatedAt = ua
+        } else {
+            self.updatedAt = self.properties?["updated_at"]?.stringValue ?? self.properties?["last_active_at"]?.stringValue
+        }
     }
     
     func encode(to encoder: Encoder) throws {
@@ -611,45 +993,249 @@ struct DianeSession: Identifiable, Codable, Hashable, Sendable {
         try container.encodeIfPresent(messageCount, forKey: .messageCount)
         try container.encodeIfPresent(totalTokens, forKey: .totalTokens)
         try container.encodeIfPresent(createdAt, forKey: .createdAt)
-    }
-    
-    enum CodingKeys: String, CodingKey {
-        case id, key, title, status
-        case messageCount = "message_count"
-        case totalTokens = "total_tokens"
-        case createdAt = "created_at"
+        try container.encodeIfPresent(updatedAt, forKey: .updatedAt)
     }
 }
 
-struct DianeMessage: Identifiable, Codable, Sendable {
-    let id: String
-    let role: String
-    let content: String
-    let sequenceNumber: Int?
-    let tokenCount: Int?
+// MARK: - Tool Call
+
+public struct ToolCall: Identifiable, Codable, Sendable {
+    public let id: String
+    public let name: String
+    public let arguments: String?
     
-    init(from decoder: Decoder) throws {
-        let graph = try GraphObjectJSON(from: decoder)
-        self.id = graph.entityID
-        self.role = graph.properties?["role"]?.stringValue ?? ""
-        self.content = graph.properties?["content"]?.stringValue ?? ""
-        self.sequenceNumber = graph.properties?["sequence_number"]?.intValue
-        self.tokenCount = graph.properties?["token_count"]?.intValue
+    public enum CodingKeys: String, CodingKey {
+        case id, name, arguments
     }
     
-    func encode(to encoder: Encoder) throws {
+    public init(id: String, name: String, arguments: String? = nil) {
+        self.id = id
+        self.name = name
+        self.arguments = arguments
+    }
+}
+
+// MARK: - Diane Message
+
+public struct DianeMessage: Identifiable, Codable, Sendable {
+    public let id: String
+    public let role: String
+    public let content: String
+    public let sequenceNumber: Int?
+    public let tokenCount: Int?
+    public let toolCalls: [ToolCall]?
+    public let reasoningContent: String?
+    public let createdAt: String?
+
+    /// Memberwise initializer for creating messages locally (optimistic UI, error bubbles).
+    public init(
+        id: String,
+        role: String,
+        content: String,
+        sequenceNumber: Int? = nil,
+        tokenCount: Int? = nil,
+        toolCalls: [ToolCall]? = nil,
+        reasoningContent: String? = nil,
+        createdAt: String? = nil
+    ) {
+        self.id = id
+        self.role = role
+        self.content = content
+        self.sequenceNumber = sequenceNumber
+        self.tokenCount = tokenCount
+        self.toolCalls = toolCalls
+        self.reasoningContent = reasoningContent
+        self.createdAt = createdAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, role, content
+        case sequenceNumber = "sequence_number"
+        case tokenCount = "token_count"
+        case toolCalls = "tool_calls"
+        case reasoningContent = "reasoning_content"
+        case createdAt = "created_at"
+        case entityID = "entity_id"
+        case properties
+    }
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        // Support both flat (id) and graph (entity_id) formats
+        if let flatID = try? container.decode(String.self, forKey: .id) {
+            self.id = flatID
+        } else {
+            self.id = try container.decode(String.self, forKey: .entityID)
+        }
+        
+        let props = try container.decodeIfPresent([String: AnyValue].self, forKey: .properties)
+        
+        // Decode from flat JSON first, fall back to graph properties
+        self.role = (try? container.decodeIfPresent(String.self, forKey: .role))
+            ?? props?["role"]?.stringValue ?? ""
+        self.content = (try? container.decodeIfPresent(String.self, forKey: .content))
+            ?? props?["content"]?.stringValue ?? ""
+        self.sequenceNumber = (try? container.decodeIfPresent(Int.self, forKey: .sequenceNumber))
+            ?? props?["sequence_number"]?.intValue
+        self.tokenCount = (try? container.decodeIfPresent(Int.self, forKey: .tokenCount))
+            ?? props?["token_count"]?.intValue
+        self.createdAt = (try? container.decodeIfPresent(String.self, forKey: .createdAt))
+        
+        // Reasoning content: check flat JSON first, then graph properties
+        self.reasoningContent = (try? container.decodeIfPresent(String.self, forKey: .reasoningContent))
+            ?? props?["reasoningContent"]?.stringValue
+            ?? props?["reasoning_content"]?.stringValue
+        
+        // Tool calls: check flat JSON first, then graph properties
+        if let flatTCs = try? container.decodeIfPresent([ToolCall].self, forKey: .toolCalls) {
+            self.toolCalls = flatTCs.isEmpty ? nil : flatTCs
+        } else if let rawTCs = props?["toolCalls"] {
+            self.toolCalls = Self.decodeToolCalls(from: rawTCs)
+        } else {
+            self.toolCalls = nil
+        }
+    }
+    
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(role, forKey: .role)
         try container.encode(content, forKey: .content)
         try container.encodeIfPresent(sequenceNumber, forKey: .sequenceNumber)
         try container.encodeIfPresent(tokenCount, forKey: .tokenCount)
+        try container.encodeIfPresent(toolCalls, forKey: .toolCalls)
+        try container.encodeIfPresent(reasoningContent, forKey: .reasoningContent)
+        try container.encodeIfPresent(createdAt, forKey: .createdAt)
     }
     
+    /// Decode tool calls from the graph properties `toolCalls` field, which is stored as an array of dictionaries.
+    private static func decodeToolCalls(from raw: AnyValue?) -> [ToolCall]? {
+        guard raw != nil else { return nil }
+        // The toolCalls property is stored as a JSON array in graph properties
+        // It might come through as a JSON string or as nested values
+        return nil // Handled below via the Array-typed properties
+    }
+}
+
+// MARK: - Tool Call Parsing from Graph Properties
+
+extension DianeMessage {
+    /// Attempt to extract tool calls from raw graph properties.
+    /// The properties map stores toolCalls as an untyped `Any` from the JSON decoder.
+    static func toolCalls(fromRaw value: Any?) -> [ToolCall]? {
+        guard let value = value else { return nil }
+        if let arr = value as? [[String: Any]] {
+            return arr.compactMap { dict in
+                guard let id = dict["id"] as? String ?? (dict["id"] as? String),
+                      let name = dict["name"] as? String else { return nil }
+                let args: String?
+                if let s = dict["arguments"] as? String { args = s }
+                else if let d = dict["arguments"] {
+                    args = (try? JSONSerialization.data(withJSONObject: d, options: .fragmentsAllowed))
+                        .flatMap { String(data: $0, encoding: .utf8) }
+                } else { args = nil }
+                return ToolCall(id: id, name: name, arguments: args)
+            }.nilIfEmpty
+        }
+        if let arr = value as? [Any] {
+            return arr.compactMap { item in
+                guard let dict = item as? [String: Any],
+                      let id = dict["id"] as? String,
+                      let name = dict["name"] as? String else { return nil }
+                let args: String?
+                if let s = dict["arguments"] as? String { args = s }
+                else if let d = dict["arguments"] {
+                    args = (try? JSONSerialization.data(withJSONObject: d, options: .fragmentsAllowed))
+                        .flatMap { String(data: $0, encoding: .utf8) }
+                } else { args = nil }
+                return ToolCall(id: id, name: name, arguments: args)
+            }.nilIfEmpty
+        }
+        return nil
+    }
+}
+
+// MARK: - Array Extension
+
+private extension Array {
+    var nilIfEmpty: Self? { isEmpty ? nil : self }
+}
+
+// MARK: - Agent Definition
+
+struct AgentDef: Identifiable, Codable, Hashable, Sendable {
+    let id: String
+    let name: String
+    let description: String?
+    let flowType: String
+    let visibility: String
+    let isDefault: Bool
+    let toolCount: Int
+    let createdAt: String?
+    let updatedAt: String?
+
     enum CodingKeys: String, CodingKey {
-        case id, role, content
-        case sequenceNumber = "sequence_number"
-        case tokenCount = "token_count"
+        case id, name, description
+        case flowType = "flow_type"
+        case visibility
+        case isDefault = "is_default"
+        case toolCount = "tool_count"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+}
+
+// MARK: - Agent Detail (full config from GET /api/agents/{name})
+
+/// Full agent definition detail including tools list, skills, model config, max_steps, timeout.
+struct AgentDetail: Identifiable, Codable, Hashable, Sendable {
+    let id: String
+    let name: String
+    let description: String?
+    let flowType: String
+    let visibility: String
+    let isDefault: Bool
+    let toolCount: Int
+    let tools: [String]?
+    let skills: [String]?
+    let systemPrompt: String?
+    let maxSteps: Int?
+    let defaultTimeout: Int?
+    let model: AgentDetailModel?
+    let dispatchMode: String?
+    let createdAt: String?
+    let updatedAt: String?
+
+    // Delegation model (parsed from config map if needed)
+    // TODO: define AgentDelegation struct with max_concurrent_children, max_spawn_depth etc.
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, description, visibility, tools, skills
+        case flowType = "flow_type"
+        case isDefault = "is_default"
+        case toolCount = "tool_count"
+        case systemPrompt = "system_prompt"
+        case maxSteps = "max_steps"
+        case defaultTimeout = "default_timeout"
+        case model
+        case dispatchMode = "dispatch_mode"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+    static func == (lhs: AgentDetail, rhs: AgentDetail) -> Bool { lhs.id == rhs.id }
+}
+
+struct AgentDetailModel: Codable, Hashable, Sendable {
+    let name: String?
+    let temperature: Double?
+    let maxTokens: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case temperature
+        case maxTokens = "max_tokens"
     }
 }
 
@@ -673,4 +1259,203 @@ struct RelaySession: Identifiable, Codable, Hashable, Sendable {
     
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
     static func == (lhs: RelaySession, rhs: RelaySession) -> Bool { lhs.id == rhs.id }
+}
+
+// MARK: - Graph Schema (from GET /api/schema)
+
+public struct SchemaProperty: Codable, Sendable, Identifiable {
+    public let name: String
+    public let type: String
+    public let description: String
+    public let enumValues: [String]?
+    
+    public var id: String { name }
+    
+    enum CodingKeys: String, CodingKey {
+        case name, type, description
+        case enumValues = "enum_values"
+    }
+}
+
+public struct SchemaNodeType: Codable, Sendable, Identifiable {
+    public let typeName: String
+    public let label: String
+    public let description: String
+    public let namespace: String?
+    public let properties: [SchemaProperty]
+    public let objectCount: Int
+    public let relationshipCount: Int
+    
+    public var id: String { typeName }
+    
+    enum CodingKeys: String, CodingKey {
+        case typeName = "type_name"
+        case label, description, namespace, properties
+        case objectCount = "object_count"
+        case relationshipCount = "relationship_count"
+    }
+}
+
+public struct SchemaRelationship: Codable, Sendable, Identifiable {
+    public let name: String
+    public let label: String
+    public let inverseLabel: String
+    public let description: String
+    public let sourceType: String
+    public let targetType: String
+    
+    public var id: String { name }
+    
+    enum CodingKeys: String, CodingKey {
+        case name, label, description
+        case inverseLabel = "inverse_label"
+        case sourceType = "source_type"
+        case targetType = "target_type"
+    }
+}
+
+public struct SchemaResponse: Codable, Sendable {
+    public let nodeTypes: [SchemaNodeType]
+    public let relationships: [SchemaRelationship]
+    
+    enum CodingKeys: String, CodingKey {
+        case nodeTypes = "node_types"
+        case relationships
+    }
+}
+
+/// Lightweight summary of a graph object, returned by GET /api/schema/objects/{typeName}.
+public struct SchemaObjectSummary: Codable, Sendable, Identifiable {
+    public let entityID: String
+    public let key: String?
+    public let type: String
+    public let createdAt: String
+    public let relationshipCount: Int
+    public let title: String?
+    public let status: String?
+    
+    public var id: String { entityID }
+    
+    enum CodingKeys: String, CodingKey {
+        case entityID = "entity_id"
+        case key, type
+        case createdAt = "created_at"
+        case relationshipCount = "relationship_count"
+        case title, status
+    }
+}
+
+/// Response from GET /api/schema/objects/{typeName}.
+public struct SchemaObjectsResponse: Codable, Sendable {
+    public let typeName: String
+    public let total: Int
+    public let objects: [SchemaObjectSummary]
+    
+    enum CodingKeys: String, CodingKey {
+        case typeName = "type_name"
+        case total, objects
+    }
+}
+
+// MARK: - Doctor Check
+
+/// Response from GET /api/doctor
+public struct DoctorResponse: Codable, Sendable {
+    public let ok: Bool
+    public let version: String?
+    public let results: [DoctorCheckItem]
+}
+
+/// A single diagnostic check from /api/doctor
+public struct DoctorCheckItem: Codable, Sendable, Identifiable {
+    public let check: String
+    public let status: String   // "ok", "warning", "error"
+    public let message: String
+    public let details: [String: String]?
+
+    public var id: String { check }
+    
+    /// Display icon name based on status
+    public var iconName: String {
+        switch status {
+        case "ok":      return "checkmark.circle.fill"
+        case "warning": return "exclamationmark.triangle.fill"
+        case "error":   return "xmark.circle.fill"
+        default:        return "questionmark.circle"
+        }
+    }
+    
+    /// Human-readable label for the check name
+    public var displayName: String {
+        switch check {
+        case "config_file":     return "Config File"
+        case "api_token":       return "API Token"
+        case "sdk_connection":  return "SDK Connection"
+        case "project_info":    return "Project Info"
+        case "agent_definitions": return "Agent Definitions"
+        case "session_crud":    return "Session CRUD"
+        case "memory_search":   return "Memory Search"
+        case "server_version":  return "Server Version"
+        case "version_match":   return "CLI / App Version"
+        default:                return check.replacingOccurrences(of: "_", with: " ").capitalized
+        }
+    }
+}
+
+// MARK: - Agent Override Config
+
+struct AgentOverrideConfig: Codable, Hashable, Sendable {
+    var agentName: String
+    var systemPrompt: String?
+    var skills: [String]?
+    var modelProvider: String?
+    var modelName: String?
+    var modelTemperature: Double?
+    var modelMaxTokens: Int?
+    var maxSteps: Int?
+    var timeout: Int?
+    var visibility: String?
+    var sandboxEnabled: Bool?
+    var disabled: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case agentName = "agent_name"
+        case systemPrompt = "system_prompt"
+        case skills, disabled, visibility
+        case modelProvider = "model_provider"
+        case modelName = "model_name"
+        case modelTemperature = "model_temperature"
+        case modelMaxTokens = "model_max_tokens"
+        case maxSteps = "max_steps"
+        case timeout
+        case sandboxEnabled = "sandbox_enabled"
+    }
+}
+
+// MARK: - Create Agent Request
+
+struct CreateAgentRequest: Codable {
+    let name: String
+    var description: String?
+    var systemPrompt: String?
+    var tools: [String]?
+    var skills: [String]?
+    var flowType: String?
+    var visibility: String?
+    var maxSteps: Int?
+    var defaultTimeout: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case name, description, tools, skills, visibility
+        case systemPrompt = "system_prompt"
+        case flowType = "flow_type"
+        case maxSteps = "max_steps"
+        case defaultTimeout = "default_timeout"
+    }
+}
+
+// MARK: - Clone Agent Request
+
+struct CloneAgentRequest: Codable {
+    let name: String
 }

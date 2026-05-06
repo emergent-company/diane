@@ -1,5 +1,4 @@
 import Foundation
-import OSLog
 import Combine
 
 enum CLIStatus {
@@ -16,7 +15,6 @@ struct CLIConflict {
 
 @MainActor
 final class CLIManager: ObservableObject {
-    private let logger = Logger(subsystem: "com.emergent-company.diane-companion", category: "CLI")
     @Published private(set) var status: CLIStatus = .notSetup
     @Published private(set) var setupOutput: String = ""
     @Published private(set) var conflicts: [CLIConflict] = []
@@ -34,7 +32,7 @@ final class CLIManager: ObservableObject {
     // MARK: - Setup & Detection
 
     func detectAndSetup() async {
-        logger.debug("CLIManager: Starting detectAndSetup")
+        logDebug("CLIManager: Starting detectAndSetup", category: "CLI")
         status = .settingUp
         setupOutput = "Starting CLI setup...\n"
         
@@ -46,7 +44,7 @@ final class CLIManager: ObservableObject {
             if let version = await fetchBundledVersion() {
                 status = .ready(version: version)
                 appendOutput("✓ CLI ready (\(version)).\n")
-                logger.info("CLIManager: CLI ready with version \(version).")
+                logInfo("CLIManager: CLI ready with version \(version).", category: "CLI")
             } else {
                 status = .error("Bundled CLI version unknown")
                 appendOutput("✗ Failed to determine bundled CLI version.\n")
@@ -54,9 +52,9 @@ final class CLIManager: ObservableObject {
         } catch {
             status = .error(error.localizedDescription)
             appendOutput("✗ Setup failed: \(error.localizedDescription)\n")
-            logger.error("CLIManager: Setup failed: \(error.localizedDescription)")
+            logError("CLIManager: Setup failed: \(error.localizedDescription)", category: "CLI")
         }
-        logger.debug("CLIManager: Finished detectAndSetup")
+        logDebug("CLIManager: Finished detectAndSetup", category: "CLI")
     }
     
     func repair() async {
@@ -70,77 +68,81 @@ final class CLIManager: ObservableObject {
               let files = try? FileManager.default.contentsOfDirectory(at: resourceURL, includingPropertiesForKeys: nil),
               let bundledURL = files.first(where: { $0.lastPathComponent == "diane" })
         else {
-            logger.error("CLIManager: Bundled CLI not found.")
+            logError("CLIManager: Bundled CLI not found.", category: "CLI")
             throw NSError(domain: "CLIManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Bundled CLI not found"])
         }
         
         appendOutput("Found bundled CLI at: \(bundledURL.path)\n")
         
-        let localBinDir = AppConstants.CLIPaths.localBinDir
-        let targetPath = AppConstants.CLIPaths.installTarget
+        // Create symlinks at BOTH locations so there's only one real binary
+        let targets: [(dir: String, link: String, label: String)] = [
+            (AppConstants.CLIPaths.localBinDir, AppConstants.CLIPaths.installTarget, "~/.local/bin/diane"),
+            (AppConstants.CLIPaths.dianeBinDir, AppConstants.CLIPaths.dianeTarget, "~/.diane/bin/diane"),
+        ]
         
+        for (dir, link, label) in targets {
+            try installSymlink(bundledURL: bundledURL, dir: dir, link: link, label: label)
+        }
+    }
+    
+    private func installSymlink(bundledURL: URL, dir: String, link: String, label: String) throws {
         let fm = FileManager.default
         
-        // Ensure ~/.local/bin exists
-        if !fm.fileExists(atPath: localBinDir) {
-            appendOutput("Creating directory: \(localBinDir)\n")
-            try fm.createDirectory(atPath: localBinDir, withIntermediateDirectories: true)
+        // Ensure directory exists
+        if !fm.fileExists(atPath: dir) {
+            appendOutput("Creating directory: \(dir)\n")
+            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
         }
         
-        // Check existing symlink
+        // Check existing file/symlink
         var needsUpdate = true
-        if fm.fileExists(atPath: targetPath) || symlinkExists(at: targetPath) {
-            if let destination = try? fm.destinationOfSymbolicLink(atPath: targetPath), destination == bundledURL.path {
+        if fm.fileExists(atPath: link) || (try? fm.attributesOfItem(atPath: link))?[.type] as? FileAttributeType == .typeSymbolicLink {
+            // Check if it's a symlink pointing to the right place
+            if let destination = try? fm.destinationOfSymbolicLink(atPath: link), destination == bundledURL.path {
                 needsUpdate = false
-                appendOutput("Symlink already correct.\n")
+                appendOutput("Symlink at \(label) already correct.\n")
             } else {
-                appendOutput("Removing existing symlink/file at \(targetPath)\n")
-                try fm.removeItem(atPath: targetPath)
+                appendOutput("Removing existing at \(label)\n")
+                try fm.removeItem(atPath: link)
             }
         }
         
         if needsUpdate {
-            appendOutput("Creating symlink...\n")
-            try fm.createSymbolicLink(atPath: targetPath, withDestinationPath: bundledURL.path)
-            appendOutput("Symlink created.\n")
-            logger.info("CLIManager: Symlink created to \(bundledURL.path).")
+            appendOutput("Creating symlink at \(label) → bundled binary...\n")
+            try fm.createSymbolicLink(atPath: link, withDestinationPath: bundledURL.path)
+            logInfo("CLIManager: Symlink created at \(label) → \(bundledURL.path).", category: "CLI")
         }
-    }
-    
-    private func symlinkExists(at path: String) -> Bool {
-        let fm = FileManager.default
-        guard let attributes = try? fm.attributesOfItem(atPath: path) else { return false }
-        return attributes[.type] as? FileAttributeType == .typeSymbolicLink
     }
 
     // MARK: - Conflict & PATH Detection
 
     private func checkPathEnvironment() async {
-        logger.debug("CLIManager: Checking PATH environment.")
+        logDebug("CLIManager: Checking PATH environment.", category: "CLI")
         // macOS GUI apps don't inherit interactive PATH easily.
         // We'll spawn a bash login shell to check if ~/.local/bin is in its PATH.
         if let envPath = await runCommand("/bin/bash", args: ["-l", "-c", "echo $PATH"]) {
             isLocalBinInPath = envPath.contains("/.local/bin")
             if !isLocalBinInPath {
                 appendOutput("Warning: ~/.local/bin is not in PATH.\n")
-                logger.debug("CLIManager: ~/.local/bin not found in PATH.")
+                logDebug("CLIManager: ~/.local/bin not found in PATH.", category: "CLI")
             }
         }
     }
     
     private func detectConflicts() async {
-        logger.debug("CLIManager: Detecting CLI conflicts.")
+        logDebug("CLIManager: Detecting CLI conflicts.", category: "CLI")
         conflicts = []
         let fm = FileManager.default
         
-        // Exclude our target path
-        let conflictCandidates = AppConstants.CLIPaths.candidates.filter { $0 != AppConstants.CLIPaths.installTarget }
+        // Exclude our target paths (both ~/.local/bin/diane and ~/.diane/bin/diane)
+        let excludePaths: Set<String> = [AppConstants.CLIPaths.installTarget, AppConstants.CLIPaths.dianeTarget]
+        let conflictCandidates = AppConstants.CLIPaths.candidates.filter { !excludePaths.contains($0) }
         
         for candidate in conflictCandidates {
-            if fm.fileExists(atPath: candidate) || symlinkExists(at: candidate) {
+            if fm.fileExists(atPath: candidate) || ((try? fm.attributesOfItem(atPath: candidate))?[.type] as? FileAttributeType == .typeSymbolicLink) {
                 appendOutput("Warning: Conflicting CLI found at \(candidate)\n")
                 conflicts.append(CLIConflict(path: candidate, description: "An independent installation of diane was found at \(candidate). This may conflict with the bundled version."))
-                logger.debug("CLIManager: Conflict detected at \(candidate).")
+                logDebug("CLIManager: Conflict detected at \(candidate).", category: "CLI")
             }
         }
     }

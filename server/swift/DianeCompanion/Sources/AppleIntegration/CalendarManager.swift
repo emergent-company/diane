@@ -1,12 +1,10 @@
 import Foundation
 import EventKit
-import OSLog
 
 /// Manages macOS Calendar access via EventKit.
 @MainActor
 final class CalendarManager: ObservableObject {
-    private let logger = Logger(subsystem: "com.emergent-company.diane-companion", category: "Calendar")
-    private let store = EKEventStore()
+    private nonisolated(unsafe) let store = EKEventStore()
     
     @Published private(set) var isAuthorized = false
     @Published private(set) var calendars: [EKCalendar] = []
@@ -27,7 +25,7 @@ final class CalendarManager: ObservableObject {
                 return granted
             }
         } catch {
-            logger.error("Calendar permission request failed: \(error.localizedDescription)")
+            logError("Calendar permission request failed: \(error.localizedDescription)", category: "Calendar")
             return false
         }
     }
@@ -48,7 +46,7 @@ final class CalendarManager: ObservableObject {
         event.endDate = endDate
         event.calendar = calendar ?? store.defaultCalendarForNewEvents ?? calendars.first
         try store.save(event, span: .thisEvent)
-        logger.info("Created event: \(title)")
+        logInfo("Created event: \(title)", category: "Calendar")
         return event
     }
 }
