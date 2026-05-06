@@ -23,6 +23,9 @@ packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     version: 2.9.1
+  Sentry:
+    url: https://github.com/getsentry/sentry-cocoa
+    version: 8.45.0
 
 targets:
   Diane:
@@ -37,6 +40,8 @@ targets:
     dependencies:
       - package: Sparkle
         product: Sparkle
+      - package: Sentry
+        product: Sentry
     settings:
       base:
         PRODUCT_NAME: Diane

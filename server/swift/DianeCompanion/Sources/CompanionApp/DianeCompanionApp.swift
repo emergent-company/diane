@@ -1,4 +1,5 @@
 import SwiftUI
+import Sentry
 
 @main
 struct DianeCompanionApp: App {
@@ -14,6 +15,12 @@ struct DianeCompanionApp: App {
     @State private var hasStarted           = false
 
     init() {
+        SentrySDK.start { options in
+            options.dsn = "https://d18f08c868e65e24ce766257453eccd6@o4511344463839232.ingest.de.sentry.io/4511344490446928"
+            options.debug = false
+            options.sendDefaultPii = true
+            options.tracesSampleRate = 1.0
+        }
         AppLogger.shared.info("Diane Companion app launching", category: "App")
         // Log environment info for crash diagnostics
         let sysInfo = ProcessInfo.processInfo
