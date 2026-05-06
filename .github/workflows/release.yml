@@ -124,10 +124,19 @@ jobs:
             ./Scripts/build-dmg.sh --no-sign 2>&1 | tee build/build-log.txt
           fi
           exit_code=${PIPESTATUS[0]}
-          echo "## Build exit code: $exit_code" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          cat build/build-log.txt >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          if [ $exit_code -ne 0 ]; then
+            first_errors=$(grep -E "(error:|❌|BUILD FAILED|CompileSwift)" build/build-log.txt | head -5)
+            if [ -n "$first_errors" ]; then
+              echo "$first_errors" | while read line; do
+                echo "::error::Build error: $line"
+              done
+            else
+              echo "::error::build-dmg.sh exit code $exit_code. Full log:"
+              tail -30 build/build-log.txt | while read line; do
+                echo "::error::$line"
+              done
+            fi
+          fi
           exit $exit_code
         working-directory: server/swift/DianeCompanion
         env:
