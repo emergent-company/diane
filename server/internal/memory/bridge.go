@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"time"
 
 	sdk "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk"
@@ -528,4 +529,84 @@ func safePropStr(props map[string]any, key string) string {
 
 func boolPtr(v bool) *bool {
 	return &v
+}
+
+// ============================================================================
+// Graph Object Stats
+// ============================================================================
+
+// TypeCount holds the count for a single graph object type.
+type TypeCount struct {
+	TypeName string `json:"type_name"`
+	Count    int    `json:"count"`
+}
+
+// GraphObjectStats holds aggregate stats about graph objects in the project.
+type GraphObjectStats struct {
+	Total  int         `json:"total"`
+	ByType []TypeCount `json:"by_type"`
+}
+
+// GetGraphObjectStats queries the Memory Platform for graph object counts.
+func (b *Bridge) GetGraphObjectStats(ctx context.Context) (*GraphObjectStats, error) {
+	keyTypes := []struct {
+		name string
+		nice string
+	}{
+		{"Session", "Session"},
+		{"MemoryFact", "Memory Fact"},
+		{"DianeNodeConfig", "Node Config"},
+		{"MCPProxyConfig", "MCP Proxy Config"},
+		{"MCPSecret", "MCP Secret"},
+	}
+
+	total, err := b.client.Graph.CountObjects(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("count objects: %w", err)
+	}
+
+	byType := make([]TypeCount, 0, len(keyTypes))
+	keyTotal := 0
+
+	for _, kt := range keyTypes {
+		count, err := b.client.Graph.CountObjects(ctx, &graph.CountObjectsOptions{
+			Type: kt.name,
+		})
+		if err != nil {
+			continue
+		}
+		if count > 0 {
+			byType = append(byType, TypeCount{TypeName: kt.nice, Count: count})
+			keyTotal += count
+		}
+	}
+
+	other := total - keyTotal
+	if other > 0 {
+		byType = append(byType, TypeCount{TypeName: "Other", Count: other})
+	}
+
+	sort.Slice(byType, func(i, j int) bool {
+		return byType[i].Count > byType[j].Count
+	})
+
+	return &GraphObjectStats{
+		Total:   total,
+		ByType:  byType,
+	}, nil
+}
+
+// GetObjectCountsForSchema queries object counts for each schema type name.
+func (b *Bridge) GetObjectCountsForSchema(ctx context.Context, typeNames []string) (map[string]int, error) {
+	counts := make(map[string]int, len(typeNames))
+	for _, tn := range typeNames {
+		count, err := b.client.Graph.CountObjects(ctx, &graph.CountObjectsOptions{
+			Type: tn,
+		})
+		if err != nil {
+			continue
+		}
+		counts[tn] = count
+	}
+	return counts, nil
 }

@@ -490,9 +490,24 @@ func (h *apiHandlers) handleGraphObjectStats(w http.ResponseWriter, r *http.Requ
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+
+	ctx := context.Background()
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("bridge: %v", err))
+		return
+	}
+	defer bridge.Close()
+
+	stats, err := bridge.GetGraphObjectStats(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("query stats: %v", err))
+		return
+	}
+
 	writeJSON(w, map[string]any{
-		"total":   0,
-		"by_type": []any{},
+		"total":   stats.Total,
+		"by_type": stats.ByType,
 	})
 }
 
