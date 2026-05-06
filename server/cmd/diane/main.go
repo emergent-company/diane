@@ -78,7 +78,7 @@ func main() {
 	case "provider":
 		cmdProvider(os.Args[2:])
 	case "doctor":
-		cmdDoctor()
+		cmdDoctor(os.Args[2:])
 	case "monitor":
 		cmdMonitor()
 	case "nodes":

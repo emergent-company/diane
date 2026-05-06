@@ -12,6 +12,7 @@ struct DianeCompanionApp: App {
     @StateObject private var dianeAPI       = DianeAPIClient()
     @StateObject private var apiClient      = EmergentAPIClient()
     @StateObject private var apiServer      = APIServerManager()
+    @StateObject private var selfTestManager = SelfTestManager()
     @State private var hasStarted           = false
 
     init() {
@@ -67,6 +68,7 @@ struct DianeCompanionApp: App {
                 .environmentObject(serverConfig)
                 .environmentObject(dianeAPI)
                 .environmentObject(updateChecker)
+                .environmentObject(selfTestManager)
                 .task { await startIfNeeded() }
         }
         .windowStyle(.titleBar)
@@ -82,6 +84,7 @@ struct DianeCompanionApp: App {
                 .environmentObject(cliManager)
                 .environmentObject(appState)
                 .environmentObject(apiClient)
+                .environmentObject(selfTestManager)
                 .task { await startIfNeeded() }
         } label: {
             Image(systemName: menuBarIconName)
@@ -125,5 +128,11 @@ struct DianeCompanionApp: App {
 
         await updateChecker.start()
         AppLogger.shared.info("App startup complete", category: "App")
+
+        // Post-upgrade self-test: runs after upgrade detection
+        if let version = updateChecker.currentVersion {
+            await selfTestManager.checkPostUpgrade(installedVersion: version)
+            await selfTestManager.runIfPending()
+        }
     }
 }
