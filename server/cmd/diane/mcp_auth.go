@@ -16,6 +16,7 @@ func cmdMCPAuth(args []string) {
 	fs := flag.NewFlagSet("auth", flag.ExitOnError)
 	serverName := fs.String("server", "", "Name of the MCP server to authenticate (required)")
 	configPath := fs.String("config", "", "Path to MCP servers config (default: ~/.diane/mcp-servers.json)")
+	background := fs.Bool("background", false, "Print authorization URL and exit (for headless servers)")
 	fs.Parse(args)
 
 	if *serverName == "" {
@@ -71,13 +72,14 @@ func cmdMCPAuth(args []string) {
 		fmt.Printf("✅ Registered client: %s\n", clientID)
 	}
 
+	// Check if tokens already exist (pre-authenticated) — run this FIRST always
+	tokens, err := mcpproxy.LoadTokens(*serverName)
+	if err == nil && tokens.AccessToken != "" {
+		fmt.Printf("✅ %s is already authenticated (token expires at %s)\n", *serverName, tokens.ExpiresAt.Format(time.RFC3339))
+		return
+	}
+
 	if oauth == nil {
-		// Check if tokens already exist (pre-authenticated)
-		tokens, err := mcpproxy.LoadTokens(*serverName)
-		if err == nil && tokens.AccessToken != "" {
-			fmt.Printf("✅ %s is already authenticated (token expires at %s)\n", *serverName, tokens.ExpiresAt.Format(time.RFC3339))
-			return
-		}
 		fmt.Fprintf(os.Stderr, "Error: no OAuth configuration for server %q\n", *serverName)
 		fmt.Fprintf(os.Stderr, "Tip: run diane mcp relay first to auto-discover OAuth endpoints for HTTP servers\n")
 		osExit(1)
@@ -90,7 +92,7 @@ func cmdMCPAuth(args []string) {
 	if oauth.DeviceAuthURL != "" {
 		token, err = mcpproxy.AuthenticateDeviceFlow(*serverName, oauth)
 	} else if oauth.AuthorizationURL != "" {
-		token, err = mcpproxy.AuthenticateAuthCodeFlow(*serverName, oauth)
+		token, err = mcpproxy.AuthenticateAuthCodeFlow(*serverName, oauth, *background)
 	} else {
 		fmt.Fprintf(os.Stderr, "Error: no OAuth flow configured (need device_auth_url or authorization_url)\n")
 		osExit(1)

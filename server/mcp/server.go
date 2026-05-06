@@ -30,17 +30,20 @@ import (
 // Version is set at build time via ldflags
 var Version = "dev"
 
-var proxy *mcpproxy.Proxy
-var globalEncoder *json.Encoder // For sending notifications
-var appleProvider *apple.Provider
-var googleProvider *google.Provider
-var infrastructureProvider *infrastructure.Provider
-var notificationsProvider *notifications.Provider
-var financeProvider *finance.Provider
-var placesProvider *places.Provider
-var weatherProvider *weather.Provider
-var githubProvider *githubbot.Provider
-var memoryProvider *memorytools.Provider
+// MCPServer encapsulates all server state for testability.
+type MCPServer struct {
+	proxy          *mcpproxy.Proxy
+	encoder        *json.Encoder
+	appleProvider  *apple.Provider
+	googleProvider *google.Provider
+	infrastructureProvider *infrastructure.Provider
+	notificationsProvider  *notifications.Provider
+	financeProvider        *finance.Provider
+	placesProvider         *places.Provider
+	weatherProvider        *weather.Provider
+	githubProvider         *githubbot.Provider
+	memoryProvider         *memorytools.Provider
+}
 
 type MCPRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -62,6 +65,11 @@ type MCPError struct {
 }
 
 func main() {
+	srv := &MCPServer{}
+	srv.run()
+}
+
+func (s *MCPServer) run() {
 	// Write PID file for reload command
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -75,95 +83,95 @@ func main() {
 
 	// Initialize MCP proxy
 	configPath := mcpproxy.GetDefaultConfigPath()
-	proxy, err = mcpproxy.NewProxy(configPath)
+	s.proxy, err = mcpproxy.NewProxy(configPath)
 	if err != nil {
 		log.Printf("Warning: Failed to initialize MCP proxy: %v", err)
 		// Continue without proxy - built-in tools will still work
 	}
 	defer func() {
-		if proxy != nil {
-			proxy.Close()
+		if s.proxy != nil {
+			s.proxy.Close()
 		}
 	}()
 
 	// Initialize Apple tools provider (only on macOS)
-	appleProvider = apple.NewProvider()
-	if err := appleProvider.CheckDependencies(); err != nil {
+	s.appleProvider = apple.NewProvider()
+	if err := s.appleProvider.CheckDependencies(); err != nil {
 		log.Printf("Warning: Apple tools not available: %v", err)
-		appleProvider = nil
+		s.appleProvider = nil
 	} else {
 		log.Printf("Apple tools initialized successfully")
 	}
 
 	// Initialize Google tools provider
-	googleProvider = google.NewProvider()
-	if err := googleProvider.CheckDependencies(); err != nil {
+	s.googleProvider = google.NewProvider()
+	if err := s.googleProvider.CheckDependencies(); err != nil {
 		log.Printf("Warning: Google tools not available: %v", err)
-		googleProvider = nil
+		s.googleProvider = nil
 	} else {
 		log.Printf("Google tools initialized successfully")
 	}
 
 	// Initialize Infrastructure tools provider (Cloudflare DNS)
-	infrastructureProvider = infrastructure.NewProvider()
-	if err := infrastructureProvider.CheckDependencies(); err != nil {
+	s.infrastructureProvider = infrastructure.NewProvider()
+	if err := s.infrastructureProvider.CheckDependencies(); err != nil {
 		log.Printf("Warning: Infrastructure tools not available: %v", err)
-		infrastructureProvider = nil
+		s.infrastructureProvider = nil
 	} else {
 		log.Printf("Infrastructure tools initialized successfully")
 	}
 
 	// Initialize Notifications tools provider (Discord, Home Assistant)
-	notificationsProvider = notifications.NewProvider()
-	if err := notificationsProvider.CheckDependencies(); err != nil {
+	s.notificationsProvider = notifications.NewProvider()
+	if err := s.notificationsProvider.CheckDependencies(); err != nil {
 		log.Printf("Warning: Notifications tools not available: %v", err)
-		notificationsProvider = nil
+		s.notificationsProvider = nil
 	} else {
 		log.Printf("Notifications tools initialized successfully")
 	}
 
 	// Initialize Finance tools provider (Enable Banking, Actual Budget, Bank Sync)
-	financeProvider = finance.NewProvider()
-	if err := financeProvider.CheckDependencies(); err != nil {
+	s.financeProvider = finance.NewProvider()
+	if err := s.financeProvider.CheckDependencies(); err != nil {
 		log.Printf("Warning: Finance tools not available: %v", err)
-		financeProvider = nil
+		s.financeProvider = nil
 	} else {
 		log.Printf("Finance tools initialized successfully")
 	}
 
 	// Initialize Google Places tools provider
-	placesProvider = places.NewProvider()
-	if err := placesProvider.CheckDependencies(); err != nil {
+	s.placesProvider = places.NewProvider()
+	if err := s.placesProvider.CheckDependencies(); err != nil {
 		log.Printf("Warning: Google Places tools not available: %v", err)
-		placesProvider = nil
+		s.placesProvider = nil
 	} else {
 		log.Printf("Google Places tools initialized successfully")
 	}
 
 	// Initialize Weather tools provider
-	weatherProvider = weather.NewProvider()
-	if err := weatherProvider.CheckDependencies(); err != nil {
+	s.weatherProvider = weather.NewProvider()
+	if err := s.weatherProvider.CheckDependencies(); err != nil {
 		log.Printf("Warning: Weather tools not available: %v", err)
-		weatherProvider = nil
+		s.weatherProvider = nil
 	} else {
 		log.Printf("Weather tools initialized successfully")
 	}
 
 	// Initialize GitHub Bot tools provider
 	var githubErr error
-	githubProvider, githubErr = githubbot.NewProvider()
+	s.githubProvider, githubErr = githubbot.NewProvider()
 	if githubErr != nil {
 		log.Printf("Warning: GitHub Bot tools not available: %v", githubErr)
-		githubProvider = nil
+		s.githubProvider = nil
 	} else {
 		log.Printf("GitHub Bot tools initialized successfully")
 	}
 
 	// Initialize Memory tools provider (wraps MP SDK for memory ops)
-	memoryProvider = memorytools.NewProvider()
-	if err := memoryProvider.CheckDependencies(); err != nil {
+	s.memoryProvider = memorytools.NewProvider()
+	if err := s.memoryProvider.CheckDependencies(); err != nil {
 		log.Printf("Warning: Memory tools not available: %v", err)
-		memoryProvider = nil
+		s.memoryProvider = nil
 	} else {
 		log.Printf("Memory tools initialized successfully")
 	}
@@ -171,21 +179,21 @@ func main() {
 	// MCP servers communicate via stdin/stdout
 	decoder := json.NewDecoder(os.Stdin)
 	encoder := json.NewEncoder(os.Stdout)
-	globalEncoder = encoder // Store for notification forwarding
+	s.encoder = encoder // Store for notification forwarding
 
 	// Start notification forwarder if proxy is available
-	if proxy != nil {
-		go forwardProxiedNotifications(proxy)
+	if s.proxy != nil {
+		go s.forwardProxiedNotifications(s.proxy)
 	}
 
 	// Setup signal handler for reload (SIGUSR1)
-	if proxy != nil {
+	if s.proxy != nil {
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGUSR1)
 		go func() {
 			for range sigChan {
 				log.Printf("Received SIGUSR1, reloading MCP configuration...")
-				if err := proxy.Reload(); err != nil {
+				if err := s.proxy.Reload(); err != nil {
 					log.Printf("Failed to reload MCP config: %v", err)
 				}
 			}
@@ -205,7 +213,7 @@ func main() {
 			break
 		}
 
-		resp := handleRequest(req)
+		resp := s.handleRequest(req)
 		resp.JSONRPC = "2.0"
 		resp.ID = req.ID
 		if err := encoder.Encode(resp); err != nil {
@@ -215,14 +223,14 @@ func main() {
 	}
 }
 
-func handleRequest(req MCPRequest) MCPResponse {
+func (s *MCPServer) handleRequest(req MCPRequest) MCPResponse {
 	switch req.Method {
 	case "initialize":
-		return initialize()
+		return s.initialize()
 	case "tools/list":
-		return listTools()
+		return s.listTools()
 	case "tools/call":
-		return callTool(req.Params)
+		return s.callTool(req.Params)
 	default:
 		return MCPResponse{
 			Error: &MCPError{
@@ -235,7 +243,7 @@ func handleRequest(req MCPRequest) MCPResponse {
 
 // forwardProxiedNotifications monitors the proxy for tool list changes
 // and forwards them to the MCP client
-func forwardProxiedNotifications(p *mcpproxy.Proxy) {
+func (s *MCPServer) forwardProxiedNotifications(p *mcpproxy.Proxy) {
 	for serverName := range p.NotificationChan() {
 		log.Printf("Received tools/list_changed notification from proxied server: %s", serverName)
 
@@ -245,7 +253,7 @@ func forwardProxiedNotifications(p *mcpproxy.Proxy) {
 			"method":  "notifications/tools/list_changed",
 		}
 
-		if err := globalEncoder.Encode(notification); err != nil {
+		if err := s.encoder.Encode(notification); err != nil {
 			log.Printf("Failed to send notification: %v", err)
 		} else {
 			log.Printf("Forwarded tools/list_changed notification to MCP client")
@@ -253,7 +261,7 @@ func forwardProxiedNotifications(p *mcpproxy.Proxy) {
 	}
 }
 
-func initialize() MCPResponse {
+func (s *MCPServer) initialize() MCPResponse {
 	return MCPResponse{
 		Result: map[string]interface{}{
 			"protocolVersion": "2024-11-05",
@@ -270,7 +278,7 @@ func initialize() MCPResponse {
 	}
 }
 
-func listTools() MCPResponse {
+func (s *MCPServer) listTools() MCPResponse {
 	// Built-in tools
 	tools := []map[string]interface{}{
 		{
@@ -394,8 +402,8 @@ func listTools() MCPResponse {
 	}
 
 	// Add Apple tools (reminders + contacts)
-	if appleProvider != nil {
-		for _, tool := range appleProvider.Tools() {
+	if s.appleProvider != nil {
+		for _, tool := range s.appleProvider.Tools() {
 			tools = append(tools, map[string]interface{}{
 				"name":        tool.Name,
 				"description": tool.Description,
@@ -405,8 +413,8 @@ func listTools() MCPResponse {
 	}
 
 	// Add Google tools (gmail, drive, sheets, calendar)
-	if googleProvider != nil {
-		for _, tool := range googleProvider.Tools() {
+	if s.googleProvider != nil {
+		for _, tool := range s.googleProvider.Tools() {
 			tools = append(tools, map[string]interface{}{
 				"name":        tool.Name,
 				"description": tool.Description,
@@ -416,8 +424,8 @@ func listTools() MCPResponse {
 	}
 
 	// Add Infrastructure tools (Cloudflare DNS)
-	if infrastructureProvider != nil {
-		for _, tool := range infrastructureProvider.Tools() {
+	if s.infrastructureProvider != nil {
+		for _, tool := range s.infrastructureProvider.Tools() {
 			tools = append(tools, map[string]interface{}{
 				"name":        tool.Name,
 				"description": tool.Description,
@@ -427,8 +435,8 @@ func listTools() MCPResponse {
 	}
 
 	// Add Notifications tools (Discord, Home Assistant)
-	if notificationsProvider != nil {
-		for _, tool := range notificationsProvider.Tools() {
+	if s.notificationsProvider != nil {
+		for _, tool := range s.notificationsProvider.Tools() {
 			tools = append(tools, map[string]interface{}{
 				"name":        tool.Name,
 				"description": tool.Description,
@@ -438,8 +446,8 @@ func listTools() MCPResponse {
 	}
 
 	// Add Finance tools (Enable Banking, Actual Budget, Bank Sync)
-	if financeProvider != nil {
-		for _, tool := range financeProvider.Tools() {
+	if s.financeProvider != nil {
+		for _, tool := range s.financeProvider.Tools() {
 			tools = append(tools, map[string]interface{}{
 				"name":        tool.Name,
 				"description": tool.Description,
@@ -449,8 +457,8 @@ func listTools() MCPResponse {
 	}
 
 	// Add Google Places tools
-	if placesProvider != nil {
-		for _, tool := range placesProvider.Tools() {
+	if s.placesProvider != nil {
+		for _, tool := range s.placesProvider.Tools() {
 			tools = append(tools, map[string]interface{}{
 				"name":        tool.Name,
 				"description": tool.Description,
@@ -460,8 +468,8 @@ func listTools() MCPResponse {
 	}
 
 	// Add Weather tools
-	if weatherProvider != nil {
-		for _, tool := range weatherProvider.Tools() {
+	if s.weatherProvider != nil {
+		for _, tool := range s.weatherProvider.Tools() {
 			tools = append(tools, map[string]interface{}{
 				"name":        tool.Name,
 				"description": tool.Description,
@@ -471,8 +479,8 @@ func listTools() MCPResponse {
 	}
 
 	// Add GitHub Bot tools
-	if githubProvider != nil {
-		for _, tool := range githubProvider.Tools() {
+	if s.githubProvider != nil {
+		for _, tool := range s.githubProvider.Tools() {
 			tools = append(tools, map[string]interface{}{
 				"name":        tool.Name,
 				"description": tool.Description,
@@ -482,8 +490,8 @@ func listTools() MCPResponse {
 	}
 
 	// Add Memory tools (memory_save, memory_recall, memory_apply_decay, memory_detect_patterns)
-	if memoryProvider != nil {
-		for _, tool := range memoryProvider.Tools() {
+	if s.memoryProvider != nil {
+		for _, tool := range s.memoryProvider.Tools() {
 			tools = append(tools, map[string]interface{}{
 				"name":        tool.Name,
 				"description": tool.Description,
@@ -493,8 +501,8 @@ func listTools() MCPResponse {
 	}
 
 	// Add proxied tools from other MCP servers
-	if proxy != nil {
-		proxiedTools, err := proxy.ListAllTools()
+	if s.proxy != nil {
+		proxiedTools, err := s.proxy.ListAllTools()
 		if err != nil {
 			log.Printf("Failed to list proxied tools: %v", err)
 		} else {
@@ -509,7 +517,7 @@ func listTools() MCPResponse {
 	}
 }
 
-func callTool(params json.RawMessage) MCPResponse {
+func (s *MCPServer) callTool(params json.RawMessage) MCPResponse {
 	var call struct {
 		Name      string                 `json:"name"`
 		Arguments map[string]interface{} `json:"arguments"`
@@ -526,27 +534,27 @@ func callTool(params json.RawMessage) MCPResponse {
 
 	switch call.Name {
 	case "job_list":
-		return jobList(call.Arguments)
+		return s.jobList(call.Arguments)
 	case "job_add":
-		return jobAdd(call.Arguments)
+		return s.jobAdd(call.Arguments)
 	case "job_enable":
-		return jobEnable(call.Arguments)
+		return s.jobEnable(call.Arguments)
 	case "job_disable":
-		return jobDisable(call.Arguments)
+		return s.jobDisable(call.Arguments)
 	case "job_delete":
-		return jobDelete(call.Arguments)
+		return s.jobDelete(call.Arguments)
 	case "job_pause":
-		return pauseAll()
+		return s.pauseAll()
 	case "job_resume":
-		return resumeAll()
+		return s.resumeAll()
 	case "job_logs":
-		return getLogs(call.Arguments)
+		return s.getLogs(call.Arguments)
 	case "server_status":
-		return getStatus()
+		return s.getStatus()
 	default:
 		// Try Apple tools first
-		if appleProvider != nil && appleProvider.HasTool(call.Name) {
-			result, err := appleProvider.Call(call.Name, call.Arguments)
+		if s.appleProvider != nil && s.appleProvider.HasTool(call.Name) {
+			result, err := s.appleProvider.Call(call.Name, call.Arguments)
 			if err != nil {
 				return MCPResponse{
 					Error: &MCPError{
@@ -559,8 +567,8 @@ func callTool(params json.RawMessage) MCPResponse {
 		}
 
 		// Try Google tools
-		if googleProvider != nil && googleProvider.HasTool(call.Name) {
-			result, err := googleProvider.Call(call.Name, call.Arguments)
+		if s.googleProvider != nil && s.googleProvider.HasTool(call.Name) {
+			result, err := s.googleProvider.Call(call.Name, call.Arguments)
 			if err != nil {
 				return MCPResponse{
 					Error: &MCPError{
@@ -573,8 +581,8 @@ func callTool(params json.RawMessage) MCPResponse {
 		}
 
 		// Try Infrastructure tools (Cloudflare DNS)
-		if infrastructureProvider != nil && infrastructureProvider.HasTool(call.Name) {
-			result, err := infrastructureProvider.Call(call.Name, call.Arguments)
+		if s.infrastructureProvider != nil && s.infrastructureProvider.HasTool(call.Name) {
+			result, err := s.infrastructureProvider.Call(call.Name, call.Arguments)
 			if err != nil {
 				return MCPResponse{
 					Error: &MCPError{
@@ -587,8 +595,8 @@ func callTool(params json.RawMessage) MCPResponse {
 		}
 
 		// Try Notifications tools (Discord, Home Assistant)
-		if notificationsProvider != nil && notificationsProvider.HasTool(call.Name) {
-			result, err := notificationsProvider.Call(call.Name, call.Arguments)
+		if s.notificationsProvider != nil && s.notificationsProvider.HasTool(call.Name) {
+			result, err := s.notificationsProvider.Call(call.Name, call.Arguments)
 			if err != nil {
 				return MCPResponse{
 					Error: &MCPError{
@@ -601,8 +609,8 @@ func callTool(params json.RawMessage) MCPResponse {
 		}
 
 		// Try Finance tools (Enable Banking, Actual Budget, Bank Sync)
-		if financeProvider != nil && financeProvider.HasTool(call.Name) {
-			result, err := financeProvider.Call(call.Name, call.Arguments)
+		if s.financeProvider != nil && s.financeProvider.HasTool(call.Name) {
+			result, err := s.financeProvider.Call(call.Name, call.Arguments)
 			if err != nil {
 				return MCPResponse{
 					Error: &MCPError{
@@ -615,8 +623,8 @@ func callTool(params json.RawMessage) MCPResponse {
 		}
 
 		// Try Google Places tools
-		if placesProvider != nil && placesProvider.HasTool(call.Name) {
-			result, err := placesProvider.Call(call.Name, call.Arguments)
+		if s.placesProvider != nil && s.placesProvider.HasTool(call.Name) {
+			result, err := s.placesProvider.Call(call.Name, call.Arguments)
 			if err != nil {
 				return MCPResponse{
 					Error: &MCPError{
@@ -629,8 +637,8 @@ func callTool(params json.RawMessage) MCPResponse {
 		}
 
 		// Try Weather tools
-		if weatherProvider != nil && weatherProvider.HasTool(call.Name) {
-			result, err := weatherProvider.Call(call.Name, call.Arguments)
+		if s.weatherProvider != nil && s.weatherProvider.HasTool(call.Name) {
+			result, err := s.weatherProvider.Call(call.Name, call.Arguments)
 			if err != nil {
 				return MCPResponse{
 					Error: &MCPError{
@@ -643,8 +651,8 @@ func callTool(params json.RawMessage) MCPResponse {
 		}
 
 		// Try GitHub Bot tools
-		if githubProvider != nil && githubProvider.HasTool(call.Name) {
-			result, err := githubProvider.Call(call.Name, call.Arguments)
+		if s.githubProvider != nil && s.githubProvider.HasTool(call.Name) {
+			result, err := s.githubProvider.Call(call.Name, call.Arguments)
 			if err != nil {
 				return MCPResponse{
 					Error: &MCPError{
@@ -657,8 +665,8 @@ func callTool(params json.RawMessage) MCPResponse {
 		}
 
 		// Try Memory tools
-		if memoryProvider != nil && memoryProvider.HasTool(call.Name) {
-			result, err := memoryProvider.Call(call.Name, call.Arguments)
+		if s.memoryProvider != nil && s.memoryProvider.HasTool(call.Name) {
+			result, err := s.memoryProvider.Call(call.Name, call.Arguments)
 			if err != nil {
 				return MCPResponse{
 					Error: &MCPError{
@@ -671,8 +679,8 @@ func callTool(params json.RawMessage) MCPResponse {
 		}
 
 		// Try proxied tools
-		if proxy != nil {
-			result, err := proxy.CallTool(call.Name, call.Arguments)
+		if s.proxy != nil {
+			result, err := s.proxy.CallTool(call.Name, call.Arguments)
 			if err == nil {
 				return MCPResponse{Result: result}
 			}
@@ -709,12 +717,18 @@ func mcpTextResponse(text string) MCPResponse {
 	}
 }
 
-func jobList(args map[string]interface{}) MCPResponse {
+// withDB opens the database and passes it to the callback.
+func withDB(f func(*db.DB) MCPResponse) MCPResponse {
 	database, err := getDB()
 	if err != nil {
 		return MCPResponse{Error: &MCPError{Code: -1, Message: err.Error()}}
 	}
 	defer database.Close()
+	return f(database)
+}
+
+func (s *MCPServer) jobList(args map[string]interface{}) MCPResponse {
+	return withDB(func(database *db.DB) MCPResponse {
 
 	enabledOnly := false
 	if val, ok := args["enabled_only"].(bool); ok {
@@ -739,9 +753,10 @@ func jobList(args map[string]interface{}) MCPResponse {
 			},
 		},
 	}
+	})
 }
 
-func jobAdd(args map[string]interface{}) MCPResponse {
+func (s *MCPServer) jobAdd(args map[string]interface{}) MCPResponse {
 	name, _ := args["name"].(string)
 	schedule, _ := args["schedule"].(string)
 	command, _ := args["command"].(string)
@@ -750,11 +765,7 @@ func jobAdd(args map[string]interface{}) MCPResponse {
 		return MCPResponse{Error: &MCPError{Code: -1, Message: "name, schedule, and command are required"}}
 	}
 
-	database, err := getDB()
-	if err != nil {
-		return MCPResponse{Error: &MCPError{Code: -1, Message: err.Error()}}
-	}
-	defer database.Close()
+	return withDB(func(database *db.DB) MCPResponse {
 
 	job, err := database.CreateJob(name, command, schedule)
 	if err != nil {
@@ -764,19 +775,16 @@ func jobAdd(args map[string]interface{}) MCPResponse {
 	jobJSON, _ := json.MarshalIndent(job, "", "  ")
 	message := fmt.Sprintf("Job '%s' created successfully\n\n%s", name, string(jobJSON))
 	return mcpTextResponse(message)
+	})
 }
 
-func jobEnable(args map[string]interface{}) MCPResponse {
+func (s *MCPServer) jobEnable(args map[string]interface{}) MCPResponse {
 	jobIdentifier, _ := args["job"].(string)
 	if jobIdentifier == "" {
 		return MCPResponse{Error: &MCPError{Code: -1, Message: "job identifier is required"}}
 	}
 
-	database, err := getDB()
-	if err != nil {
-		return MCPResponse{Error: &MCPError{Code: -1, Message: err.Error()}}
-	}
-	defer database.Close()
+	return withDB(func(database *db.DB) MCPResponse {
 
 	job, err := database.GetJobByName(jobIdentifier)
 	if err != nil {
@@ -789,19 +797,16 @@ func jobEnable(args map[string]interface{}) MCPResponse {
 	}
 
 	return mcpTextResponse(fmt.Sprintf("Job '%s' enabled", jobIdentifier))
+	})
 }
 
-func jobDisable(args map[string]interface{}) MCPResponse {
+func (s *MCPServer) jobDisable(args map[string]interface{}) MCPResponse {
 	jobIdentifier, _ := args["job"].(string)
 	if jobIdentifier == "" {
 		return MCPResponse{Error: &MCPError{Code: -1, Message: "job identifier is required"}}
 	}
 
-	database, err := getDB()
-	if err != nil {
-		return MCPResponse{Error: &MCPError{Code: -1, Message: err.Error()}}
-	}
-	defer database.Close()
+	return withDB(func(database *db.DB) MCPResponse {
 
 	job, err := database.GetJobByName(jobIdentifier)
 	if err != nil {
@@ -814,19 +819,16 @@ func jobDisable(args map[string]interface{}) MCPResponse {
 	}
 
 	return mcpTextResponse(fmt.Sprintf("Job '%s' disabled", jobIdentifier))
+	})
 }
 
-func jobDelete(args map[string]interface{}) MCPResponse {
+func (s *MCPServer) jobDelete(args map[string]interface{}) MCPResponse {
 	jobIdentifier, _ := args["job"].(string)
 	if jobIdentifier == "" {
 		return MCPResponse{Error: &MCPError{Code: -1, Message: "job identifier is required"}}
 	}
 
-	database, err := getDB()
-	if err != nil {
-		return MCPResponse{Error: &MCPError{Code: -1, Message: err.Error()}}
-	}
-	defer database.Close()
+	return withDB(func(database *db.DB) MCPResponse {
 
 	job, err := database.GetJobByName(jobIdentifier)
 	if err != nil {
@@ -838,14 +840,11 @@ func jobDelete(args map[string]interface{}) MCPResponse {
 	}
 
 	return mcpTextResponse(fmt.Sprintf("Job '%s' deleted", jobIdentifier))
+	})
 }
 
-func pauseAll() MCPResponse {
-	database, err := getDB()
-	if err != nil {
-		return MCPResponse{Error: &MCPError{Code: -1, Message: err.Error()}}
-	}
-	defer database.Close()
+func (s *MCPServer) pauseAll() MCPResponse {
+	return withDB(func(database *db.DB) MCPResponse {
 
 	jobs, err := database.ListJobs(true)
 	if err != nil {
@@ -862,14 +861,11 @@ func pauseAll() MCPResponse {
 	}
 
 	return mcpTextResponse(fmt.Sprintf("Paused %d jobs", count))
+	})
 }
 
-func resumeAll() MCPResponse {
-	database, err := getDB()
-	if err != nil {
-		return MCPResponse{Error: &MCPError{Code: -1, Message: err.Error()}}
-	}
-	defer database.Close()
+func (s *MCPServer) resumeAll() MCPResponse {
+	return withDB(func(database *db.DB) MCPResponse {
 
 	allJobs, err := database.ListJobs(false)
 	if err != nil {
@@ -888,14 +884,11 @@ func resumeAll() MCPResponse {
 	}
 
 	return mcpTextResponse(fmt.Sprintf("Resumed %d jobs", count))
+	})
 }
 
-func getLogs(args map[string]interface{}) MCPResponse {
-	database, err := getDB()
-	if err != nil {
-		return MCPResponse{Error: &MCPError{Code: -1, Message: err.Error()}}
-	}
-	defer database.Close()
+func (s *MCPServer) getLogs(args map[string]interface{}) MCPResponse {
+	return withDB(func(database *db.DB) MCPResponse {
 
 	limit := 10
 	if val, ok := args["limit"].(float64); ok {
@@ -929,9 +922,10 @@ func getLogs(args map[string]interface{}) MCPResponse {
 
 	logsJSON, _ := json.MarshalIndent(executions, "", "  ")
 	return mcpTextResponse(string(logsJSON))
+	})
 }
 
-func getStatus() MCPResponse {
+func (s *MCPServer) getStatus() MCPResponse {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return MCPResponse{Error: &MCPError{Code: -1, Message: err.Error()}}

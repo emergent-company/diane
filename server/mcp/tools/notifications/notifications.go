@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 
+	tools "github.com/Emergent-Comapny/diane/mcp/tools"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -156,59 +157,10 @@ func getHomeAssistantConfig() (*homeAssistantConfig, error) {
 	return &config, nil
 }
 
-// --- Helper Functions ---
-
-func getString(args map[string]interface{}, key string) string {
-	if val, ok := args[key].(string); ok {
-		return val
-	}
-	return ""
-}
-
-func getStringRequired(args map[string]interface{}, key string) (string, error) {
-	if val, ok := args[key].(string); ok && val != "" {
-		return val, nil
-	}
-	return "", fmt.Errorf("missing required argument: %s", key)
-}
-
-func textContent(text string) map[string]interface{} {
-	return map[string]interface{}{
-		"content": []map[string]interface{}{
-			{
-				"type": "text",
-				"text": text,
-			},
-		},
-	}
-}
-
-func objectSchema(properties map[string]interface{}, required []string) map[string]interface{} {
-	schema := map[string]interface{}{
-		"type":       "object",
-		"properties": properties,
-	}
-	if len(required) > 0 {
-		schema["required"] = required
-	}
-	return schema
-}
-
-func stringProperty(description string) map[string]interface{} {
-	return map[string]interface{}{
-		"type":        "string",
-		"description": description,
-	}
-}
-
 // --- Tool Definition ---
 
 // Tool represents an MCP tool definition
-type Tool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"inputSchema"`
-}
+type Tool = tools.Tool
 
 // Provider implements ToolProvider for notification services
 type Provider struct {
@@ -245,22 +197,22 @@ func (p *Provider) CheckDependencies() error {
 
 // Tools returns all notification tools
 func (p *Provider) Tools() []Tool {
-	var tools []Tool
+	var result []Tool
 
 	// Discord tools
 	if p.discordAvailable {
-		tools = append(tools, []Tool{
+		result = append(result, []Tool{
 			{
 				Name: "discord_send_notification",
 				Description: `Send a notification message to Discord channel via the Kimaki bot.
 
 Uses the Discord bot credentials stored in Kimaki database.
 Perfect for automation notifications, cron job results, and alerts.`,
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"message":      stringProperty("Message content to send"),
-						"title":        stringProperty("Optional title/header (will be bolded)"),
-						"channel_name": stringProperty("Channel name from config, channel ID (digits only), or default #diane"),
+						"message":      tools.StringProperty("Message content to send", false),
+						"title":        tools.StringProperty("Optional title/header (will be bolded)", false),
+						"channel_name": tools.StringProperty("Channel name from config, channel ID (digits only), or default #diane", false),
 					},
 					[]string{"message"},
 				),
@@ -274,14 +226,14 @@ Rich embeds support:
 - Title and description
 - Multiple fields (key-value pairs)
 - Footer text`,
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"title":        stringProperty("Embed title"),
-						"description":  stringProperty("Embed description text"),
-						"color":        stringProperty("Color: success, error, warning, info (default: info)"),
-						"fields":       stringProperty("JSON array of fields: [{name: string, value: string, inline?: boolean}]"),
-						"footer":       stringProperty("Footer text"),
-						"channel_name": stringProperty("Channel name from config, channel ID, or default"),
+						"title":        tools.StringProperty("Embed title", false),
+						"description":  tools.StringProperty("Embed description text", false),
+						"color":        tools.StringProperty("Color: success, error, warning, info (default: info)", false),
+						"fields":       tools.StringProperty("JSON array of fields: [{name: string, value: string, inline?: boolean}]", false),
+						"footer":       tools.StringProperty("Footer text", false),
+						"channel_name": tools.StringProperty("Channel name from config, channel ID, or default", false),
 					},
 					[]string{"title"},
 				),
@@ -292,11 +244,11 @@ Rich embeds support:
 
 Useful for acknowledging task completion, status indicators, and quick feedback.
 Common emojis: ✅ ❌ ⚠️ ℹ️ 🔄 ⏳ 💰 📊 🚀`,
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"message_id":   stringProperty("Discord message ID to react to"),
-						"emoji":        stringProperty("Emoji to use (unicode emoji like ✅ or custom :emoji_name:)"),
-						"channel_name": stringProperty("Channel name from config, channel ID, or default"),
+						"message_id":   tools.StringProperty("Discord message ID to react to", false),
+						"emoji":        tools.StringProperty("Emoji to use (unicode emoji like ✅ or custom :emoji_name:)", false),
+						"channel_name": tools.StringProperty("Channel name from config, channel ID, or default", false),
 					},
 					[]string{"message_id", "emoji"},
 				),
@@ -307,14 +259,14 @@ Common emojis: ✅ ❌ ⚠️ ℹ️ 🔄 ⏳ 💰 📊 🚀`,
 
 Buttons allow users to click and respond to questions or options.
 Use for yes/no questions, multiple choice, approval workflows.`,
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"message":           stringProperty("Message text (optional if using embed)"),
-						"embed_title":       stringProperty("Embed title (optional)"),
-						"embed_description": stringProperty("Embed description (optional)"),
-						"embed_color":       stringProperty("Embed color: success, error, warning, info"),
-						"buttons":           stringProperty("JSON array of buttons: [{label: string, custom_id: string, style?: number}]. Styles: 1=Primary(blue), 2=Secondary(gray), 3=Success(green), 4=Danger(red)"),
-						"channel_name":      stringProperty("Channel name from config, channel ID, or default"),
+						"message":           tools.StringProperty("Message text (optional if using embed)", false),
+						"embed_title":       tools.StringProperty("Embed title (optional)", false),
+						"embed_description": tools.StringProperty("Embed description (optional)", false),
+						"embed_color":       tools.StringProperty("Embed color: success, error, warning, info", false),
+						"buttons":           tools.StringProperty("JSON array of buttons: [{label: string, custom_id: string, style?: number}]. Styles: 1=Primary(blue), 2=Secondary(gray), 3=Success(green), 4=Danger(red)", false),
+						"channel_name":      tools.StringProperty("Channel name from config, channel ID, or default", false),
 					},
 					[]string{"buttons"},
 				),
@@ -324,15 +276,15 @@ Use for yes/no questions, multiple choice, approval workflows.`,
 
 	// Home Assistant tools
 	if p.homeAssistantAvailable {
-		tools = append(tools, []Tool{
+		result = append(result, []Tool{
 			{
 				Name:        "homeassistant_send_notification",
 				Description: "Send a notification to Home Assistant companion app. Use for cron job summaries, alerts, and important updates.",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"message": stringProperty("Notification message text"),
-						"title":   stringProperty("Notification title (optional)"),
-						"data":    stringProperty("Additional notification data as JSON string (optional)"),
+						"message": tools.StringProperty("Notification message text", false),
+						"title":   tools.StringProperty("Notification title (optional)", false),
+						"data":    tools.StringProperty("Additional notification data as JSON string (optional)", false),
 					},
 					[]string{"message"},
 				),
@@ -340,11 +292,11 @@ Use for yes/no questions, multiple choice, approval workflows.`,
 			{
 				Name:        "homeassistant_send_actionable_notification",
 				Description: "Send an actionable notification with buttons/actions to Home Assistant companion app",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"message": stringProperty("Notification message text"),
-						"title":   stringProperty("Notification title"),
-						"actions": stringProperty("Actions as JSON array: [{action: string, title: string}]"),
+						"message": tools.StringProperty("Notification message text", false),
+						"title":   tools.StringProperty("Notification title", false),
+						"actions": tools.StringProperty("Actions as JSON array: [{action: string, title: string}]", false),
 					},
 					[]string{"message", "actions"},
 				),
@@ -352,10 +304,10 @@ Use for yes/no questions, multiple choice, approval workflows.`,
 			{
 				Name:        "homeassistant_send_command",
 				Description: "Send a command to Home Assistant companion app (e.g., update_sensors, request_location_update, command_screen_on)",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"command": stringProperty("Command message (e.g., 'command_update_sensors', 'request_location_update')"),
-						"data":    stringProperty("Additional command data as JSON string (optional)"),
+						"command": tools.StringProperty("Command message (e.g., 'command_update_sensors', 'request_location_update')", false),
+						"data":    tools.StringProperty("Additional command data as JSON string (optional)", false),
 					},
 					[]string{"command"},
 				),
@@ -363,7 +315,7 @@ Use for yes/no questions, multiple choice, approval workflows.`,
 		}...)
 	}
 
-	return tools
+	return result
 }
 
 // HasTool checks if a tool name belongs to this provider
@@ -403,12 +355,12 @@ func (p *Provider) Call(name string, args map[string]interface{}) (interface{}, 
 // --- Discord Tool Implementations ---
 
 func (p *Provider) discordSendNotification(args map[string]interface{}) (interface{}, error) {
-	message, err := getStringRequired(args, "message")
+	message, err := tools.GetStringRequired(args, "message")
 	if err != nil {
 		return nil, err
 	}
-	title := getString(args, "title")
-	channelName := getString(args, "channel_name")
+	title := tools.GetString(args, "title")
+	channelName := tools.GetString(args, "channel_name")
 
 	botToken, err := getDiscordBotToken()
 	if err != nil {
@@ -441,19 +393,19 @@ func (p *Provider) discordSendNotification(args map[string]interface{}) (interfa
 		"timestamp":  result["timestamp"],
 	}
 	output, _ := json.MarshalIndent(response, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) discordSendEmbed(args map[string]interface{}) (interface{}, error) {
-	title, err := getStringRequired(args, "title")
+	title, err := tools.GetStringRequired(args, "title")
 	if err != nil {
 		return nil, err
 	}
-	description := getString(args, "description")
-	colorName := getString(args, "color")
-	fieldsJSON := getString(args, "fields")
-	footer := getString(args, "footer")
-	channelName := getString(args, "channel_name")
+	description := tools.GetString(args, "description")
+	colorName := tools.GetString(args, "color")
+	fieldsJSON := tools.GetString(args, "fields")
+	footer := tools.GetString(args, "footer")
+	channelName := tools.GetString(args, "channel_name")
 
 	botToken, err := getDiscordBotToken()
 	if err != nil {
@@ -511,19 +463,19 @@ func (p *Provider) discordSendEmbed(args map[string]interface{}) (interface{}, e
 		"timestamp":  result["timestamp"],
 	}
 	output, _ := json.MarshalIndent(response, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) discordSendReaction(args map[string]interface{}) (interface{}, error) {
-	messageID, err := getStringRequired(args, "message_id")
+	messageID, err := tools.GetStringRequired(args, "message_id")
 	if err != nil {
 		return nil, err
 	}
-	emoji, err := getStringRequired(args, "emoji")
+	emoji, err := tools.GetStringRequired(args, "emoji")
 	if err != nil {
 		return nil, err
 	}
-	channelName := getString(args, "channel_name")
+	channelName := tools.GetString(args, "channel_name")
 
 	botToken, err := getDiscordBotToken()
 	if err != nil {
@@ -567,19 +519,19 @@ func (p *Provider) discordSendReaction(args map[string]interface{}) (interface{}
 		"emoji":      emoji,
 	}
 	output, _ := json.MarshalIndent(response, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) discordSendMessageWithButtons(args map[string]interface{}) (interface{}, error) {
-	buttonsJSON, err := getStringRequired(args, "buttons")
+	buttonsJSON, err := tools.GetStringRequired(args, "buttons")
 	if err != nil {
 		return nil, err
 	}
-	message := getString(args, "message")
-	embedTitle := getString(args, "embed_title")
-	embedDescription := getString(args, "embed_description")
-	embedColor := getString(args, "embed_color")
-	channelName := getString(args, "channel_name")
+	message := tools.GetString(args, "message")
+	embedTitle := tools.GetString(args, "embed_title")
+	embedDescription := tools.GetString(args, "embed_description")
+	embedColor := tools.GetString(args, "embed_color")
+	channelName := tools.GetString(args, "channel_name")
 
 	botToken, err := getDiscordBotToken()
 	if err != nil {
@@ -666,7 +618,7 @@ func (p *Provider) discordSendMessageWithButtons(args map[string]interface{}) (i
 		"note":       "Button interactions need to be handled by Kimaki bot",
 	}
 	output, _ := json.MarshalIndent(response, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func discordAPICall(botToken, channelID, endpoint, method string, payload interface{}) (map[string]interface{}, error) {
@@ -715,12 +667,12 @@ func discordAPICall(botToken, channelID, endpoint, method string, payload interf
 // --- Home Assistant Tool Implementations ---
 
 func (p *Provider) haSendNotification(args map[string]interface{}) (interface{}, error) {
-	message, err := getStringRequired(args, "message")
+	message, err := tools.GetStringRequired(args, "message")
 	if err != nil {
 		return nil, err
 	}
-	title := getString(args, "title")
-	dataJSON := getString(args, "data")
+	title := tools.GetString(args, "title")
+	dataJSON := tools.GetString(args, "data")
 
 	config, err := getHomeAssistantConfig()
 	if err != nil {
@@ -752,19 +704,19 @@ func (p *Provider) haSendNotification(args map[string]interface{}) (interface{},
 		"sent_to": config.NotifyService,
 	}
 	output, _ := json.MarshalIndent(response, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) haSendActionableNotification(args map[string]interface{}) (interface{}, error) {
-	message, err := getStringRequired(args, "message")
+	message, err := tools.GetStringRequired(args, "message")
 	if err != nil {
 		return nil, err
 	}
-	actionsJSON, err := getStringRequired(args, "actions")
+	actionsJSON, err := tools.GetStringRequired(args, "actions")
 	if err != nil {
 		return nil, err
 	}
-	title := getString(args, "title")
+	title := tools.GetString(args, "title")
 
 	config, err := getHomeAssistantConfig()
 	if err != nil {
@@ -794,15 +746,15 @@ func (p *Provider) haSendActionableNotification(args map[string]interface{}) (in
 		"actions": actions,
 	}
 	output, _ := json.MarshalIndent(response, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) haSendCommand(args map[string]interface{}) (interface{}, error) {
-	command, err := getStringRequired(args, "command")
+	command, err := tools.GetStringRequired(args, "command")
 	if err != nil {
 		return nil, err
 	}
-	dataJSON := getString(args, "data")
+	dataJSON := tools.GetString(args, "data")
 
 	config, err := getHomeAssistantConfig()
 	if err != nil {
@@ -830,7 +782,7 @@ func (p *Provider) haSendCommand(args map[string]interface{}) (interface{}, erro
 		"command": command,
 	}
 	output, _ := json.MarshalIndent(response, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func haAPICall(config *homeAssistantConfig, payload interface{}) error {

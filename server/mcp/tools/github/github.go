@@ -179,9 +179,10 @@ func (p *Provider) Tools() []Tool {
 
 // HasTool checks if a tool name belongs to this provider
 func (p *Provider) HasTool(name string) bool {
-	switch name {
-	case "github-bot_comment_as_bot", "github-bot_react_as_bot", "github-bot_manage_labels":
-		return true
+	for _, tool := range p.Tools() {
+		if tool.Name == name {
+			return true
+		}
 	}
 	return false
 }

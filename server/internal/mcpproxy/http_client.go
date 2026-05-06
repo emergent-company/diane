@@ -420,7 +420,7 @@ func (c *HTTPMCPClient) reauthenticate() error {
 		token, err = AuthenticateDeviceFlow(c.Name, c.OAuth)
 	} else if c.OAuth.AuthorizationURL != "" {
 		// Auth code flow (infakt) — print URL, read paste
-		token, err = AuthenticateAuthCodeFlow(c.Name, c.OAuth)
+		token, err = AuthenticateAuthCodeFlow(c.Name, c.OAuth, false)
 	} else {
 		return fmt.Errorf("no OAuth flow configured for %s (need device_auth_url or authorization_url)", c.Name)
 	}

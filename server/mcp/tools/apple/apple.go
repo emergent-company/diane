@@ -2,96 +2,17 @@
 package apple
 
 import (
-	"bytes"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
+
+	tools "github.com/Emergent-Comapny/diane/mcp/tools"
 )
-
-// --- Helper Functions (embedded from SDK) ---
-
-// RunCommand executes a command and returns stdout
-func runCommand(name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		stderrStr := strings.TrimSpace(stderr.String())
-		if stderrStr != "" {
-			return "", fmt.Errorf("%s: %s", err, stderrStr)
-		}
-		return "", err
-	}
-
-	return strings.TrimSpace(stdout.String()), nil
-}
-
-// CommandExists checks if a command is available in PATH
-func commandExists(name string) bool {
-	_, err := exec.LookPath(name)
-	return err == nil
-}
-
-// GetString extracts a string argument, returns empty string if not found
-func getString(args map[string]interface{}, key string) string {
-	if val, ok := args[key].(string); ok {
-		return val
-	}
-	return ""
-}
-
-// GetStringRequired extracts a required string argument
-func getStringRequired(args map[string]interface{}, key string) (string, error) {
-	if val, ok := args[key].(string); ok && val != "" {
-		return val, nil
-	}
-	return "", fmt.Errorf("missing required argument: %s", key)
-}
-
-// TextContent creates an MCP text content response
-func textContent(text string) map[string]interface{} {
-	return map[string]interface{}{
-		"content": []map[string]interface{}{
-			{
-				"type": "text",
-				"text": text,
-			},
-		},
-	}
-}
-
-// ObjectSchema creates a standard object inputSchema
-func objectSchema(properties map[string]interface{}, required []string) map[string]interface{} {
-	schema := map[string]interface{}{
-		"type":       "object",
-		"properties": properties,
-	}
-	if len(required) > 0 {
-		schema["required"] = required
-	}
-	return schema
-}
-
-// StringProperty creates a string property for inputSchema
-func stringProperty(description string) map[string]interface{} {
-	return map[string]interface{}{
-		"type":        "string",
-		"description": description,
-	}
-}
 
 // --- Tool Definition ---
 
 // Tool represents an MCP tool definition
-type Tool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"inputSchema"`
-}
+type Tool = tools.Tool
 
 // Provider implements ToolProvider for Apple services
 type Provider struct {
@@ -114,11 +35,11 @@ func (p *Provider) CheckDependencies() error {
 		return fmt.Errorf("Apple tools are only available on macOS")
 	}
 
-	if !commandExists("remindctl") {
+	if !tools.CommandExists("remindctl") {
 		return fmt.Errorf("remindctl not found. Install with: brew install keith/formulae/remindctl")
 	}
 
-	if !commandExists("swift") {
+	if !tools.CommandExists("swift") {
 		return fmt.Errorf("swift not found. Install Xcode Command Line Tools")
 	}
 
@@ -136,9 +57,9 @@ func (p *Provider) Tools() []Tool {
 		{
 			Name:        "apple_list_reminders",
 			Description: "List Apple Reminders from a specific list or all lists",
-			InputSchema: objectSchema(
+			InputSchema: tools.ObjectSchema(
 				map[string]interface{}{
-					"listName": stringProperty("The name of the reminder list (optional, lists all if omitted)"),
+					"listName": tools.StringProperty("The name of the reminder list (optional, lists all if omitted)", false),
 				},
 				nil, // no required fields
 			),
@@ -146,11 +67,11 @@ func (p *Provider) Tools() []Tool {
 		{
 			Name:        "apple_add_reminder",
 			Description: "Add a new Apple Reminder. Dates must be in YYYY-MM-DD HH:MM format.",
-			InputSchema: objectSchema(
+			InputSchema: tools.ObjectSchema(
 				map[string]interface{}{
-					"title":    stringProperty("The title of the reminder"),
-					"listName": stringProperty("The list to add the reminder to (optional)"),
-					"due":      stringProperty("Due date/time in 'YYYY-MM-DD HH:MM' format (optional)"),
+					"title":    tools.StringProperty("The title of the reminder", false),
+					"listName": tools.StringProperty("The list to add the reminder to (optional)", false),
+					"due":      tools.StringProperty("Due date/time in 'YYYY-MM-DD HH:MM' format (optional)", false),
 				},
 				[]string{"title"},
 			),
@@ -158,9 +79,9 @@ func (p *Provider) Tools() []Tool {
 		{
 			Name:        "apple_search_contacts",
 			Description: "Search Apple Contacts by name, email, or phone number. Returns ID, name and email columns in tab-separated format.",
-			InputSchema: objectSchema(
+			InputSchema: tools.ObjectSchema(
 				map[string]interface{}{
-					"query": stringProperty("Search query (name, email, or phone). Use empty string to list all contacts."),
+					"query": tools.StringProperty("Search query (name, email, or phone). Use empty string to list all contacts.", false),
 				},
 				[]string{"query"},
 			),
@@ -168,7 +89,7 @@ func (p *Provider) Tools() []Tool {
 		{
 			Name:        "apple_list_all_contacts",
 			Description: "List all contacts in your Apple Contacts. Returns ID, name and email columns.",
-			InputSchema: objectSchema(
+			InputSchema: tools.ObjectSchema(
 				map[string]interface{}{},
 				nil,
 			),
@@ -194,26 +115,26 @@ func (p *Provider) Call(name string, args map[string]interface{}) (interface{}, 
 
 // HasTool checks if a tool name belongs to this provider
 func (p *Provider) HasTool(name string) bool {
-	switch name {
-	case "apple_list_reminders", "apple_add_reminder", "apple_search_contacts", "apple_list_all_contacts":
-		return true
-	default:
-		return false
+	for _, tool := range p.Tools() {
+		if tool.Name == name {
+			return true
+		}
 	}
+	return false
 }
 
 // --- Reminders Tools ---
 
 func (p *Provider) listReminders(args map[string]interface{}) (interface{}, error) {
-	listName := getString(args, "listName")
+	listName := tools.GetString(args, "listName")
 
 	var output string
 	var err error
 
 	if listName != "" {
-		output, err = runCommand("remindctl", "list", listName, "--json")
+		output, err = tools.RunCommand("remindctl", "list", listName, "--json")
 	} else {
-		output, err = runCommand("remindctl", "list", "--json")
+		output, err = tools.RunCommand("remindctl", "list", "--json")
 	}
 
 	if err != nil {
@@ -224,17 +145,17 @@ func (p *Provider) listReminders(args map[string]interface{}) (interface{}, erro
 		output = "No reminders found."
 	}
 
-	return textContent(output), nil
+	return tools.TextContent(output), nil
 }
 
 func (p *Provider) addReminder(args map[string]interface{}) (interface{}, error) {
-	title, err := getStringRequired(args, "title")
+	title, err := tools.GetStringRequired(args, "title")
 	if err != nil {
 		return nil, err
 	}
 
-	listName := getString(args, "listName")
-	due := getString(args, "due")
+	listName := tools.GetString(args, "listName")
+	due := tools.GetString(args, "due")
 
 	// Build command arguments
 	cmdArgs := []string{"add", title}
@@ -247,12 +168,12 @@ func (p *Provider) addReminder(args map[string]interface{}) (interface{}, error)
 		cmdArgs = append(cmdArgs, "--due", due)
 	}
 
-	output, err := runCommand("remindctl", cmdArgs...)
+	output, err := tools.RunCommand("remindctl", cmdArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add reminder: %w", err)
 	}
 
-	return textContent(output), nil
+	return tools.TextContent(output), nil
 }
 
 // --- Contacts Tools ---
@@ -266,10 +187,10 @@ func (p *Provider) getSwiftScriptPath() string {
 }
 
 func (p *Provider) searchContacts(args map[string]interface{}) (interface{}, error) {
-	query := getString(args, "query")
+	query := tools.GetString(args, "query")
 
 	scriptPath := p.getSwiftScriptPath()
-	output, err := runCommand("swift", scriptPath, query)
+	output, err := tools.RunCommand("swift", scriptPath, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search contacts: %w", err)
 	}
@@ -278,12 +199,12 @@ func (p *Provider) searchContacts(args map[string]interface{}) (interface{}, err
 		output = "No contacts found."
 	}
 
-	return textContent(output), nil
+	return tools.TextContent(output), nil
 }
 
 func (p *Provider) listAllContacts(args map[string]interface{}) (interface{}, error) {
 	scriptPath := p.getSwiftScriptPath()
-	output, err := runCommand("swift", scriptPath, "")
+	output, err := tools.RunCommand("swift", scriptPath, "")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list contacts: %w", err)
 	}
@@ -292,5 +213,5 @@ func (p *Provider) listAllContacts(args map[string]interface{}) (interface{}, er
 		output = "No contacts found."
 	}
 
-	return textContent(output), nil
+	return tools.TextContent(output), nil
 }

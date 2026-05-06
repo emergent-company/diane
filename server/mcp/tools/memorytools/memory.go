@@ -157,8 +157,12 @@ func (p *Provider) Tools() []Tool {
 
 // HasTool checks if a tool belongs to this provider.
 func (p *Provider) HasTool(name string) bool {
-	return name == "memory_save" || name == "memory_recall" ||
-		name == "memory_apply_decay" || name == "memory_detect_patterns"
+	for _, tool := range p.Tools() {
+		if tool.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // Call dispatches to the right tool implementation.

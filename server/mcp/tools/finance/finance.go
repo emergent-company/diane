@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	tools "github.com/Emergent-Comapny/diane/mcp/tools"
 )
 
 // --- Configuration ---
@@ -65,79 +67,6 @@ var (
 	actualCLIPath string
 	secretsDir    string
 )
-
-// --- Helper Functions ---
-
-func getString(args map[string]interface{}, key string) string {
-	if val, ok := args[key].(string); ok {
-		return val
-	}
-	return ""
-}
-
-func getStringRequired(args map[string]interface{}, key string) (string, error) {
-	if val, ok := args[key].(string); ok && val != "" {
-		return val, nil
-	}
-	return "", fmt.Errorf("missing required argument: %s", key)
-}
-
-func getNumber(args map[string]interface{}, key string, defaultVal float64) float64 {
-	if val, ok := args[key].(float64); ok {
-		return val
-	}
-	return defaultVal
-}
-
-func getBool(args map[string]interface{}, key string) (bool, bool) {
-	if val, ok := args[key].(bool); ok {
-		return val, true
-	}
-	return false, false
-}
-
-func textContent(text string) map[string]interface{} {
-	return map[string]interface{}{
-		"content": []map[string]interface{}{
-			{
-				"type": "text",
-				"text": text,
-			},
-		},
-	}
-}
-
-func objectSchema(properties map[string]interface{}, required []string) map[string]interface{} {
-	schema := map[string]interface{}{
-		"type":       "object",
-		"properties": properties,
-	}
-	if len(required) > 0 {
-		schema["required"] = required
-	}
-	return schema
-}
-
-func stringProperty(description string) map[string]interface{} {
-	return map[string]interface{}{
-		"type":        "string",
-		"description": description,
-	}
-}
-
-func numberProperty(description string) map[string]interface{} {
-	return map[string]interface{}{
-		"type":        "number",
-		"description": description,
-	}
-}
-
-func boolProperty(description string) map[string]interface{} {
-	return map[string]interface{}{
-		"type":        "boolean",
-		"description": description,
-	}
-}
 
 // --- Enable Banking JWT Generation ---
 
@@ -275,11 +204,7 @@ func runActualCLI(command string, args ...string) (interface{}, error) {
 // --- Tool Definition ---
 
 // Tool represents an MCP tool definition
-type Tool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"inputSchema"`
-}
+type Tool = tools.Tool
 
 // Provider implements ToolProvider for finance tools
 type Provider struct {
@@ -366,17 +291,17 @@ func (p *Provider) CheckDependencies() error {
 
 // Tools returns all finance tools
 func (p *Provider) Tools() []Tool {
-	var tools []Tool
+	var toolList []Tool
 
 	// Enable Banking tools
 	if p.enableBankingAvailable {
-		tools = append(tools, []Tool{
+		toolList = append(toolList, []Tool{
 			{
 				Name:        "enablebanking_list_banks",
 				Description: "List available banks (ASPSPs) in Enable Banking for a specific country. Returns bank names, countries, and supported services (AIS/PIS).",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"country": stringProperty("Two-letter ISO 3166 country code (e.g., 'PL' for Poland, 'GB' for UK)"),
+						"country": tools.StringProperty("Two-letter ISO 3166 country code (e.g., 'PL' for Poland, 'GB' for UK)", false),
 					},
 					[]string{"country"},
 				),
@@ -384,11 +309,11 @@ func (p *Provider) Tools() []Tool {
 			{
 				Name:        "enablebanking_start_authorization",
 				Description: "Start the authorization flow to connect a bank account. Returns an authorization URL that the user must open in their browser to log in to their bank and grant access. After completing authentication, the user will be redirected with a 'code' parameter.",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"bank_name":    stringProperty("Name of the bank as listed in list_banks (e.g., 'Revolut', 'mBank')"),
-						"bank_country": stringProperty("Two-letter ISO 3166 country code for the bank"),
-						"psu_type":     stringProperty("Type of account: 'personal' or 'business'. Default: 'personal'"),
+						"bank_name":    tools.StringProperty("Name of the bank as listed in list_banks (e.g., 'Revolut', 'mBank')", false),
+						"bank_country": tools.StringProperty("Two-letter ISO 3166 country code for the bank", false),
+						"psu_type":     tools.StringProperty("Type of account: 'personal' or 'business'. Default: 'personal'", false),
 					},
 					[]string{"bank_name", "bank_country"},
 				),
@@ -396,9 +321,9 @@ func (p *Provider) Tools() []Tool {
 			{
 				Name:        "enablebanking_create_session",
 				Description: "Create a session using the authorization code received after the user completed bank login. Returns session_id and list of authorized accounts. The session remains valid for 180 days.",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"code": stringProperty("Authorization code from the redirect URL (the 'code' parameter after user completes bank login)"),
+						"code": tools.StringProperty("Authorization code from the redirect URL (the 'code' parameter after user completes bank login)", false),
 					},
 					[]string{"code"},
 				),
@@ -406,11 +331,11 @@ func (p *Provider) Tools() []Tool {
 			{
 				Name:        "enablebanking_get_transactions",
 				Description: "Fetch transaction history for a bank account. Returns transactions with dates, amounts, descriptions, and counterparty information. Supports date filtering and pagination.",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"account_id": stringProperty("Account UUID from the session (obtained from create_session)"),
-						"date_from":  stringProperty("Start date in YYYY-MM-DD format (default: 90 days ago)"),
-						"date_to":    stringProperty("End date in YYYY-MM-DD format (default: today)"),
+						"account_id": tools.StringProperty("Account UUID from the session (obtained from create_session)", false),
+						"date_from":  tools.StringProperty("Start date in YYYY-MM-DD format (default: 90 days ago)", false),
+						"date_to":    tools.StringProperty("End date in YYYY-MM-DD format (default: today)", false),
 					},
 					[]string{"account_id"},
 				),
@@ -418,9 +343,9 @@ func (p *Provider) Tools() []Tool {
 			{
 				Name:        "enablebanking_get_balances",
 				Description: "Fetch current balance information for a bank account. Returns available balance, booked balance, and other balance types depending on the bank.",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"account_id": stringProperty("Account UUID from the session (obtained from create_session)"),
+						"account_id": tools.StringProperty("Account UUID from the session (obtained from create_session)", false),
 					},
 					[]string{"account_id"},
 				),
@@ -430,18 +355,18 @@ func (p *Provider) Tools() []Tool {
 
 	// Actual Budget tools
 	if p.actualBudgetAvailable {
-		tools = append(tools, []Tool{
+		toolList = append(toolList, []Tool{
 			{
 				Name:        "actualbudget_list_budgets",
 				Description: "List all budget files available on the Actual Budget server",
-				InputSchema: objectSchema(map[string]interface{}{}, nil),
+				InputSchema: tools.ObjectSchema(map[string]interface{}{}, nil),
 			},
 			{
 				Name:        "actualbudget_get_accounts",
 				Description: "Get all accounts from an Actual Budget file",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"budget_id": stringProperty("The sync ID (groupId) of the budget file"),
+						"budget_id": tools.StringProperty("The sync ID (groupId) of the budget file", false),
 					},
 					[]string{"budget_id"},
 				),
@@ -449,12 +374,12 @@ func (p *Provider) Tools() []Tool {
 			{
 				Name:        "actualbudget_get_transactions",
 				Description: "Get all transactions from an account within a date range",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"budget_id":  stringProperty("The sync ID (groupId) of the budget file"),
-						"account_id": stringProperty("The account ID to fetch transactions from"),
-						"start_date": stringProperty("Start date in YYYY-MM-DD format"),
-						"end_date":   stringProperty("End date in YYYY-MM-DD format"),
+						"budget_id":  tools.StringProperty("The sync ID (groupId) of the budget file", false),
+						"account_id": tools.StringProperty("The account ID to fetch transactions from", false),
+						"start_date": tools.StringProperty("Start date in YYYY-MM-DD format", false),
+						"end_date":   tools.StringProperty("End date in YYYY-MM-DD format", false),
 					},
 					[]string{"budget_id", "account_id", "start_date", "end_date"},
 				),
@@ -462,11 +387,11 @@ func (p *Provider) Tools() []Tool {
 			{
 				Name:        "actualbudget_import_transactions",
 				Description: "Import bank transactions into Actual Budget with automatic reconciliation and rule processing",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"budget_id":    stringProperty("The sync ID (groupId) of the budget file"),
-						"account_id":   stringProperty("The account ID to import transactions into"),
-						"transactions": stringProperty(`JSON array of transactions: [{"date": "YYYY-MM-DD", "amount": 123.45, "payee_name": "Store", "notes": "...", "imported_id": "unique-id", "cleared": true}]`),
+						"budget_id":    tools.StringProperty("The sync ID (groupId) of the budget file", false),
+						"account_id":   tools.StringProperty("The account ID to import transactions into", false),
+						"transactions": tools.StringProperty(`JSON array of transactions: [{"date": "YYYY-MM-DD", "amount": 123.45, "payee_name": "Store", "notes": "...", "imported_id": "unique-id", "cleared": true}]`, false),
 					},
 					[]string{"budget_id", "account_id", "transactions"},
 				),
@@ -474,9 +399,9 @@ func (p *Provider) Tools() []Tool {
 			{
 				Name:        "actualbudget_get_categories",
 				Description: "Get all categories from an Actual Budget file",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"budget_id": stringProperty("The sync ID (groupId) of the budget file"),
+						"budget_id": tools.StringProperty("The sync ID (groupId) of the budget file", false),
 					},
 					[]string{"budget_id"},
 				),
@@ -484,9 +409,9 @@ func (p *Provider) Tools() []Tool {
 			{
 				Name:        "actualbudget_get_category_groups",
 				Description: "Get all category groups from an Actual Budget file",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"budget_id": stringProperty("The sync ID (groupId) of the budget file"),
+						"budget_id": tools.StringProperty("The sync ID (groupId) of the budget file", false),
 					},
 					[]string{"budget_id"},
 				),
@@ -494,10 +419,10 @@ func (p *Provider) Tools() []Tool {
 			{
 				Name:        "actualbudget_create_category_group",
 				Description: "Create a new category group in Actual Budget",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"budget_id": stringProperty("The sync ID (groupId) of the budget file"),
-						"group":     stringProperty(`JSON group object: {"name": "Group Name", "is_income": false, "hidden": false}`),
+						"budget_id": tools.StringProperty("The sync ID (groupId) of the budget file", false),
+						"group":     tools.StringProperty(`JSON group object: {"name": "Group Name", "is_income": false, "hidden": false}`, false),
 					},
 					[]string{"budget_id", "group"},
 				),
@@ -505,10 +430,10 @@ func (p *Provider) Tools() []Tool {
 			{
 				Name:        "actualbudget_create_category",
 				Description: "Create a new category in Actual Budget within a specific group",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"budget_id": stringProperty("The sync ID (groupId) of the budget file"),
-						"category":  stringProperty(`JSON category object: {"name": "Category Name", "group_id": "group-id"}`),
+						"budget_id": tools.StringProperty("The sync ID (groupId) of the budget file", false),
+						"category":  tools.StringProperty(`JSON category object: {"name": "Category Name", "group_id": "group-id"}`, false),
 					},
 					[]string{"budget_id", "category"},
 				),
@@ -516,11 +441,11 @@ func (p *Provider) Tools() []Tool {
 			{
 				Name:        "actualbudget_update_category",
 				Description: "Update an existing category in Actual Budget",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"budget_id":   stringProperty("The sync ID (groupId) of the budget file"),
-						"category_id": stringProperty("The ID of the category to update"),
-						"fields":      stringProperty(`JSON object with fields to update: {"name": "New Name", "hidden": true}`),
+						"budget_id":   tools.StringProperty("The sync ID (groupId) of the budget file", false),
+						"category_id": tools.StringProperty("The ID of the category to update", false),
+						"fields":      tools.StringProperty(`JSON object with fields to update: {"name": "New Name", "hidden": true}`, false),
 					},
 					[]string{"budget_id", "category_id", "fields"},
 				),
@@ -528,11 +453,11 @@ func (p *Provider) Tools() []Tool {
 			{
 				Name:        "actualbudget_delete_category",
 				Description: "Delete a category from Actual Budget (optionally transfer transactions to another category)",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"budget_id":            stringProperty("The sync ID (groupId) of the budget file"),
-						"category_id":          stringProperty("The ID of the category to delete"),
-						"transfer_category_id": stringProperty("Optional ID of category to transfer existing transactions to"),
+						"budget_id":            tools.StringProperty("The sync ID (groupId) of the budget file", false),
+						"category_id":          tools.StringProperty("The ID of the category to delete", false),
+						"transfer_category_id": tools.StringProperty("Optional ID of category to transfer existing transactions to", false),
 					},
 					[]string{"budget_id", "category_id"},
 				),
@@ -540,9 +465,9 @@ func (p *Provider) Tools() []Tool {
 			{
 				Name:        "actualbudget_get_payees",
 				Description: "Get all payees from an Actual Budget file",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"budget_id": stringProperty("The sync ID (groupId) of the budget file"),
+						"budget_id": tools.StringProperty("The sync ID (groupId) of the budget file", false),
 					},
 					[]string{"budget_id"},
 				),
@@ -550,11 +475,11 @@ func (p *Provider) Tools() []Tool {
 			{
 				Name:        "actualbudget_get_account_balance",
 				Description: "Get the current balance of an account in Actual Budget",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"budget_id":   stringProperty("The sync ID (groupId) of the budget file"),
-						"account_id":  stringProperty("The account ID to check balance for"),
-						"cutoff_date": stringProperty("Optional date (YYYY-MM-DD) to get balance as of that date"),
+						"budget_id":   tools.StringProperty("The sync ID (groupId) of the budget file", false),
+						"account_id":  tools.StringProperty("The account ID to check balance for", false),
+						"cutoff_date": tools.StringProperty("Optional date (YYYY-MM-DD) to get balance as of that date", false),
 					},
 					[]string{"budget_id", "account_id"},
 				),
@@ -562,9 +487,9 @@ func (p *Provider) Tools() []Tool {
 			{
 				Name:        "actualbudget_sync_budget",
 				Description: "Synchronize local budget changes with the Actual Budget server",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"budget_id": stringProperty("The sync ID (groupId) of the budget file"),
+						"budget_id": tools.StringProperty("The sync ID (groupId) of the budget file", false),
 					},
 					[]string{"budget_id"},
 				),
@@ -572,9 +497,9 @@ func (p *Provider) Tools() []Tool {
 			{
 				Name:        "actualbudget_get_rules",
 				Description: "Get all rules from an Actual Budget file",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"budget_id": stringProperty("The sync ID (groupId) of the budget file"),
+						"budget_id": tools.StringProperty("The sync ID (groupId) of the budget file", false),
 					},
 					[]string{"budget_id"},
 				),
@@ -582,10 +507,10 @@ func (p *Provider) Tools() []Tool {
 			{
 				Name:        "actualbudget_create_rule",
 				Description: "Create a new rule in Actual Budget for automatic transaction categorization",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"budget_id": stringProperty("The sync ID (groupId) of the budget file"),
-						"rule":      stringProperty(`JSON rule object with conditions and actions`),
+						"budget_id": tools.StringProperty("The sync ID (groupId) of the budget file", false),
+						"rule":      tools.StringProperty(`JSON rule object with conditions and actions`, false),
 					},
 					[]string{"budget_id", "rule"},
 				),
@@ -593,10 +518,10 @@ func (p *Provider) Tools() []Tool {
 			{
 				Name:        "actualbudget_update_rule",
 				Description: "Update an existing rule in Actual Budget",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"budget_id": stringProperty("The sync ID (groupId) of the budget file"),
-						"rule":      stringProperty(`JSON rule object with id field included`),
+						"budget_id": tools.StringProperty("The sync ID (groupId) of the budget file", false),
+						"rule":      tools.StringProperty(`JSON rule object with id field included`, false),
 					},
 					[]string{"budget_id", "rule"},
 				),
@@ -604,10 +529,10 @@ func (p *Provider) Tools() []Tool {
 			{
 				Name:        "actualbudget_delete_rule",
 				Description: "Delete a rule from Actual Budget",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"budget_id": stringProperty("The sync ID (groupId) of the budget file"),
-						"rule_id":   stringProperty("The ID of the rule to delete"),
+						"budget_id": tools.StringProperty("The sync ID (groupId) of the budget file", false),
+						"rule_id":   tools.StringProperty("The ID of the rule to delete", false),
 					},
 					[]string{"budget_id", "rule_id"},
 				),
@@ -615,9 +540,9 @@ func (p *Provider) Tools() []Tool {
 			{
 				Name:        "actualbudget_run_rules",
 				Description: "Run all rules on existing transactions in the budget to re-categorize them",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"budget_id": stringProperty("The sync ID (groupId) of the budget file"),
+						"budget_id": tools.StringProperty("The sync ID (groupId) of the budget file", false),
 					},
 					[]string{"budget_id"},
 				),
@@ -627,21 +552,21 @@ func (p *Provider) Tools() []Tool {
 
 	// Bank Sync tools (requires both Enable Banking and Actual Budget)
 	if p.bankSyncAvailable {
-		tools = append(tools, []Tool{
+		toolList = append(toolList, []Tool{
 			{
 				Name:        "banksync_list_mappings",
 				Description: "List all bank account to Actual Budget account mappings",
-				InputSchema: objectSchema(map[string]interface{}{}, nil),
+				InputSchema: tools.ObjectSchema(map[string]interface{}{}, nil),
 			},
 			{
 				Name:        "banksync_update_mapping",
 				Description: "Update a specific bank account mapping with Actual Budget account details",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"bank_account_id":     stringProperty("The Enable Banking account ID to update mapping for"),
-						"actual_account_id":   stringProperty("The Actual Budget account ID to map to"),
-						"actual_account_name": stringProperty("The Actual Budget account name for reference"),
-						"enabled":             boolProperty("Enable this mapping for automatic sync"),
+						"bank_account_id":     tools.StringProperty("The Enable Banking account ID to update mapping for", false),
+						"actual_account_id":   tools.StringProperty("The Actual Budget account ID to map to", false),
+						"actual_account_name": tools.StringProperty("The Actual Budget account name for reference", false),
+						"enabled":             tools.BoolProperty("Enable this mapping for automatic sync", false),
 					},
 					[]string{"bank_account_id", "actual_account_id", "actual_account_name"},
 				),
@@ -649,10 +574,10 @@ func (p *Provider) Tools() []Tool {
 			{
 				Name:        "banksync_sync_bank_to_actual",
 				Description: "Sync transactions from Enable Banking to Actual Budget for a specific account mapping",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"bank_account_id": stringProperty("The Enable Banking account ID to sync (must have a configured mapping)"),
-						"days_back":       numberProperty("Number of days back to fetch transactions (default: 30)"),
+						"bank_account_id": tools.StringProperty("The Enable Banking account ID to sync (must have a configured mapping)", false),
+						"days_back":       tools.IntProperty("Number of days back to fetch transactions (default: 30)", 0),
 					},
 					[]string{"bank_account_id"},
 				),
@@ -660,9 +585,9 @@ func (p *Provider) Tools() []Tool {
 			{
 				Name:        "banksync_sync_all_accounts",
 				Description: "Sync transactions from all enabled bank accounts to Actual Budget",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"days_back": numberProperty("Number of days back to fetch transactions (default: 30)"),
+						"days_back": tools.IntProperty("Number of days back to fetch transactions (default: 30)", 0),
 					},
 					nil,
 				),
@@ -670,9 +595,9 @@ func (p *Provider) Tools() []Tool {
 			{
 				Name:        "banksync_setup_list_actual_accounts",
 				Description: "Helper tool to list all Actual Budget accounts for easy mapping setup",
-				InputSchema: objectSchema(
+				InputSchema: tools.ObjectSchema(
 					map[string]interface{}{
-						"budget_id": stringProperty("Budget ID (optional, uses default if omitted)"),
+						"budget_id": tools.StringProperty("Budget ID (optional, uses default if omitted)", false),
 					},
 					nil,
 				),
@@ -680,7 +605,7 @@ func (p *Provider) Tools() []Tool {
 		}...)
 	}
 
-	return tools
+	return toolList
 }
 
 // HasTool checks if a tool name belongs to this provider
@@ -766,7 +691,7 @@ func (p *Provider) Call(name string, args map[string]interface{}) (interface{}, 
 // --- Enable Banking Tool Implementations ---
 
 func (p *Provider) ebListBanks(args map[string]interface{}) (interface{}, error) {
-	country, err := getStringRequired(args, "country")
+	country, err := tools.GetStringRequired(args, "country")
 	if err != nil {
 		return nil, err
 	}
@@ -777,19 +702,19 @@ func (p *Provider) ebListBanks(args map[string]interface{}) (interface{}, error)
 	}
 
 	output, _ := json.MarshalIndent(result, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) ebStartAuth(args map[string]interface{}) (interface{}, error) {
-	bankName, err := getStringRequired(args, "bank_name")
+	bankName, err := tools.GetStringRequired(args, "bank_name")
 	if err != nil {
 		return nil, err
 	}
-	bankCountry, err := getStringRequired(args, "bank_country")
+	bankCountry, err := tools.GetStringRequired(args, "bank_country")
 	if err != nil {
 		return nil, err
 	}
-	psuType := getString(args, "psu_type")
+	psuType := tools.GetString(args, "psu_type")
 	if psuType == "" {
 		psuType = "personal"
 	}
@@ -827,11 +752,11 @@ func (p *Provider) ebStartAuth(args map[string]interface{}) (interface{}, error)
 	}
 
 	output, _ := json.MarshalIndent(response, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) ebCreateSession(args map[string]interface{}) (interface{}, error) {
-	code, err := getStringRequired(args, "code")
+	code, err := tools.GetStringRequired(args, "code")
 	if err != nil {
 		return nil, err
 	}
@@ -859,17 +784,17 @@ func (p *Provider) ebCreateSession(args map[string]interface{}) (interface{}, er
 	os.WriteFile(sessionsPath, newData, 0644)
 
 	output, _ := json.MarshalIndent(result, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) ebGetTransactions(args map[string]interface{}) (interface{}, error) {
-	accountID, err := getStringRequired(args, "account_id")
+	accountID, err := tools.GetStringRequired(args, "account_id")
 	if err != nil {
 		return nil, err
 	}
 
-	dateFrom := getString(args, "date_from")
-	dateTo := getString(args, "date_to")
+	dateFrom := tools.GetString(args, "date_from")
+	dateTo := tools.GetString(args, "date_to")
 
 	if dateFrom == "" {
 		dateFrom = time.Now().AddDate(0, 0, -90).Format("2006-01-02")
@@ -885,11 +810,11 @@ func (p *Provider) ebGetTransactions(args map[string]interface{}) (interface{}, 
 	}
 
 	output, _ := json.MarshalIndent(result, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) ebGetBalances(args map[string]interface{}) (interface{}, error) {
-	accountID, err := getStringRequired(args, "account_id")
+	accountID, err := tools.GetStringRequired(args, "account_id")
 	if err != nil {
 		return nil, err
 	}
@@ -900,7 +825,7 @@ func (p *Provider) ebGetBalances(args map[string]interface{}) (interface{}, erro
 	}
 
 	output, _ := json.MarshalIndent(result, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 // --- Actual Budget Tool Implementations ---
@@ -912,11 +837,11 @@ func (p *Provider) abListBudgets(args map[string]interface{}) (interface{}, erro
 	}
 
 	output, _ := json.MarshalIndent(result, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) abGetAccounts(args map[string]interface{}) (interface{}, error) {
-	budgetID, err := getStringRequired(args, "budget_id")
+	budgetID, err := tools.GetStringRequired(args, "budget_id")
 	if err != nil {
 		return nil, err
 	}
@@ -927,23 +852,23 @@ func (p *Provider) abGetAccounts(args map[string]interface{}) (interface{}, erro
 	}
 
 	output, _ := json.MarshalIndent(result, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) abGetTransactions(args map[string]interface{}) (interface{}, error) {
-	budgetID, err := getStringRequired(args, "budget_id")
+	budgetID, err := tools.GetStringRequired(args, "budget_id")
 	if err != nil {
 		return nil, err
 	}
-	accountID, err := getStringRequired(args, "account_id")
+	accountID, err := tools.GetStringRequired(args, "account_id")
 	if err != nil {
 		return nil, err
 	}
-	startDate, err := getStringRequired(args, "start_date")
+	startDate, err := tools.GetStringRequired(args, "start_date")
 	if err != nil {
 		return nil, err
 	}
-	endDate, err := getStringRequired(args, "end_date")
+	endDate, err := tools.GetStringRequired(args, "end_date")
 	if err != nil {
 		return nil, err
 	}
@@ -954,19 +879,19 @@ func (p *Provider) abGetTransactions(args map[string]interface{}) (interface{}, 
 	}
 
 	output, _ := json.MarshalIndent(result, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) abImportTransactions(args map[string]interface{}) (interface{}, error) {
-	budgetID, err := getStringRequired(args, "budget_id")
+	budgetID, err := tools.GetStringRequired(args, "budget_id")
 	if err != nil {
 		return nil, err
 	}
-	accountID, err := getStringRequired(args, "account_id")
+	accountID, err := tools.GetStringRequired(args, "account_id")
 	if err != nil {
 		return nil, err
 	}
-	transactions, err := getStringRequired(args, "transactions")
+	transactions, err := tools.GetStringRequired(args, "transactions")
 	if err != nil {
 		return nil, err
 	}
@@ -977,11 +902,11 @@ func (p *Provider) abImportTransactions(args map[string]interface{}) (interface{
 	}
 
 	output, _ := json.MarshalIndent(result, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) abGetCategories(args map[string]interface{}) (interface{}, error) {
-	budgetID, err := getStringRequired(args, "budget_id")
+	budgetID, err := tools.GetStringRequired(args, "budget_id")
 	if err != nil {
 		return nil, err
 	}
@@ -992,11 +917,11 @@ func (p *Provider) abGetCategories(args map[string]interface{}) (interface{}, er
 	}
 
 	output, _ := json.MarshalIndent(result, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) abGetCategoryGroups(args map[string]interface{}) (interface{}, error) {
-	budgetID, err := getStringRequired(args, "budget_id")
+	budgetID, err := tools.GetStringRequired(args, "budget_id")
 	if err != nil {
 		return nil, err
 	}
@@ -1007,15 +932,15 @@ func (p *Provider) abGetCategoryGroups(args map[string]interface{}) (interface{}
 	}
 
 	output, _ := json.MarshalIndent(result, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) abCreateCategoryGroup(args map[string]interface{}) (interface{}, error) {
-	budgetID, err := getStringRequired(args, "budget_id")
+	budgetID, err := tools.GetStringRequired(args, "budget_id")
 	if err != nil {
 		return nil, err
 	}
-	group, err := getStringRequired(args, "group")
+	group, err := tools.GetStringRequired(args, "group")
 	if err != nil {
 		return nil, err
 	}
@@ -1026,15 +951,15 @@ func (p *Provider) abCreateCategoryGroup(args map[string]interface{}) (interface
 	}
 
 	output, _ := json.MarshalIndent(result, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) abCreateCategory(args map[string]interface{}) (interface{}, error) {
-	budgetID, err := getStringRequired(args, "budget_id")
+	budgetID, err := tools.GetStringRequired(args, "budget_id")
 	if err != nil {
 		return nil, err
 	}
-	category, err := getStringRequired(args, "category")
+	category, err := tools.GetStringRequired(args, "category")
 	if err != nil {
 		return nil, err
 	}
@@ -1045,19 +970,19 @@ func (p *Provider) abCreateCategory(args map[string]interface{}) (interface{}, e
 	}
 
 	output, _ := json.MarshalIndent(result, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) abUpdateCategory(args map[string]interface{}) (interface{}, error) {
-	budgetID, err := getStringRequired(args, "budget_id")
+	budgetID, err := tools.GetStringRequired(args, "budget_id")
 	if err != nil {
 		return nil, err
 	}
-	categoryID, err := getStringRequired(args, "category_id")
+	categoryID, err := tools.GetStringRequired(args, "category_id")
 	if err != nil {
 		return nil, err
 	}
-	fields, err := getStringRequired(args, "fields")
+	fields, err := tools.GetStringRequired(args, "fields")
 	if err != nil {
 		return nil, err
 	}
@@ -1068,19 +993,19 @@ func (p *Provider) abUpdateCategory(args map[string]interface{}) (interface{}, e
 	}
 
 	output, _ := json.MarshalIndent(result, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) abDeleteCategory(args map[string]interface{}) (interface{}, error) {
-	budgetID, err := getStringRequired(args, "budget_id")
+	budgetID, err := tools.GetStringRequired(args, "budget_id")
 	if err != nil {
 		return nil, err
 	}
-	categoryID, err := getStringRequired(args, "category_id")
+	categoryID, err := tools.GetStringRequired(args, "category_id")
 	if err != nil {
 		return nil, err
 	}
-	transferID := getString(args, "transfer_category_id")
+	transferID := tools.GetString(args, "transfer_category_id")
 
 	var result interface{}
 	var err2 error
@@ -1094,11 +1019,11 @@ func (p *Provider) abDeleteCategory(args map[string]interface{}) (interface{}, e
 	}
 
 	output, _ := json.MarshalIndent(result, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) abGetPayees(args map[string]interface{}) (interface{}, error) {
-	budgetID, err := getStringRequired(args, "budget_id")
+	budgetID, err := tools.GetStringRequired(args, "budget_id")
 	if err != nil {
 		return nil, err
 	}
@@ -1109,19 +1034,19 @@ func (p *Provider) abGetPayees(args map[string]interface{}) (interface{}, error)
 	}
 
 	output, _ := json.MarshalIndent(result, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) abGetAccountBalance(args map[string]interface{}) (interface{}, error) {
-	budgetID, err := getStringRequired(args, "budget_id")
+	budgetID, err := tools.GetStringRequired(args, "budget_id")
 	if err != nil {
 		return nil, err
 	}
-	accountID, err := getStringRequired(args, "account_id")
+	accountID, err := tools.GetStringRequired(args, "account_id")
 	if err != nil {
 		return nil, err
 	}
-	cutoffDate := getString(args, "cutoff_date")
+	cutoffDate := tools.GetString(args, "cutoff_date")
 
 	var result interface{}
 	var err2 error
@@ -1135,11 +1060,11 @@ func (p *Provider) abGetAccountBalance(args map[string]interface{}) (interface{}
 	}
 
 	output, _ := json.MarshalIndent(result, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) abSyncBudget(args map[string]interface{}) (interface{}, error) {
-	budgetID, err := getStringRequired(args, "budget_id")
+	budgetID, err := tools.GetStringRequired(args, "budget_id")
 	if err != nil {
 		return nil, err
 	}
@@ -1150,11 +1075,11 @@ func (p *Provider) abSyncBudget(args map[string]interface{}) (interface{}, error
 	}
 
 	output, _ := json.MarshalIndent(result, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) abGetRules(args map[string]interface{}) (interface{}, error) {
-	budgetID, err := getStringRequired(args, "budget_id")
+	budgetID, err := tools.GetStringRequired(args, "budget_id")
 	if err != nil {
 		return nil, err
 	}
@@ -1165,15 +1090,15 @@ func (p *Provider) abGetRules(args map[string]interface{}) (interface{}, error) 
 	}
 
 	output, _ := json.MarshalIndent(result, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) abCreateRule(args map[string]interface{}) (interface{}, error) {
-	budgetID, err := getStringRequired(args, "budget_id")
+	budgetID, err := tools.GetStringRequired(args, "budget_id")
 	if err != nil {
 		return nil, err
 	}
-	rule, err := getStringRequired(args, "rule")
+	rule, err := tools.GetStringRequired(args, "rule")
 	if err != nil {
 		return nil, err
 	}
@@ -1184,15 +1109,15 @@ func (p *Provider) abCreateRule(args map[string]interface{}) (interface{}, error
 	}
 
 	output, _ := json.MarshalIndent(result, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) abUpdateRule(args map[string]interface{}) (interface{}, error) {
-	budgetID, err := getStringRequired(args, "budget_id")
+	budgetID, err := tools.GetStringRequired(args, "budget_id")
 	if err != nil {
 		return nil, err
 	}
-	rule, err := getStringRequired(args, "rule")
+	rule, err := tools.GetStringRequired(args, "rule")
 	if err != nil {
 		return nil, err
 	}
@@ -1203,15 +1128,15 @@ func (p *Provider) abUpdateRule(args map[string]interface{}) (interface{}, error
 	}
 
 	output, _ := json.MarshalIndent(result, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) abDeleteRule(args map[string]interface{}) (interface{}, error) {
-	budgetID, err := getStringRequired(args, "budget_id")
+	budgetID, err := tools.GetStringRequired(args, "budget_id")
 	if err != nil {
 		return nil, err
 	}
-	ruleID, err := getStringRequired(args, "rule_id")
+	ruleID, err := tools.GetStringRequired(args, "rule_id")
 	if err != nil {
 		return nil, err
 	}
@@ -1222,11 +1147,11 @@ func (p *Provider) abDeleteRule(args map[string]interface{}) (interface{}, error
 	}
 
 	output, _ := json.MarshalIndent(result, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) abRunRules(args map[string]interface{}) (interface{}, error) {
-	budgetID, err := getStringRequired(args, "budget_id")
+	budgetID, err := tools.GetStringRequired(args, "budget_id")
 	if err != nil {
 		return nil, err
 	}
@@ -1237,7 +1162,7 @@ func (p *Provider) abRunRules(args map[string]interface{}) (interface{}, error) 
 	}
 
 	output, _ := json.MarshalIndent(result, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 // --- Bank Sync Tool Implementations ---
@@ -1273,19 +1198,19 @@ func (p *Provider) bsListMappings(args map[string]interface{}) (interface{}, err
 	}
 
 	output, _ := json.MarshalIndent(config, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) bsUpdateMapping(args map[string]interface{}) (interface{}, error) {
-	bankAccountID, err := getStringRequired(args, "bank_account_id")
+	bankAccountID, err := tools.GetStringRequired(args, "bank_account_id")
 	if err != nil {
 		return nil, err
 	}
-	actualAccountID, err := getStringRequired(args, "actual_account_id")
+	actualAccountID, err := tools.GetStringRequired(args, "actual_account_id")
 	if err != nil {
 		return nil, err
 	}
-	actualAccountName, err := getStringRequired(args, "actual_account_name")
+	actualAccountName, err := tools.GetStringRequired(args, "actual_account_name")
 	if err != nil {
 		return nil, err
 	}
@@ -1309,9 +1234,7 @@ func (p *Provider) bsUpdateMapping(args map[string]interface{}) (interface{}, er
 
 	found.ActualAccountID = actualAccountID
 	found.ActualAccountName = actualAccountName
-	if enabled, ok := getBool(args, "enabled"); ok {
-		found.Enabled = enabled
-	}
+	found.Enabled = tools.GetBool(args, "enabled", found.Enabled)
 
 	if err := saveBankMappingConfig(config); err != nil {
 		return nil, err
@@ -1322,15 +1245,15 @@ func (p *Provider) bsUpdateMapping(args map[string]interface{}) (interface{}, er
 		"mapping": found,
 	}
 	output, _ := json.MarshalIndent(response, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) bsSyncBankToActual(args map[string]interface{}) (interface{}, error) {
-	bankAccountID, err := getStringRequired(args, "bank_account_id")
+	bankAccountID, err := tools.GetStringRequired(args, "bank_account_id")
 	if err != nil {
 		return nil, err
 	}
-	daysBack := int(getNumber(args, "days_back", 30))
+	daysBack := int(tools.GetInt(args, "days_back", 30))
 
 	config, err := loadBankMappingConfig()
 	if err != nil {
@@ -1377,7 +1300,7 @@ func (p *Provider) bsSyncBankToActual(args map[string]interface{}) (interface{},
 			"date_range":     map[string]string{"from": dateFrom, "to": dateTo},
 		}
 		output, _ := json.MarshalIndent(response, "", "  ")
-		return textContent(string(output)), nil
+		return tools.TextContent(string(output)), nil
 	}
 
 	// Transform to Actual Budget format
@@ -1462,11 +1385,11 @@ func (p *Provider) bsSyncBankToActual(args map[string]interface{}) (interface{},
 		"imported":       len(actualTxns),
 	}
 	output, _ := json.MarshalIndent(response, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) bsSyncAllAccounts(args map[string]interface{}) (interface{}, error) {
-	daysBack := int(getNumber(args, "days_back", 30))
+	daysBack := int(tools.GetInt(args, "days_back", 30))
 
 	config, err := loadBankMappingConfig()
 	if err != nil {
@@ -1485,7 +1408,7 @@ func (p *Provider) bsSyncAllAccounts(args map[string]interface{}) (interface{}, 
 			"message": "No enabled mappings found. Enable at least one mapping using update_mapping.",
 		}
 		output, _ := json.MarshalIndent(response, "", "  ")
-		return textContent(string(output)), nil
+		return tools.TextContent(string(output)), nil
 	}
 
 	var results []map[string]interface{}
@@ -1522,11 +1445,11 @@ func (p *Provider) bsSyncAllAccounts(args map[string]interface{}) (interface{}, 
 		"results":        results,
 	}
 	output, _ := json.MarshalIndent(response, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) bsSetupListActualAccounts(args map[string]interface{}) (interface{}, error) {
-	budgetID := getString(args, "budget_id")
+	budgetID := tools.GetString(args, "budget_id")
 	if budgetID == "" {
 		budgetID = "814f8b26-a186-4962-b2d8-7acab5b25c5b" // Default
 	}
@@ -1542,5 +1465,5 @@ func (p *Provider) bsSetupListActualAccounts(args map[string]interface{}) (inter
 		"accounts":  result,
 	}
 	output, _ := json.MarshalIndent(response, "", "  ")
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }

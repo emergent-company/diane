@@ -146,11 +146,7 @@ func cmdAgent(args []string) {
 }
 
 func cmdAgentList() {
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
-		os.Exit(1)
-	}
+	cfg := mustConfig()
 	pc := cfg.Active()
 	if pc == nil {
 		fmt.Println("No project configured.")
@@ -183,12 +179,7 @@ func cmdAgentList() {
 
 	// Remote agents
 	fmt.Println("🌐 Memory Platform (synced):")
-	bridge, err := memory.New(memory.Config{
-		ServerURL: pc.ServerURL,
-		APIKey:    pc.Token,
-		ProjectID: pc.ProjectID,
-		OrgID:     pc.OrgID,
-	})
+	bridge, err := newBridge(pc)
 	if err != nil {
 		fmt.Printf("   ⚠️  Cannot connect: %v\n", err)
 		return
@@ -219,11 +210,7 @@ func cmdAgentList() {
 }
 
 func cmdAgentDefine(name string) {
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
-		os.Exit(1)
-	}
+	cfg := mustConfig()
 	pc := cfg.Active()
 	if pc == nil {
 		fmt.Fprintf(os.Stderr, "No project configured.\n")
@@ -471,11 +458,7 @@ func cmdAgentDefine(name string) {
 }
 
 func cmdAgentShow(name string) {
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
-		os.Exit(1)
-	}
+	cfg := mustConfig()
 	pc := cfg.Active()
 	if pc == nil || pc.Agents == nil || pc.Agents[name] == nil {
 		fmt.Printf("Agent '%s' not found in local config.\n", name)
@@ -520,11 +503,7 @@ func cmdAgentShow(name string) {
 }
 
 func cmdAgentSync(name string) {
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
-		os.Exit(1)
-	}
+	cfg := mustConfig()
 	pc := cfg.Active()
 	if pc == nil {
 		fmt.Fprintf(os.Stderr, "No project configured.\n")
@@ -537,11 +516,7 @@ func cmdAgentSync(name string) {
 func doAgentSync(name string, cfg *config.Config, pc *config.ProjectConfig) {
 	// First seed built-in agents (ensure immutable agents are up to date)
 	seedCtx, seedCancel := context.WithTimeout(context.Background(), 60*time.Second)
-	seedBridge, err := memory.New(memory.Config{
-		ServerURL: pc.ServerURL,
-		APIKey:    pc.Token,
-		ProjectID: pc.ProjectID,
-	})
+	seedBridge, err := newBridge(pc)
 	if err == nil {
 		fmt.Print("📦 Seeding built-in agents... ")
 		if err := agents.SeedBuiltInAgents(seedCtx, seedBridge.Client()); err != nil {
@@ -557,12 +532,7 @@ func doAgentSync(name string, cfg *config.Config, pc *config.ProjectConfig) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	bridge, err := memory.New(memory.Config{
-		ServerURL: pc.ServerURL,
-		APIKey:    pc.Token,
-		ProjectID: pc.ProjectID,
-		OrgID:     pc.OrgID,
-	})
+	bridge, err := newBridge(pc)
 	if err != nil {
 		fmt.Printf("❌ Connection failed: %v\n", err)
 		return
@@ -621,11 +591,7 @@ func cmdAgentSeed() {
 	fmt.Println("═══ Seeding Built-in Agents ═══")
 	fmt.Println()
 
-	bridge, err := memory.New(memory.Config{
-		ServerURL: pc.ServerURL,
-		APIKey:    pc.Token,
-		ProjectID: pc.ProjectID,
-	})
+	bridge, err := newBridge(pc)
 	if err != nil {
 		fmt.Printf("❌ Connection: %v\n", err)
 		return
@@ -784,11 +750,7 @@ func cmdAgentTrigger(name, prompt string) {
 
 	fmt.Printf("═══ Triggering Agent: %s ═══\n\n", name)
 
-	bridge, err := memory.New(memory.Config{
-		ServerURL: pc.ServerURL,
-		APIKey:    pc.Token,
-		ProjectID: pc.ProjectID,
-	})
+	bridge, err := newBridge(pc)
 	if err != nil {
 		fmt.Printf("❌ Connection: %v\n", err)
 		return
@@ -946,11 +908,7 @@ func cmdAgentTrigger(name, prompt string) {
 }
 
 func cmdAgentDelete(name string) {
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
-		os.Exit(1)
-	}
+	cfg := mustConfig()
 	pc := cfg.Active()
 	if pc == nil || pc.Agents == nil || pc.Agents[name] == nil {
 		fmt.Printf("Agent '%s' not found in local config.\n", name)
@@ -965,12 +923,7 @@ func cmdAgentDelete(name string) {
 	}
 
 	// Delete from MP if synced
-	bridge, err := memory.New(memory.Config{
-		ServerURL: pc.ServerURL,
-		APIKey:    pc.Token,
-		ProjectID: pc.ProjectID,
-		OrgID:     pc.OrgID,
-	})
+	bridge, err := newBridge(pc)
 	if err == nil {
 		existingList, listErr := bridge.ListAgentDefs(context.Background())
 		if listErr == nil && existingList != nil {
@@ -1001,11 +954,7 @@ func cmdAgentDelete(name string) {
 // Orphaned = on MP but not in local config and not a built-in agent.
 // Without --force, runs in dry-run mode (lists only).
 func cmdAgentPrune(force bool) {
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
-		os.Exit(1)
-	}
+	cfg := mustConfig()
 	pc := cfg.Active()
 	if pc == nil {
 		fmt.Println("No project configured.")
@@ -1013,12 +962,7 @@ func cmdAgentPrune(force bool) {
 	}
 
 	ctx := context.Background()
-	bridge, err := memory.New(memory.Config{
-		ServerURL: pc.ServerURL,
-		APIKey:    pc.Token,
-		ProjectID: pc.ProjectID,
-		OrgID:     pc.OrgID,
-	})
+	bridge, err := newBridge(pc)
 	if err != nil {
 		fmt.Printf("❌ Connection: %v\n", err)
 		return
@@ -1347,11 +1291,7 @@ func cmdAgentTrace(runID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	bridge, err := memory.New(memory.Config{
-		ServerURL: pc.ServerURL,
-		APIKey:    pc.Token,
-		ProjectID: pc.ProjectID,
-	})
+	bridge, err := newBridge(pc)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Bridge: %v\n", err)
 		return
@@ -1533,11 +1473,7 @@ func cmdAgentRuns(agentName, sinceStr string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	bridge, err := memory.New(memory.Config{
-		ServerURL: pc.ServerURL,
-		APIKey:    pc.Token,
-		ProjectID: pc.ProjectID,
-	})
+	bridge, err := newBridge(pc)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Bridge: %v\n", err)
 		return
@@ -1735,6 +1671,27 @@ func safeDeref[T int | int64](p *T) T {
 		return 0
 	}
 	return *p
+}
+
+// newBridge creates a memory Bridge from project config.
+func newBridge(pc *config.ProjectConfig) (*memory.Bridge, error) {
+	return memory.New(memory.Config{
+		ServerURL: pc.ServerURL,
+		APIKey:    pc.Token,
+		ProjectID: pc.ProjectID,
+		OrgID:     pc.OrgID,
+	})
+}
+
+// mustConfig loads config and exits on error with "Failed to load config" message.
+// Used by commands that cannot proceed without a valid config.
+func mustConfig() *config.Config {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+	return cfg
 }
 
 // requireMaster checks that the active project is a master node.

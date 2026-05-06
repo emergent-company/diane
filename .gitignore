@@ -1,32 +1,4 @@
-# Build artifacts
-dist/
-*.exe
-/diane
-
-# Go
-*.test
-*.out
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# macOS
-.DS_Store
-
-# Secrets (NEVER commit these)
-*.pem
-*.key
-*-config.json
-secrets/
-.opencode/secrets/
-
-# Logs
-*.log
-logs/
-
-# Local development
-.env
-.env.local
+build/
+DerivedData/
+*.dmg
+*.xcodeproj/

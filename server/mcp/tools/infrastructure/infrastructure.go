@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+
+	tools "github.com/Emergent-Comapny/diane/mcp/tools"
 )
 
 // --- Configuration ---
@@ -106,79 +108,6 @@ func cloudflareAPI(method, endpoint string, body interface{}) (json.RawMessage, 
 	return cfResp.Result, nil
 }
 
-// --- Helper Functions ---
-
-func getString(args map[string]interface{}, key string) string {
-	if val, ok := args[key].(string); ok {
-		return val
-	}
-	return ""
-}
-
-func getStringRequired(args map[string]interface{}, key string) (string, error) {
-	if val, ok := args[key].(string); ok && val != "" {
-		return val, nil
-	}
-	return "", fmt.Errorf("missing required argument: %s", key)
-}
-
-func getInt(args map[string]interface{}, key string, defaultVal int) int {
-	if val, ok := args[key].(float64); ok {
-		return int(val)
-	}
-	return defaultVal
-}
-
-func getBool(args map[string]interface{}, key string) (bool, bool) {
-	if val, ok := args[key].(bool); ok {
-		return val, true
-	}
-	return false, false
-}
-
-func textContent(text string) map[string]interface{} {
-	return map[string]interface{}{
-		"content": []map[string]interface{}{
-			{
-				"type": "text",
-				"text": text,
-			},
-		},
-	}
-}
-
-func objectSchema(properties map[string]interface{}, required []string) map[string]interface{} {
-	schema := map[string]interface{}{
-		"type":       "object",
-		"properties": properties,
-	}
-	if len(required) > 0 {
-		schema["required"] = required
-	}
-	return schema
-}
-
-func stringProperty(description string) map[string]interface{} {
-	return map[string]interface{}{
-		"type":        "string",
-		"description": description,
-	}
-}
-
-func numberProperty(description string) map[string]interface{} {
-	return map[string]interface{}{
-		"type":        "number",
-		"description": description,
-	}
-}
-
-func boolProperty(description string) map[string]interface{} {
-	return map[string]interface{}{
-		"type":        "boolean",
-		"description": description,
-	}
-}
-
 // --- Zone helpers ---
 
 type zone struct {
@@ -209,11 +138,7 @@ func getZoneID(zoneNameOrID string) (string, error) {
 // --- Tool Definition ---
 
 // Tool represents an MCP tool definition
-type Tool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"inputSchema"`
-}
+type Tool = tools.Tool
 
 // Provider implements ToolProvider for infrastructure services
 type Provider struct{}
@@ -240,11 +165,11 @@ func (p *Provider) Tools() []Tool {
 		{
 			Name:        "cloudflare_list_zones",
 			Description: "List all domains (zones) in your Cloudflare account",
-			InputSchema: objectSchema(
+			InputSchema: tools.ObjectSchema(
 				map[string]interface{}{
-					"status":   stringProperty("Filter by status: active, pending, initializing, moved, deleted, deactivated"),
-					"page":     numberProperty("Page number for pagination (default: 1)"),
-					"per_page": numberProperty("Results per page (default: 20, max: 50)"),
+					"status":   tools.StringProperty("Filter by status: active, pending, initializing, moved, deleted, deactivated", false),
+					"page":     tools.IntProperty("Page number for pagination (default: 1)", 0),
+					"per_page": tools.IntProperty("Results per page (default: 20, max: 50)", 0),
 				},
 				nil,
 			),
@@ -252,9 +177,9 @@ func (p *Provider) Tools() []Tool {
 		{
 			Name:        "cloudflare_get_zone",
 			Description: "Get details for a specific domain (zone) by name or ID",
-			InputSchema: objectSchema(
+			InputSchema: tools.ObjectSchema(
 				map[string]interface{}{
-					"identifier": stringProperty("Zone name (e.g., 'example.com') or zone ID"),
+					"identifier": tools.StringProperty("Zone name (e.g., 'example.com') or zone ID", false),
 				},
 				[]string{"identifier"},
 			),
@@ -262,13 +187,13 @@ func (p *Provider) Tools() []Tool {
 		{
 			Name:        "cloudflare_list_dns_records",
 			Description: "List DNS records for a specific domain",
-			InputSchema: objectSchema(
+			InputSchema: tools.ObjectSchema(
 				map[string]interface{}{
-					"zone":     stringProperty("Zone name (e.g., 'example.com') or zone ID"),
-					"type":     stringProperty("Filter by record type: A, AAAA, CNAME, MX, TXT, NS, SRV, CAA, etc."),
-					"name":     stringProperty("Filter by record name"),
-					"page":     numberProperty("Page number for pagination"),
-					"per_page": numberProperty("Results per page (max: 100)"),
+					"zone":     tools.StringProperty("Zone name (e.g., 'example.com') or zone ID", false),
+					"type":     tools.StringProperty("Filter by record type: A, AAAA, CNAME, MX, TXT, NS, SRV, CAA, etc.", false),
+					"name":     tools.StringProperty("Filter by record name", false),
+					"page":     tools.IntProperty("Page number for pagination", 0),
+					"per_page": tools.IntProperty("Results per page (max: 100)", 0),
 				},
 				[]string{"zone"},
 			),
@@ -276,15 +201,15 @@ func (p *Provider) Tools() []Tool {
 		{
 			Name:        "cloudflare_create_dns_record",
 			Description: "Create a new DNS record for a domain. Supports A, AAAA, CNAME, MX, TXT, NS, SRV, CAA, and more.",
-			InputSchema: objectSchema(
+			InputSchema: tools.ObjectSchema(
 				map[string]interface{}{
-					"zone":     stringProperty("Zone name (e.g., 'example.com') or zone ID"),
-					"type":     stringProperty("Record type: A, AAAA, CNAME, MX, TXT, NS, SRV, CAA, etc."),
-					"name":     stringProperty("DNS record name (e.g., 'www', 'mail', '@' for root)"),
-					"content":  stringProperty("Record content/value (IP for A/AAAA, hostname for CNAME/MX, text for TXT)"),
-					"ttl":      numberProperty("Time to live in seconds (1 = automatic, 120-86400, default: 1)"),
-					"priority": numberProperty("Priority for MX/SRV records (required for MX, default: 10)"),
-					"proxied":  boolProperty("Enable Cloudflare proxy (orange cloud) for A/AAAA/CNAME records"),
+					"zone":     tools.StringProperty("Zone name (e.g., 'example.com') or zone ID", false),
+					"type":     tools.StringProperty("Record type: A, AAAA, CNAME, MX, TXT, NS, SRV, CAA, etc.", false),
+					"name":     tools.StringProperty("DNS record name (e.g., 'www', 'mail', '@' for root)", false),
+					"content":  tools.StringProperty("Record content/value (IP for A/AAAA, hostname for CNAME/MX, text for TXT)", false),
+					"ttl":      tools.IntProperty("Time to live in seconds (1 = automatic, 120-86400, default: 1)", 0),
+					"priority": tools.IntProperty("Priority for MX/SRV records (required for MX, default: 10)", 0),
+					"proxied":  tools.BoolProperty("Enable Cloudflare proxy (orange cloud) for A/AAAA/CNAME records", false),
 				},
 				[]string{"zone", "type", "name", "content"},
 			),
@@ -292,16 +217,16 @@ func (p *Provider) Tools() []Tool {
 		{
 			Name:        "cloudflare_update_dns_record",
 			Description: "Update an existing DNS record",
-			InputSchema: objectSchema(
+			InputSchema: tools.ObjectSchema(
 				map[string]interface{}{
-					"zone":      stringProperty("Zone name (e.g., 'example.com') or zone ID"),
-					"record_id": stringProperty("DNS record ID to update"),
-					"type":      stringProperty("Record type: A, AAAA, CNAME, MX, TXT, etc."),
-					"name":      stringProperty("DNS record name"),
-					"content":   stringProperty("Record content/value"),
-					"ttl":       numberProperty("Time to live in seconds (1-86400)"),
-					"priority":  numberProperty("Priority for MX/SRV records"),
-					"proxied":   boolProperty("Enable/disable Cloudflare proxy (orange cloud)"),
+					"zone":      tools.StringProperty("Zone name (e.g., 'example.com') or zone ID", false),
+					"record_id": tools.StringProperty("DNS record ID to update", false),
+					"type":      tools.StringProperty("Record type: A, AAAA, CNAME, MX, TXT, etc.", false),
+					"name":      tools.StringProperty("DNS record name", false),
+					"content":   tools.StringProperty("Record content/value", false),
+					"ttl":       tools.IntProperty("Time to live in seconds (1-86400)", 0),
+					"priority":  tools.IntProperty("Priority for MX/SRV records", 0),
+					"proxied":   tools.BoolProperty("Enable/disable Cloudflare proxy (orange cloud)", false),
 				},
 				[]string{"zone", "record_id"},
 			),
@@ -309,10 +234,10 @@ func (p *Provider) Tools() []Tool {
 		{
 			Name:        "cloudflare_delete_dns_record",
 			Description: "Delete a DNS record. Use with caution!",
-			InputSchema: objectSchema(
+			InputSchema: tools.ObjectSchema(
 				map[string]interface{}{
-					"zone":      stringProperty("Zone name (e.g., 'example.com') or zone ID"),
-					"record_id": stringProperty("DNS record ID to delete"),
+					"zone":      tools.StringProperty("Zone name (e.g., 'example.com') or zone ID", false),
+					"record_id": tools.StringProperty("DNS record ID to delete", false),
 				},
 				[]string{"zone", "record_id"},
 			),
@@ -320,10 +245,10 @@ func (p *Provider) Tools() []Tool {
 		{
 			Name:        "cloudflare_get_dns_record",
 			Description: "Get details of a specific DNS record by ID",
-			InputSchema: objectSchema(
+			InputSchema: tools.ObjectSchema(
 				map[string]interface{}{
-					"zone":      stringProperty("Zone name (e.g., 'example.com') or zone ID"),
-					"record_id": stringProperty("DNS record ID"),
+					"zone":      tools.StringProperty("Zone name (e.g., 'example.com') or zone ID", false),
+					"record_id": tools.StringProperty("DNS record ID", false),
 				},
 				[]string{"zone", "record_id"},
 			),
@@ -369,13 +294,13 @@ func (p *Provider) listZones(args map[string]interface{}) (interface{}, error) {
 	endpoint := "/zones"
 	params := ""
 
-	if status := getString(args, "status"); status != "" {
+	if status := tools.GetString(args, "status"); status != "" {
 		params += fmt.Sprintf("&status=%s", status)
 	}
-	if page := getInt(args, "page", 0); page > 0 {
+	if page := tools.GetInt(args, "page", 0); page > 0 {
 		params += fmt.Sprintf("&page=%d", page)
 	}
-	if perPage := getInt(args, "per_page", 0); perPage > 0 {
+	if perPage := tools.GetInt(args, "per_page", 0); perPage > 0 {
 		params += fmt.Sprintf("&per_page=%d", perPage)
 	}
 
@@ -393,11 +318,11 @@ func (p *Provider) listZones(args map[string]interface{}) (interface{}, error) {
 	json.Unmarshal(result, &zones)
 	output, _ := json.MarshalIndent(zones, "", "  ")
 
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) getZone(args map[string]interface{}) (interface{}, error) {
-	identifier, err := getStringRequired(args, "identifier")
+	identifier, err := tools.GetStringRequired(args, "identifier")
 	if err != nil {
 		return nil, err
 	}
@@ -416,7 +341,7 @@ func (p *Provider) getZone(args map[string]interface{}) (interface{}, error) {
 	for _, z := range zones {
 		if z["name"] == identifier || z["id"] == identifier {
 			output, _ := json.MarshalIndent(z, "", "  ")
-			return textContent(string(output)), nil
+			return tools.TextContent(string(output)), nil
 		}
 	}
 
@@ -424,7 +349,7 @@ func (p *Provider) getZone(args map[string]interface{}) (interface{}, error) {
 }
 
 func (p *Provider) listDNSRecords(args map[string]interface{}) (interface{}, error) {
-	zoneName, err := getStringRequired(args, "zone")
+	zoneName, err := tools.GetStringRequired(args, "zone")
 	if err != nil {
 		return nil, err
 	}
@@ -437,16 +362,16 @@ func (p *Provider) listDNSRecords(args map[string]interface{}) (interface{}, err
 	endpoint := fmt.Sprintf("/zones/%s/dns_records", zoneID)
 	params := ""
 
-	if recordType := getString(args, "type"); recordType != "" {
+	if recordType := tools.GetString(args, "type"); recordType != "" {
 		params += fmt.Sprintf("&type=%s", recordType)
 	}
-	if name := getString(args, "name"); name != "" {
+	if name := tools.GetString(args, "name"); name != "" {
 		params += fmt.Sprintf("&name=%s", name)
 	}
-	if page := getInt(args, "page", 0); page > 0 {
+	if page := tools.GetInt(args, "page", 0); page > 0 {
 		params += fmt.Sprintf("&page=%d", page)
 	}
-	if perPage := getInt(args, "per_page", 0); perPage > 0 {
+	if perPage := tools.GetInt(args, "per_page", 0); perPage > 0 {
 		params += fmt.Sprintf("&per_page=%d", perPage)
 	}
 
@@ -463,23 +388,23 @@ func (p *Provider) listDNSRecords(args map[string]interface{}) (interface{}, err
 	json.Unmarshal(result, &records)
 	output, _ := json.MarshalIndent(records, "", "  ")
 
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) createDNSRecord(args map[string]interface{}) (interface{}, error) {
-	zoneName, err := getStringRequired(args, "zone")
+	zoneName, err := tools.GetStringRequired(args, "zone")
 	if err != nil {
 		return nil, err
 	}
-	recordType, err := getStringRequired(args, "type")
+	recordType, err := tools.GetStringRequired(args, "type")
 	if err != nil {
 		return nil, err
 	}
-	name, err := getStringRequired(args, "name")
+	name, err := tools.GetStringRequired(args, "name")
 	if err != nil {
 		return nil, err
 	}
-	content, err := getStringRequired(args, "content")
+	content, err := tools.GetStringRequired(args, "content")
 	if err != nil {
 		return nil, err
 	}
@@ -493,15 +418,15 @@ func (p *Provider) createDNSRecord(args map[string]interface{}) (interface{}, er
 		"type":    recordType,
 		"name":    name,
 		"content": content,
-		"ttl":     getInt(args, "ttl", 1),
+		"ttl":     tools.GetInt(args, "ttl", 1),
 	}
 
-	if priority := getInt(args, "priority", -1); priority >= 0 {
+	if priority := tools.GetInt(args, "priority", -1); priority >= 0 {
 		recordData["priority"] = priority
 	}
 
-	if proxied, ok := getBool(args, "proxied"); ok {
-		recordData["proxied"] = proxied
+	if _, ok := args["proxied"]; ok {
+		recordData["proxied"] = tools.GetBool(args, "proxied", false)
 	}
 
 	result, err := cloudflareAPI("POST", fmt.Sprintf("/zones/%s/dns_records", zoneID), recordData)
@@ -513,15 +438,15 @@ func (p *Provider) createDNSRecord(args map[string]interface{}) (interface{}, er
 	json.Unmarshal(result, &record)
 	output, _ := json.MarshalIndent(record, "", "  ")
 
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) updateDNSRecord(args map[string]interface{}) (interface{}, error) {
-	zoneName, err := getStringRequired(args, "zone")
+	zoneName, err := tools.GetStringRequired(args, "zone")
 	if err != nil {
 		return nil, err
 	}
-	recordID, err := getStringRequired(args, "record_id")
+	recordID, err := tools.GetStringRequired(args, "record_id")
 	if err != nil {
 		return nil, err
 	}
@@ -551,25 +476,25 @@ func (p *Provider) updateDNSRecord(args map[string]interface{}) (interface{}, er
 	}
 
 	// Override with provided values
-	if recordType := getString(args, "type"); recordType != "" {
+	if recordType := tools.GetString(args, "type"); recordType != "" {
 		recordData["type"] = recordType
 	}
-	if name := getString(args, "name"); name != "" {
+	if name := tools.GetString(args, "name"); name != "" {
 		recordData["name"] = name
 	}
-	if content := getString(args, "content"); content != "" {
+	if content := tools.GetString(args, "content"); content != "" {
 		recordData["content"] = content
 	}
-	if ttl := getInt(args, "ttl", -1); ttl >= 0 {
+	if ttl := tools.GetInt(args, "ttl", -1); ttl >= 0 {
 		recordData["ttl"] = ttl
 	}
-	if priority := getInt(args, "priority", -1); priority >= 0 {
+	if priority := tools.GetInt(args, "priority", -1); priority >= 0 {
 		recordData["priority"] = priority
 	} else if p, ok := currentRecord["priority"]; ok {
 		recordData["priority"] = p
 	}
-	if proxied, ok := getBool(args, "proxied"); ok {
-		recordData["proxied"] = proxied
+	if _, ok := args["proxied"]; ok {
+		recordData["proxied"] = tools.GetBool(args, "proxied", false)
 	} else if p, ok := currentRecord["proxied"]; ok {
 		recordData["proxied"] = p
 	}
@@ -583,15 +508,15 @@ func (p *Provider) updateDNSRecord(args map[string]interface{}) (interface{}, er
 	json.Unmarshal(result, &record)
 	output, _ := json.MarshalIndent(record, "", "  ")
 
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) deleteDNSRecord(args map[string]interface{}) (interface{}, error) {
-	zoneName, err := getStringRequired(args, "zone")
+	zoneName, err := tools.GetStringRequired(args, "zone")
 	if err != nil {
 		return nil, err
 	}
-	recordID, err := getStringRequired(args, "record_id")
+	recordID, err := tools.GetStringRequired(args, "record_id")
 	if err != nil {
 		return nil, err
 	}
@@ -613,15 +538,15 @@ func (p *Provider) deleteDNSRecord(args map[string]interface{}) (interface{}, er
 	}
 	output, _ := json.MarshalIndent(response, "", "  ")
 
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }
 
 func (p *Provider) getDNSRecord(args map[string]interface{}) (interface{}, error) {
-	zoneName, err := getStringRequired(args, "zone")
+	zoneName, err := tools.GetStringRequired(args, "zone")
 	if err != nil {
 		return nil, err
 	}
-	recordID, err := getStringRequired(args, "record_id")
+	recordID, err := tools.GetStringRequired(args, "record_id")
 	if err != nil {
 		return nil, err
 	}
@@ -640,5 +565,5 @@ func (p *Provider) getDNSRecord(args map[string]interface{}) (interface{}, error
 	json.Unmarshal(result, &record)
 	output, _ := json.MarshalIndent(record, "", "  ")
 
-	return textContent(string(output)), nil
+	return tools.TextContent(string(output)), nil
 }

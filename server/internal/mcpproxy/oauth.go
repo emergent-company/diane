@@ -226,11 +226,20 @@ func requestDeviceCode(oauth *OAuthConfig) (*DeviceAuthResponse, error) {
 	return &deviceResp, nil
 }
 
-// pollForToken polls the token endpoint until authorization is granted or expires.
+// pollForToken polls the token endpoint until authorization is granted, expires,
+// or a 5-minute timeout elapses.
 func pollForToken(oauth *OAuthConfig, deviceResp *DeviceAuthResponse) (*TokenResponse, error) {
 	httpClient := &http.Client{}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
 
 	for {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("device authorization timed out after 5 minutes")
+		default:
+		}
+
 		time.Sleep(time.Duration(deviceResp.Interval) * time.Second)
 
 		form := url.Values{}
@@ -531,7 +540,7 @@ const defaultCallbackPort = 28561
 // On macOS, also calls exec.Command("open", url) to open the browser automatically.
 // The redirect_uri is http://localhost:{port}/callback where {port} is
 // 28561 by default, or an available port if 28561 is taken.
-func AuthenticateAuthCodeFlow(serverName string, oauth *OAuthConfig) (string, error) {
+func AuthenticateAuthCodeFlow(serverName string, oauth *OAuthConfig, background bool) (string, error) {
 	if oauth == nil {
 		return "", fmt.Errorf("OAuthConfig is nil")
 	}
@@ -545,9 +554,16 @@ func AuthenticateAuthCodeFlow(serverName string, oauth *OAuthConfig) (string, er
 		return "", fmt.Errorf("OAuthConfig.TokenURL is required")
 	}
 
-	// Step 1: Generate PKCE parameters
+	// Generate PKCE parameters
 	verifier := GenerateCodeVerifier()
 	challenge := GenerateCodeChallenge(verifier)
+
+	// Background mode: skip callback server, go straight to stdin paste
+	if background {
+		fmt.Fprintf(os.Stderr, "\n🔐 Background authorization for %s\n", serverName)
+		fmt.Fprintf(os.Stderr, "   Run this command on a machine with a browser, then paste the redirect URL.\n\n")
+		return authenticateAuthCodeFlowStdin(serverName, oauth, verifier, challenge)
+	}
 
 	// Step 2: Try to start a local HTTP server for the callback
 	codeChan := make(chan string, 1)

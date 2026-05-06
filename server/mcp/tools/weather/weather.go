@@ -78,9 +78,10 @@ func (p *Provider) Tools() []Tool {
 
 // HasTool checks if a tool name belongs to this provider
 func (p *Provider) HasTool(name string) bool {
-	switch name {
-	case "weather_get_weather", "weather_search_location_weather":
-		return true
+	for _, tool := range p.Tools() {
+		if tool.Name == name {
+			return true
+		}
 	}
 	return false
 }

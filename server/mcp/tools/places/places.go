@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	tools "github.com/Emergent-Comapny/diane/mcp/tools"
 )
 
 // --- Configuration ---
@@ -23,79 +25,6 @@ var (
 	config     *placesConfig
 	secretsDir string
 )
-
-// --- Helper Functions ---
-
-func getString(args map[string]interface{}, key string) string {
-	if val, ok := args[key].(string); ok {
-		return val
-	}
-	return ""
-}
-
-func getStringRequired(args map[string]interface{}, key string) (string, error) {
-	if val, ok := args[key].(string); ok && val != "" {
-		return val, nil
-	}
-	return "", fmt.Errorf("missing required argument: %s", key)
-}
-
-func getNumber(args map[string]interface{}, key string, defaultVal float64) float64 {
-	if val, ok := args[key].(float64); ok {
-		return val
-	}
-	return defaultVal
-}
-
-func getBool(args map[string]interface{}, key string) (bool, bool) {
-	if val, ok := args[key].(bool); ok {
-		return val, true
-	}
-	return false, false
-}
-
-func textContent(text string) map[string]interface{} {
-	return map[string]interface{}{
-		"content": []map[string]interface{}{
-			{
-				"type": "text",
-				"text": text,
-			},
-		},
-	}
-}
-
-func objectSchema(properties map[string]interface{}, required []string) map[string]interface{} {
-	schema := map[string]interface{}{
-		"type":       "object",
-		"properties": properties,
-	}
-	if len(required) > 0 {
-		schema["required"] = required
-	}
-	return schema
-}
-
-func stringProperty(description string) map[string]interface{} {
-	return map[string]interface{}{
-		"type":        "string",
-		"description": description,
-	}
-}
-
-func numberProperty(description string) map[string]interface{} {
-	return map[string]interface{}{
-		"type":        "number",
-		"description": description,
-	}
-}
-
-func boolProperty(description string) map[string]interface{} {
-	return map[string]interface{}{
-		"type":        "boolean",
-		"description": description,
-	}
-}
 
 // --- Geocoding Helper ---
 
@@ -145,11 +74,7 @@ func geocodeLocation(location string) (lat, lng float64, err error) {
 // --- Tool Definition ---
 
 // Tool represents an MCP tool definition
-type Tool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"inputSchema"`
-}
+type Tool = tools.Tool
 
 // Provider implements ToolProvider for Google Places tools
 type Provider struct {
@@ -205,15 +130,15 @@ func (p *Provider) Tools() []Tool {
 		{
 			Name:        "google-places_search_places",
 			Description: "Search for places using Google Places API. Find restaurants, cafes, attractions, hotels, shops, and more. Supports text search with optional location bias and filters.",
-			InputSchema: objectSchema(
+			InputSchema: tools.ObjectSchema(
 				map[string]interface{}{
-					"query":       stringProperty("Search query (e.g., 'Italian restaurants', 'coffee shops near me', 'Eiffel Tower')"),
-					"location":    stringProperty("Location to center search (address, city, or coordinates as 'lat,lng')"),
-					"radius":      numberProperty("Search radius in meters (max 50000). Only used with location parameter."),
-					"type":        stringProperty("Place type filter (e.g., 'restaurant', 'cafe', 'hotel', 'tourist_attraction', 'museum'). See Google Places types."),
-					"min_rating":  numberProperty("Minimum rating filter (0-5)"),
-					"open_now":    boolProperty("Filter to only show places currently open"),
-					"max_results": numberProperty("Maximum number of results to return (default: 20, max: 60)"),
+					"query":       tools.StringProperty("Search query (e.g., 'Italian restaurants', 'coffee shops near me', 'Eiffel Tower')", false),
+					"location":    tools.StringProperty("Location to center search (address, city, or coordinates as 'lat,lng')", false),
+					"radius":      tools.IntProperty("Search radius in meters (max 50000). Only used with location parameter.", 0),
+					"type":        tools.StringProperty("Place type filter (e.g., 'restaurant', 'cafe', 'hotel', 'tourist_attraction', 'museum'). See Google Places types.", false),
+					"min_rating":  tools.IntProperty("Minimum rating filter (0-5)", 0),
+					"open_now":    tools.BoolProperty("Filter to only show places currently open", false),
+					"max_results": tools.IntProperty("Maximum number of results to return (default: 20, max: 60)", 0),
 				},
 				[]string{"query"},
 			),
@@ -221,10 +146,10 @@ func (p *Provider) Tools() []Tool {
 		{
 			Name:        "google-places_get_place_details",
 			Description: "Get detailed information about a specific place using its Place ID. Includes photos, reviews, opening hours, contact info, and more.",
-			InputSchema: objectSchema(
+			InputSchema: tools.ObjectSchema(
 				map[string]interface{}{
-					"place_id": stringProperty("Google Places ID (from search_places results)"),
-					"fields":   stringProperty("Comma-separated list of fields to include (e.g., 'name,rating,reviews,opening_hours,photos,website,phone'). Default: all fields."),
+					"place_id": tools.StringProperty("Google Places ID (from search_places results)", false),
+					"fields":   tools.StringProperty("Comma-separated list of fields to include (e.g., 'name,rating,reviews,opening_hours,photos,website,phone'). Default: all fields.", false),
 				},
 				[]string{"place_id"},
 			),
@@ -232,15 +157,15 @@ func (p *Provider) Tools() []Tool {
 		{
 			Name:        "google-places_find_nearby_places",
 			Description: "Find places near a specific location or coordinates. Great for 'what's near me' queries. Returns places within a radius sorted by prominence or distance.",
-			InputSchema: objectSchema(
+			InputSchema: tools.ObjectSchema(
 				map[string]interface{}{
-					"location":    stringProperty("Location as address/city or coordinates 'lat,lng'"),
-					"radius":      numberProperty("Search radius in meters (max 50000)"),
-					"type":        stringProperty("Place type (e.g., 'restaurant', 'cafe', 'atm', 'gas_station', 'pharmacy')"),
-					"keyword":     stringProperty("Keyword to match in place name or type (e.g., 'pizza', 'vegan', 'luxury')"),
-					"min_rating":  numberProperty("Minimum rating filter (0-5)"),
-					"open_now":    boolProperty("Filter to only show places currently open"),
-					"max_results": numberProperty("Maximum number of results (default: 20, max: 60)"),
+					"location":    tools.StringProperty("Location as address/city or coordinates 'lat,lng'", false),
+					"radius":      tools.IntProperty("Search radius in meters (max 50000)", 0),
+					"type":        tools.StringProperty("Place type (e.g., 'restaurant', 'cafe', 'atm', 'gas_station', 'pharmacy')", false),
+					"keyword":     tools.StringProperty("Keyword to match in place name or type (e.g., 'pizza', 'vegan', 'luxury')", false),
+					"min_rating":  tools.IntProperty("Minimum rating filter (0-5)", 0),
+					"open_now":    tools.BoolProperty("Filter to only show places currently open", false),
+					"max_results": tools.IntProperty("Maximum number of results (default: 20, max: 60)", 0),
 				},
 				[]string{"location", "radius"},
 			),
@@ -277,17 +202,17 @@ func (p *Provider) Call(name string, args map[string]interface{}) (interface{}, 
 // --- Tool Implementations ---
 
 func (p *Provider) searchPlaces(args map[string]interface{}) (interface{}, error) {
-	query, err := getStringRequired(args, "query")
+	query, err := tools.GetStringRequired(args, "query")
 	if err != nil {
 		return nil, err
 	}
 
-	location := getString(args, "location")
-	radius := getNumber(args, "radius", 0)
-	placeType := getString(args, "type")
-	minRating := getNumber(args, "min_rating", 0)
-	openNow, _ := getBool(args, "open_now")
-	maxResults := int(getNumber(args, "max_results", 20))
+	location := tools.GetString(args, "location")
+	radius := tools.GetInt(args, "radius", 0)
+	placeType := tools.GetString(args, "type")
+	minRating := tools.GetInt(args, "min_rating", 0)
+	openNow := tools.GetBool(args, "open_now", false)
+	maxResults := tools.GetInt(args, "max_results", 20)
 	if maxResults > 60 {
 		maxResults = 60
 	}
@@ -358,13 +283,13 @@ func (p *Provider) searchPlaces(args map[string]interface{}) (interface{}, error
 	}
 
 	if data.Status == "ZERO_RESULTS" {
-		return textContent("No places found matching your criteria."), nil
+		return tools.TextContent("No places found matching your criteria."), nil
 	}
 
 	// Filter by rating
 	var places []map[string]interface{}
 	for _, place := range data.Results {
-		if minRating > 0 && place.Rating < minRating {
+		if minRating > 0 && place.Rating < float64(minRating) {
 			continue
 		}
 
@@ -404,16 +329,16 @@ func (p *Provider) searchPlaces(args map[string]interface{}) (interface{}, error
 		"places":        places,
 	}, "", "  ")
 
-	return textContent(string(result)), nil
+	return tools.TextContent(string(result)), nil
 }
 
 func (p *Provider) getPlaceDetails(args map[string]interface{}) (interface{}, error) {
-	placeID, err := getStringRequired(args, "place_id")
+	placeID, err := tools.GetStringRequired(args, "place_id")
 	if err != nil {
 		return nil, err
 	}
 
-	fields := getString(args, "fields")
+	fields := tools.GetString(args, "fields")
 	if fields == "" {
 		fields = "name,formatted_address,formatted_phone_number,website,rating,user_ratings_total,reviews,opening_hours,price_level,photos,geometry,types,url"
 	}
@@ -526,16 +451,16 @@ func (p *Provider) getPlaceDetails(args map[string]interface{}) (interface{}, er
 		"photo_references": photoRefs,
 	}, "", "  ")
 
-	return textContent(string(result)), nil
+	return tools.TextContent(string(result)), nil
 }
 
 func (p *Provider) findNearbyPlaces(args map[string]interface{}) (interface{}, error) {
-	location, err := getStringRequired(args, "location")
+	location, err := tools.GetStringRequired(args, "location")
 	if err != nil {
 		return nil, err
 	}
 
-	radius := getNumber(args, "radius", 1000)
+	radius := tools.GetInt(args, "radius", 1000)
 	if radius > 50000 {
 		radius = 50000
 	}
@@ -545,11 +470,11 @@ func (p *Provider) findNearbyPlaces(args map[string]interface{}) (interface{}, e
 		return nil, err
 	}
 
-	placeType := getString(args, "type")
-	keyword := getString(args, "keyword")
-	minRating := getNumber(args, "min_rating", 0)
-	openNow, _ := getBool(args, "open_now")
-	maxResults := int(getNumber(args, "max_results", 20))
+	placeType := tools.GetString(args, "type")
+	keyword := tools.GetString(args, "keyword")
+	minRating := tools.GetInt(args, "min_rating", 0)
+	openNow := tools.GetBool(args, "open_now", false)
+	maxResults := tools.GetInt(args, "max_results", 20)
 	if maxResults > 60 {
 		maxResults = 60
 	}
@@ -607,12 +532,12 @@ func (p *Provider) findNearbyPlaces(args map[string]interface{}) (interface{}, e
 	}
 
 	if data.Status == "ZERO_RESULTS" {
-		return textContent("No places found nearby."), nil
+		return tools.TextContent("No places found nearby."), nil
 	}
 
 	var places []map[string]interface{}
 	for _, place := range data.Results {
-		if minRating > 0 && place.Rating < minRating {
+		if minRating > 0 && place.Rating < float64(minRating) {
 			continue
 		}
 
@@ -653,5 +578,5 @@ func (p *Provider) findNearbyPlaces(args map[string]interface{}) (interface{}, e
 		"places":          places,
 	}, "", "  ")
 
-	return textContent(string(result)), nil
+	return tools.TextContent(string(result)), nil
 }
