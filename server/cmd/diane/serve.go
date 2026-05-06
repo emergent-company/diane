@@ -1,12 +1,16 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 
 	"github.com/Emergent-Comapny/diane/internal/config"
 )
@@ -136,6 +140,11 @@ func cmdServe() {
 		}()
 	}
 
+	// ── Start auto-upgrade loop ──
+	if startAPI {
+		startAutoUpgrade(pc)
+	}
+
 	// ── Wait for first exit ──
 	err = <-errCh
 	if err != nil {
@@ -165,4 +174,96 @@ func resolveInstanceID(pc *config.ProjectConfig, flagInstance string) string {
 func init() {
 	// Make sure serve is listed in the help output
 	_ = fmt.Sprintf("  serve           Start both Discord bot and MCP relay (unified service)")
+}
+
+// startAutoUpgrade launches a background goroutine that periodically checks
+// GitHub for new releases and auto-upgrades the binary if auto_upgrade is enabled.
+func startAutoUpgrade(pc *config.ProjectConfig) {
+	// Check if auto-upgrade is explicitly disabled
+	if pc.AutoUpgrade != nil && !*pc.AutoUpgrade {
+		log.Println("[UPGRADE] Auto-upgrade disabled by config")
+		return
+	}
+
+	// Skip for dev builds
+	if Version == "dev" {
+		log.Println("[UPGRADE] Dev build — skipping auto-upgrade")
+		return
+	}
+
+	// Parse check interval (default 6h)
+	interval := 6 * time.Hour
+	if pc.UpgradeCheckInterval != "" {
+		if d, err := time.ParseDuration(pc.UpgradeCheckInterval); err == nil {
+			interval = d
+		} else {
+			log.Printf("[UPGRADE] Invalid upgrade_check_interval %q: %v — using default 6h", pc.UpgradeCheckInterval, err)
+		}
+	}
+
+	log.Printf("[UPGRADE] Auto-upgrade enabled (check every %v)", interval)
+
+	go func() {
+		// Initial check after a short delay (let services stabilize)
+		time.Sleep(30 * time.Second)
+		runAutoUpgradeCheck()
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			runAutoUpgradeCheck()
+		}
+	}()
+}
+
+// runAutoUpgradeCheck performs one cycle: check for update → download → swap → restart.
+func runAutoUpgradeCheck() {
+	home, _ := os.UserHomeDir()
+	dianeDir := filepath.Join(home, ".diane")
+	binDir := filepath.Join(dianeDir, "bin")
+	symlinkPath := filepath.Join(binDir, "diane")
+
+	tagName := checkForUpdate()
+	if tagName == "" {
+		return // up to date or check failed
+	}
+
+	log.Printf("[UPGRADE] New version %s available — starting auto-upgrade", tagName)
+
+	// Fetch release assets
+	repo := "emergent-company/diane"
+	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
+
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		log.Printf("[UPGRADE] Failed to fetch release: %v", err)
+		return
+	}
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != 200 {
+		log.Printf("[UPGRADE] Failed to fetch release: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	var release struct {
+		TagName string         `json:"tag_name"`
+		Assets  []releaseAsset `json:"assets"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		log.Printf("[UPGRADE] Failed to parse release: %v", err)
+		return
+	}
+
+	autoUpgrade(release.TagName, release.Assets, symlinkPath, binDir)
+
+	// On macOS, write DMG trigger for companion app
+	if runtime.GOOS == "darwin" {
+		writeDMGTrigger(release.TagName)
+	}
 }

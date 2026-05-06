@@ -62,6 +62,27 @@ final class APIServerManager: ObservableObject {
 
         // Fast path: already reachable
         if await dianeAPI.checkReachability() {
+            // Post-upgrade detection: if a backup exists, the app was recently
+            // updated via DMG. Force a serve restart to ensure the binary matches.
+            let upgraded = wasRecentlyUpgraded()
+            if upgraded {
+                AppLogger.shared.info(
+                    "Post-upgrade detected (backup found) — restarting serve",
+                    category: "APIServer"
+                )
+                kickstartLaunchd()
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                if await dianeAPI.checkReachability() {
+                    AppLogger.shared.info("Local Diane API running after post-upgrade kickstart", category: "APIServer")
+                    isRunning = true
+                    lastError = nil
+                    usingLaunchd = true
+                    scheduleHealthCheck(dianeAPI: dianeAPI)
+                    return
+                }
+                AppLogger.shared.warning("Post-upgrade kickstart didn't bring serve back — falling through to version check", category: "APIServer")
+            }
+
             // Check if the running serve version matches the expected (bundled) version.
             // After an upgrade, the companion app is new but diane serve may still be
             // running the old binary — kickstart launchd to restart with the new one.
@@ -135,6 +156,24 @@ final class APIServerManager: ObservableObject {
     deinit {
         healthCheckTimer?.invalidate()
         process?.terminate()
+    }
+
+    // MARK: - Post-Upgrade Detection
+
+    /// Check if the companion app was recently upgraded by looking for a backup.
+    /// The auto-updater creates /Applications/Diane.v{version}.backup.app before replacing.
+    /// If we find one, the app was upgraded and serve should be restarted.
+    private func wasRecentlyUpgraded() -> Bool {
+        let appsDir = "/Applications"
+        guard let contents = try? FileManager.default.contentsOfDirectory(atPath: appsDir) else {
+            return false
+        }
+        for name in contents {
+            if name.hasPrefix("Diane.v") && name.hasSuffix(".backup.app") {
+                return true
+            }
+        }
+        return false
     }
 
     // MARK: - Launchd Strategy

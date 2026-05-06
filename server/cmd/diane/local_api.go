@@ -89,9 +89,15 @@ func (h *apiHandlers) bridge(ctx context.Context) (*memory.Bridge, error) {
 	})
 }
 
-// handleStatus returns a simple health check.
+// handleStatus returns server status including version and config info.
 func (h *apiHandlers) handleStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, map[string]bool{"ok": true})
+	writeJSON(w, map[string]any{
+		"ok":         true,
+		"version":    Version,
+		"started_at": startedAt,
+		"server_url": h.pc.ServerURL,
+		"project_id": h.pc.ProjectID,
+	})
 }
 
 // handleSessions lists sessions, optionally filtered by status.

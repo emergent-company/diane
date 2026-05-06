@@ -55,6 +55,10 @@ type ProjectConfig struct {
 
 	// Agent Definitions (synced to Memory Platform as AgentDefinitions)
 	Agents map[string]*AgentConfig `yaml:"agents,omitempty"`
+
+	// Auto-upgrade settings
+	AutoUpgrade          *bool `yaml:"auto_upgrade,omitempty"`          // default: true if nil
+	UpgradeCheckInterval string `yaml:"upgrade_check_interval,omitempty"` // Go duration, default "6h"
 }
 
 // IsMaster returns true if this node is the master (default, backward-compatible).

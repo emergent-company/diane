@@ -28,6 +28,9 @@ import (
 // Defaults to "dev" for local builds.
 var Version = "dev"
 
+// startedAt records when this binary was started (ISO 8601 / RFC 3339).
+var startedAt = time.Now().UTC().Format(time.RFC3339)
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Println("Usage: diane <command>")
@@ -86,7 +89,7 @@ func main() {
 	case "serve":
 		cmdServe()
 	case "upgrade":
-		cmdUpgrade()
+		cmdUpgrade(os.Args[2:])
 	case "service":
 		cmdService(os.Args[2:])
 	case "schema":
