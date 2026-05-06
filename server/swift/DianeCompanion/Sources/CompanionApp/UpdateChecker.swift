@@ -91,6 +91,14 @@ final class UpdateChecker: ObservableObject {
 
             let installed = currentVersion ?? "0.0.0"
 
+            // Safety check: if version is the project default, version injection is broken.
+            // Prevent auto-update loop — without this, the app compares "1.0" against
+            // "v1.38.x", thinks an update is always available, and re-installs forever.
+            if installed == "1.0" {
+                logError("UpdateChecker: Version reports as '1.0' — version injection appears broken. Use manual download to reinstall.", category: "Updates")
+                return
+            }
+
             if installed == "unknown" || installed == "dev" {
                 updateAvailable = true
                 logInfo("UpdateChecker: Update available (installed version \(installed) is dev/unknown).", category: "Updates")
@@ -136,6 +144,14 @@ final class UpdateChecker: ObservableObject {
 
                 // Only proceed if we have a newer version or no version info
                 let installed = currentVersion ?? "0.0.0"
+                
+                // Safety check: skip DMG trigger update if version injection is broken
+                if installed == "1.0" {
+                    logError("UpdateChecker: DMG trigger skipped — version injection appears broken (reports '1.0').", category: "Updates")
+                    try? FileManager.default.removeItem(atPath: triggerPath)
+                    return
+                }
+                
                 if installed == "unknown" || installed == "dev" || isOlderVersion(installed, than: version) {
                     latestVersion = version
                     updateAvailable = true

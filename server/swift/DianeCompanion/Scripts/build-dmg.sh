@@ -50,6 +50,15 @@ VERSION="${VERSION:-${MARKETING_VERSION}}"
 
 echo "==> Building Diane v${VERSION}"
 
+# Patch version directly into Info.plist after xcodegen generation.
+# xcodegen generates the plist with the default from project.yml (1.0), which
+# would override any xcodebuild MARKETING_VERSION flag — the plist uses a
+# hardcoded value, not a variable reference. Directly setting it here ensures
+# the final binary always has the correct version regardless of xcodebuild flags.
+plutil -replace CFBundleShortVersionString -string "${MARKETING_VERSION}" "$(pwd)/DianeCompanion/Info.plist" 2>/dev/null || true
+plutil -replace CFBundleVersion -string "${CURRENT_PROJECT_VERSION}" "$(pwd)/DianeCompanion/Info.plist" 2>/dev/null || true
+echo "==> Patched Info.plist version to ${MARKETING_VERSION}"
+
 if [ "$NO_SIGN" = true ]; then
     # ── Unsigned build ──
     echo "==> Building unsigned (--no-sign)..."
