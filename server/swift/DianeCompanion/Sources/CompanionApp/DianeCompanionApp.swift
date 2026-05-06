@@ -21,6 +21,25 @@ struct DianeCompanionApp: App {
             options.sendDefaultPii = true
             options.tracesSampleRate = 1.0
         }
+
+        // Attach a persistent device UUID to all Sentry events for session correlation.
+        SentrySDK.configureScope { scope in
+            let deviceIDKey = "com.diane.sentry_device_id"
+            if let stored = UserDefaults.standard.string(forKey: deviceIDKey) {
+                let user = User(userId: stored)
+                user.email = "maciej@kucharz.net"
+                user.username = "mcj"
+                scope.setUser(user)
+            } else {
+                let uuid = UUID().uuidString
+                UserDefaults.standard.set(uuid, forKey: deviceIDKey)
+                let user = User(userId: uuid)
+                user.email = "maciej@kucharz.net"
+                user.username = "mcj"
+                scope.setUser(user)
+            }
+        }
+
         AppLogger.shared.info("Diane Companion app launching", category: "App")
         // Log environment info for crash diagnostics
         let sysInfo = ProcessInfo.processInfo
@@ -41,6 +60,7 @@ struct DianeCompanionApp: App {
         // or full sidebar + content when configured and connected.
         Window("Diane", id: "main") {
             MainWindowView()
+                .sentryView("MainWindow")
                 .environmentObject(appState)
                 .environmentObject(apiClient)
                 .environmentObject(statusMonitor)

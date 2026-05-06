@@ -387,142 +387,129 @@ final class DianeAPIClient: ObservableObject {
 
     // MARK: - HTTP
 
-    /// Capture an HTTP response in Sentry — adds breadcrumb + captures errors.
-    private func captureSentinel(method: String, path: String, status: Int, body: String) {
-        let breadcrumb = Breadcrumb()
-        breadcrumb.category = "http"
-        breadcrumb.type = "http"
-        breadcrumb.data = [
-            "method": method,
-            "url": "\(baseURL)\(path)",
-            "status_code": status,
-            "response_body": String(body.prefix(500)),
-        ]
-        SentrySDK.addBreadcrumb(crumb: breadcrumb)
+    /// Shared HTTP performer: builds request, adds Sentry span + breadcrumb, captures errors.
+    private func perform(method: String, path: String, body: Data? = nil, timeout: TimeInterval = 10) async throws -> Data {
+        guard let url = URL(string: "\\(baseURL)\\(path)") else {
+            throw DianeAPIError.invalidURL(path)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.timeoutInterval = timeout
+        if let b = body {
+            request.httpBody = b
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
 
-        if status >= 400 {
-            let error = NSError(
+        let span = SentrySDK.span?.startChild(operation: "http.client", description: "\\(method) \\(path)")
+        span?.setData(value: "\\(baseURL)\\(path)", key: "url")
+
+        let startTime = Date()
+        do {
+            let (data, response) = try await session.data(for: request)
+            let durationMs = Int(Date().timeIntervalSince(startTime) * 1000)
+
+            guard let http = response as? HTTPURLResponse else {
+                span?.setData(value: "no_http_response", key: "error")
+                span?.finish(status: .internalError)
+                throw DianeAPIError.network("No HTTP response")
+            }
+
+            let bodyStr = String(data: data, encoding: .utf8) ?? ""
+            let ok = (200...299).contains(http.statusCode)
+
+            // Always add breadcrumb — success or failure
+            let crumb = Breadcrumb()
+            crumb.category = "http"
+            crumb.type = "http"
+            crumb.data = [
+                "method": method,
+                "url": "\\(baseURL)\\(path)",
+                "status_code": http.statusCode,
+                "duration_ms": durationMs,
+                "response_size": data.count,
+            ]
+
+            if ok {
+                crumb.message = "\\(method) \\(path) \u{2192} \\(http.statusCode)"
+                SentrySDK.addBreadcrumb(crumb)
+                span?.setData(value: http.statusCode, key: "status_code")
+                span?.setData(value: durationMs, key: "duration_ms")
+                span?.finish(status: .ok)
+                return data
+            } else {
+                crumb.data?["response_body"] = String(bodyStr.prefix(500))
+                SentrySDK.addBreadcrumb(crumb)
+
+                let error = NSError(
+                    domain: "DianeAPIError",
+                    code: http.statusCode,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "HTTP \\(http.statusCode) \\(method) \\(path)",
+                        "method": method,
+                        "path": path,
+                        "response": String(bodyStr.prefix(2000)),
+                    ]
+                )
+                SentrySDK.capture(error: error)
+
+                span?.setData(value: http.statusCode, key: "status_code")
+                span?.setData(value: durationMs, key: "duration_ms")
+                span?.setData(value: String(bodyStr.prefix(500)), key: "error_body")
+                span?.finish(status: http.statusCode == 404 ? .notFound : .internalError)
+                throw DianeAPIError.httpError(http.statusCode, bodyStr)
+            }
+        } catch let e as DianeAPIError {
+            // Already handled above — just rethrow
+            throw e
+        } catch {
+            // Network-level errors (timeout, DNS, connection refused)
+            let crumb = Breadcrumb()
+            crumb.category = "http"
+            crumb.type = "http"
+            crumb.message = "\\(method) \\(path) \u{2192} network error: \\(error.localizedDescription)"
+            crumb.data = [
+                "method": method,
+                "url": "\\(baseURL)\\(path)",
+                "error": error.localizedDescription,
+            ]
+            SentrySDK.addBreadcrumb(crumb)
+
+            let nsError = NSError(
                 domain: "DianeAPIError",
-                code: status,
+                code: -1,
                 userInfo: [
-                    NSLocalizedDescriptionKey: "HTTP \(status) \(method) \(path)",
+                    NSLocalizedDescriptionKey: "Network error: \\(error.localizedDescription) — \\(method) \\(path)",
                     "method": method,
                     "path": path,
-                    "response": String(body.prefix(2000)),
+                    NSUnderlyingErrorKey: error,
                 ]
             )
-            SentrySDK.capture(error: error)
+            SentrySDK.capture(error: nsError)
+
+            span?.setData(value: error.localizedDescription, key: "error")
+            span?.finish(status: .internalError)
+            throw DianeAPIError.network(error.localizedDescription)
         }
     }
 
     private func get(_ path: String) async throws -> Data {
-        guard let url = URL(string: "\(baseURL)\(path)") else {
-            throw DianeAPIError.invalidURL(path)
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.timeoutInterval = 10
-
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw DianeAPIError.network("No HTTP response")
-        }
-        guard (200...299).contains(http.statusCode) else {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            captureSentinel(method: "GET", path: path, status: http.statusCode, body: body)
-            throw DianeAPIError.httpError(http.statusCode, body)
-        }
-        return data
+        try await perform(method: "GET", path: path)
     }
 
     private func post(_ path: String, body: Data?, timeout: TimeInterval? = nil) async throws -> Data {
-        guard let url = URL(string: "\(baseURL)\(path)") else {
-            throw DianeAPIError.invalidURL(path)
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = timeout ?? 10
-        if let b = body {
-            request.httpBody = b
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        }
-
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw DianeAPIError.network("No HTTP response")
-        }
-        guard (200...299).contains(http.statusCode) else {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            captureSentinel(method: "POST", path: path, status: http.statusCode, body: body)
-            throw DianeAPIError.httpError(http.statusCode, body)
-        }
-        return data
+        try await perform(method: "POST", path: path, body: body, timeout: timeout ?? 10)
     }
 
     private func delete(_ path: String) async throws -> Data {
-        guard let url = URL(string: "\(baseURL)\(path)") else {
-            throw DianeAPIError.invalidURL(path)
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "DELETE"
-        request.timeoutInterval = 10
-
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw DianeAPIError.network("No HTTP response")
-        }
-        guard (200...299).contains(http.statusCode) else {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            captureSentinel(method: "DELETE", path: path, status: http.statusCode, body: body)
-            throw DianeAPIError.httpError(http.statusCode, body)
-        }
-        return data
+        try await perform(method: "DELETE", path: path)
     }
 
     private func put(_ path: String, body: Data?, timeout: TimeInterval? = nil) async throws -> Data {
-        guard let url = URL(string: "\(baseURL)\(path)") else {
-            throw DianeAPIError.invalidURL(path)
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.timeoutInterval = timeout ?? 10
-        if let b = body {
-            request.httpBody = b
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        }
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw DianeAPIError.network("No HTTP response")
-        }
-        guard (200...299).contains(http.statusCode) else {
-            let bodyStr = String(data: data, encoding: .utf8) ?? ""
-            captureSentinel(method: "PUT", path: path, status: http.statusCode, body: bodyStr)
-            throw DianeAPIError.httpError(http.statusCode, bodyStr)
-        }
-        return data
+        try await perform(method: "PUT", path: path, body: body, timeout: timeout ?? 10)
     }
 
     private func patch(_ path: String, body: Data?, timeout: TimeInterval? = nil) async throws -> Data {
-        guard let url = URL(string: "\(baseURL)\(path)") else {
-            throw DianeAPIError.invalidURL(path)
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "PATCH"
-        request.timeoutInterval = timeout ?? 10
-        if let b = body {
-            request.httpBody = b
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        }
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw DianeAPIError.network("No HTTP response")
-        }
-        guard (200...299).contains(http.statusCode) else {
-            let bodyStr = String(data: data, encoding: .utf8) ?? ""
-            captureSentinel(method: "PATCH", path: path, status: http.statusCode, body: bodyStr)
-            throw DianeAPIError.httpError(http.statusCode, bodyStr)
-        }
-        return data
+        try await perform(method: "PATCH", path: path, body: body, timeout: timeout ?? 10)
     }
 }
 

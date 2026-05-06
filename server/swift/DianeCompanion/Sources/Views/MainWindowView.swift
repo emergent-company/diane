@@ -14,9 +14,11 @@ struct MainWindowView: View {
                 mainContent
             } else {
                 notConnectedView
+                    .sentryView("NotConnected")
             }
         } else {
             OnboardingView()
+                .sentryView("Onboarding")
                 .environmentObject(statusMonitor)
                 .environmentObject(serverConfig)
                 .environmentObject(apiClient)
@@ -31,6 +33,7 @@ struct MainWindowView: View {
                 .navigationSplitViewColumnWidth(min: 160, ideal: 180, max: 220)
         } detail: {
             contentView
+                .sentryView("Content:\(appState.selectedSidebarItem?.rawValue ?? "none")")
         }
     }
 
