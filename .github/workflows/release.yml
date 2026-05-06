@@ -114,12 +114,15 @@ jobs:
           security list-keychain -d user -s "$KEYCHAIN_PATH"
 
       - name: Build and package (signed if cert available)
+        id: build_package
         run: |
+          set -o pipefail
+          mkdir -p build
           chmod +x Scripts/build-dmg.sh
           if [ -n "$DEVELOPMENT_TEAM" ]; then
-            ./Scripts/build-dmg.sh --notarize
+            ./Scripts/build-dmg.sh --notarize 2>&1 | tee build/build-log.txt
           else
-            ./Scripts/build-dmg.sh --no-sign
+            ./Scripts/build-dmg.sh --no-sign 2>&1 | tee build/build-log.txt
           fi
         working-directory: server/swift/DianeCompanion
         env:
@@ -134,6 +137,13 @@ jobs:
         with:
           name: diane-companion-dmg
           path: server/swift/DianeCompanion/build/Diane-*.dmg
+
+      - name: Upload build log on failure
+        if: failure() && steps.build_package.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: companion-build-log
+          path: server/swift/DianeCompanion/build/build-log.txt
 
   release:
     name: Release
