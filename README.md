@@ -155,10 +155,11 @@ make install    # install to ~/.diane/bin/
 | `make test-quick TestName` | Run tests matching a pattern |
 | `make build` | Build the diane binary |
 | `make install` | Copy binary to `~/.diane/bin/` |
+| `make mod-tidy` | Run `go mod tidy` — clean up dependencies |
 | `make vet` | Run `go vet` — catches nil ptrs, unreachable code |
 | `make lint` | Run `golangci-lint` — full static analysis |
 | `make lint-fix` | Auto-fix common lint issues |
-| `make check` | Full gate: vet → lint → test |
+| `make check` | Full gate: mod-tidy → vet → lint → test |
 
 ### Pre-commit Hook
 

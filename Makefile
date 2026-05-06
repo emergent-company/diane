@@ -6,7 +6,7 @@ CMD_DIR    := $(SERVER_DIR)/cmd/diane
 GO         := go
 GOFLAGS    :=
 
-.PHONY: all setup test test-all test-quick build install lint vet check clean
+.PHONY: all setup test test-all test-quick build install lint vet mod-tidy check clean
 
 all: check
 
@@ -71,7 +71,11 @@ lint-fix:
 
 # ── Full Gate ──────────────────────────────────────────────────────────────
 
-check: vet lint test
+mod-tidy:
+	cd $(SERVER_DIR) && $(GO) mod tidy
+	@echo "✅ go mod tidy done"
+
+check: mod-tidy vet lint test
 	@echo ""
 	@echo "✅ All checks passed!"
 
