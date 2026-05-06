@@ -6,6 +6,7 @@ struct SettingsView: View {
     @EnvironmentObject var statusMonitor: StatusMonitor
     @EnvironmentObject var serverConfig: ServerConfiguration
     @EnvironmentObject var apiClient: EmergentAPIClient
+    @EnvironmentObject var selfTestManager: SelfTestManager
 
     @State private var urlDraft: String = ""
     @State private var apiKeyDraft: String = ""
@@ -147,6 +148,87 @@ struct SettingsView: View {
                             applyLaunchAtLogin(newValue)
                         }
                     Text("Automatically start Diane when you log in.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(4)
+            }
+
+            // Self-Test
+            GroupBox("Self-Test") {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Button {
+                            Task { await selfTestManager.run() }
+                        } label: {
+                            HStack(spacing: 6) {
+                                if case .running = selfTestManager.state {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                } else {
+                                    Image(systemName: "stethoscope")
+                                }
+                                Text("Run Self-Test")
+                            }
+                        }
+                        .disabled(selfTestManager.state == .running)
+
+                        Spacer()
+
+                        switch selfTestManager.state {
+                        case .idle:
+                            EmptyView()
+                        case .running:
+                            Text("Running…")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        case .completed(let report):
+                            HStack(spacing: 4) {
+                                Image(systemName: report.failed > 0 ? "xmark.circle.fill" : "checkmark.circle.fill")
+                                    .foregroundStyle(report.failed > 0 ? .red : .green)
+                                Text("\(report.passed)/\(report.total) passed")
+                                    .font(.caption)
+                            }
+                        case .failed(let error):
+                            Label(error, systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                                .lineLimit(1)
+                        }
+                    }
+
+                    if case .completed(let report) = selfTestManager.state {
+                        VStack(alignment: .leading, spacing: 3) {
+                            ForEach(report.checks) { check in
+                                HStack(spacing: 4) {
+                                    switch check.status {
+                                    case "pass":
+                                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                                    case "fail":
+                                        Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
+                                    case "warn":
+                                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                                    case "skip":
+                                        Image(systemName: "minus.circle.fill").foregroundStyle(.secondary)
+                                    default:
+                                        Image(systemName: "questionmark.circle").foregroundStyle(.secondary)
+                                    }
+                                    Text(check.name)
+                                        .font(.caption)
+                                        .fontWeight(check.isFailed ? .semibold : .regular)
+                                    if let detail = check.detail {
+                                        Text(detail)
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.leading, 4)
+                    }
+
+                    Text("Runs diane doctor --json to check config, SDK, session CRUD, agents, and more.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
