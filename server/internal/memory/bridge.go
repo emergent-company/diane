@@ -532,6 +532,96 @@ func boolPtr(v bool) *bool {
 }
 
 // ============================================================================
+// Discord Channel Map
+// ============================================================================
+
+// DiscordChannelMapType is the graph object type name for Discord channel↔session mappings.
+const DiscordChannelMapType = "DiscordChannelMap"
+
+// DiscordChannelMap maps a Discord channel/thread to a Memory Platform session.
+type DiscordChannelMap struct {
+	ChannelID string
+	SessionID string
+	AgentType string
+	EntityID  string
+}
+
+// UpsertDiscordChannelMap creates or updates a Discord channel→session mapping.
+// Keyed by channel_id for dedup.
+func (b *Bridge) UpsertDiscordChannelMap(ctx context.Context, channelID, sessionID, agentType string) (*DiscordChannelMap, error) {
+	props := map[string]any{
+		"channel_id": channelID,
+		"session_id": sessionID,
+		"agent_type": agentType,
+	}
+
+	existing, err := b.client.Graph.ListObjects(ctx, &graph.ListObjectsOptions{
+		Type: DiscordChannelMapType,
+		Key:  channelID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list discord channel maps: %w", err)
+	}
+
+	if len(existing.Items) > 0 {
+		entityID := existing.Items[0].EntityID
+		_, err = b.client.Graph.UpdateObject(ctx, entityID, &graph.UpdateObjectRequest{
+			Properties: props,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("update discord channel map %s: %w", channelID, err)
+		}
+		return &DiscordChannelMap{
+			ChannelID: channelID,
+			SessionID: sessionID,
+			AgentType: agentType,
+			EntityID:  entityID,
+		}, nil
+	}
+
+	key := channelID
+	obj, err := b.client.Graph.CreateObject(ctx, &graph.CreateObjectRequest{
+		Type:       DiscordChannelMapType,
+		Key:        &key,
+		Properties: props,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create discord channel map %s: %w", channelID, err)
+	}
+	return &DiscordChannelMap{
+		ChannelID: channelID,
+		SessionID: sessionID,
+		AgentType: agentType,
+		EntityID:  obj.EntityID,
+	}, nil
+}
+
+// ListDiscordChannelMaps returns all Discord channel→session mappings.
+func (b *Bridge) ListDiscordChannelMaps(ctx context.Context) ([]DiscordChannelMap, error) {
+	resp, err := b.client.Graph.ListObjects(ctx, &graph.ListObjectsOptions{
+		Type: DiscordChannelMapType,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list discord channel maps: %w", err)
+	}
+
+	maps := make([]DiscordChannelMap, 0, len(resp.Items))
+	for _, obj := range resp.Items {
+		props := obj.Properties
+		if props == nil {
+			continue
+		}
+		maps = append(maps, DiscordChannelMap{
+			ChannelID: safePropStr(props, "channel_id"),
+			SessionID: safePropStr(props, "session_id"),
+			AgentType: safePropStr(props, "agent_type"),
+			EntityID:  obj.EntityID,
+		})
+	}
+	return maps, nil
+}
+
+// ============================================================================
 // Graph Object Stats
 // ============================================================================
 

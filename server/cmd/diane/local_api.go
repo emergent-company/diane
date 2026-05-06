@@ -43,6 +43,7 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	mux.HandleFunc("/api/stats/objects", api.handleGraphObjectStats)
 	mux.HandleFunc("/api/sessions", api.handleSessions)
 	mux.HandleFunc("/api/sessions/", api.handleSessionMessages)
+	mux.HandleFunc("/api/chat/send", api.handleChatSend)
 	mux.HandleFunc("/api/mcp-servers", api.handleMCPServers)
 	mux.HandleFunc("/api/nodes", api.handleNodes)
 
@@ -177,6 +178,273 @@ func (h *apiHandlers) handleSessionMessages(w http.ResponseWriter, r *http.Reque
 	}
 
 	writeJSON(w, map[string]any{"items": items})
+}
+
+// ─── Chat Send Handler ────────────────────────────────────
+
+// POST /api/chat/send — send a message to a session and run it through the agent pipeline.
+// If session_id is empty, creates a new session.
+func (h *apiHandlers) handleChatSend(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var req struct {
+		SessionID string `json:"session_id,omitempty"`
+		Content   string `json:"content"`
+		AgentName string `json:"agent_name,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if req.Content == "" {
+		jsonError(w, http.StatusBadRequest, "content is required")
+		return
+	}
+	if req.AgentName == "" {
+		req.AgentName = "diane-default"
+	}
+
+	ctx := context.Background()
+
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "bridge: "+err.Error())
+		return
+	}
+	defer bridge.Close()
+
+	// 1. Create or reuse session
+	sessionID := req.SessionID
+	if sessionID == "" {
+		session, err := bridge.CreateSession(ctx, "Chat")
+		if err != nil {
+			jsonError(w, http.StatusInternalServerError, "create session: "+err.Error())
+			return
+		}
+		sessionID = session.ID
+	}
+
+	// 2. Append user message to session
+	_, err = bridge.AppendMessage(ctx, sessionID, "user", req.Content, 0)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "append message: "+err.Error())
+		return
+	}
+
+	// 3. Find agent definition by name
+	defs, err := bridge.ListAgentDefs(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "list agent defs: "+err.Error())
+		return
+	}
+	var defID string
+	if defs != nil {
+		for _, d := range defs.Data {
+			if d.Name == req.AgentName {
+				defID = d.ID
+				break
+			}
+		}
+	}
+	if defID == "" {
+		jsonError(w, http.StatusNotFound, "agent definition "+req.AgentName+" not found")
+		return
+	}
+
+	// 4. Create runtime agent
+	runtimeName := fmt.Sprintf("chat-%s-%d", req.AgentName, time.Now().UnixMilli())
+	agent, err := bridge.CreateRuntimeAgent(ctx, runtimeName, defID)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "create runtime agent: "+err.Error())
+		return
+	}
+	agentID := agent.Data.ID
+
+	// 5. Ensure cleanup
+	defer func() {
+		if delErr := bridge.Client().Agents.Delete(ctx, agentID); delErr != nil {
+			log.Printf("[CHAT] Failed to clean up runtime agent %s: %v", agentID, delErr)
+		} else {
+			log.Printf("[CHAT] Cleaned up runtime agent %s", agentID)
+		}
+	}()
+
+	// 6. Trigger agent with user's message as prompt
+	triggerResp, err := bridge.TriggerAgentWithInput(ctx, agentID, req.Content, sessionID)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "trigger agent: "+err.Error())
+		return
+	}
+	if !triggerResp.Success || triggerResp.RunID == nil {
+		errMsg := "unknown error"
+		if triggerResp.Error != nil {
+			errMsg = *triggerResp.Error
+		}
+		jsonError(w, http.StatusInternalServerError, "trigger failed: "+errMsg)
+		return
+	}
+	runID := *triggerResp.RunID
+	log.Printf("[CHAT] Agent triggered — run_id=%s session_id=%s", runID[:12], sessionID[:12])
+
+	// 7. Poll for completion
+	pollStart := time.Now()
+	pollInterval := 2 * time.Second
+	pollTimeout := 120 * time.Second
+	var runStatus string
+
+pollLoop:
+	for {
+		select {
+		case <-ctx.Done():
+			jsonError(w, http.StatusInternalServerError, "cancelled")
+			return
+		case <-time.After(pollInterval):
+		}
+
+		if time.Since(pollStart) >= pollTimeout {
+			jsonError(w, http.StatusGatewayTimeout, fmt.Sprintf("run %s: timeout after %v (last status: %s)", runID[:12], pollTimeout, runStatus))
+			return
+		}
+
+		runResp, pollErr := bridge.GetProjectRun(ctx, runID)
+		if pollErr != nil {
+			log.Printf("[CHAT] Poll error: %v", pollErr)
+			continue
+		}
+		runStatus = runResp.Data.Status
+		log.Printf("[CHAT] Poll — run=%s status=%s elapsed=%v", runID[:12], runStatus, time.Since(pollStart).Round(time.Second))
+
+		switch runStatus {
+		case "completed", "success", "completed_with_warnings":
+			break pollLoop
+		case "paused":
+			log.Printf("[CHAT] Agent paused (asked a question) — continuing poll")
+			continue
+		case "error", "failed", "cancelled", "timeout":
+			errMsg := ""
+			if runResp.Data.ErrorMessage != nil {
+				errMsg = *runResp.Data.ErrorMessage
+			}
+			jsonError(w, http.StatusInternalServerError, fmt.Sprintf("run %s: status=%s error=%s", runID[:12], runStatus, errMsg))
+			return
+		}
+	}
+
+	duration := time.Since(pollStart).Round(time.Millisecond)
+	log.Printf("[CHAT] Run completed — run=%s session=%s duration=%v", runID[:12], sessionID[:12], duration)
+
+	// 8. Fetch run messages and convert to flat format
+	msgs, err := bridge.GetRunMessages(ctx, runID)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "get run messages: "+err.Error())
+		return
+	}
+
+	// 9. Convert SDK messages to flat messageJSON format
+	type toolCallJSON struct {
+		ID        string `json:"id"`
+		Name      string `json:"name"`
+		Arguments string `json:"arguments,omitempty"`
+	}
+	type messageJSON struct {
+		ID               string         `json:"id"`
+		Role             string         `json:"role"`
+		Content          string         `json:"content"`
+		SequenceNumber   int            `json:"sequence_number,omitempty"`
+		TokenCount       int            `json:"token_count,omitempty"`
+		ToolCalls        []toolCallJSON `json:"tool_calls,omitempty"`
+		ReasoningContent string         `json:"reasoning_content,omitempty"`
+		CreatedAt        string         `json:"created_at,omitempty"`
+	}
+
+	messages := make([]messageJSON, 0, len(msgs.Data))
+	var assistantText string
+
+	for i, msg := range msgs.Data {
+		// Normalize role: MP returns the agent name as the role; we want "assistant"
+		role := msg.Role
+		switch role {
+		case "user", "tool", "system":
+			// keep as-is
+		default:
+			role = "assistant"
+		}
+
+		flatMsg := messageJSON{
+			Role:           role,
+			SequenceNumber: i,
+			CreatedAt:      time.Now().UTC().Format(time.RFC3339),
+		}
+
+		// Extract content from the SDK's Content map.
+		if val, ok := msg.Content["reasoning"]; ok {
+			if s := extractContentValue(val); s != "" {
+				flatMsg.ReasoningContent = s
+			}
+		}
+		if val, ok := msg.Content["text"]; ok {
+			if s := extractContentValue(val); s != "" {
+				flatMsg.Content = s
+				if role != "user" && role != "tool" {
+					assistantText = s
+				}
+			}
+		}
+		// If no text content but there's reasoning, show reasoning as content
+		if flatMsg.Content == "" && flatMsg.ReasoningContent != "" {
+			flatMsg.Content = flatMsg.ReasoningContent
+			flatMsg.ReasoningContent = ""
+		}
+
+		messages = append(messages, flatMsg)
+	}
+
+	// 10. Store assistant response in session for cross-run context
+	if assistantText != "" {
+		go func() {
+			storeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			bridge.AppendMessage(storeCtx, sessionID, "assistant", assistantText, 0)
+		}()
+	}
+
+	// 11. Return response
+	writeJSON(w, map[string]any{
+		"session_id": sessionID,
+		"run_id":     runID,
+		"messages":   messages,
+		"success":    true,
+	})
+}
+
+// extractContentValue extracts human-readable text from a value in an SDK
+// Content map. The "text" key can be stored as string, []string, or []any.
+func extractContentValue(val any) string {
+	switch v := val.(type) {
+	case string:
+		return v
+	case []string:
+		if len(v) == 0 {
+			return ""
+		}
+		return strings.Join(v, "\n")
+	case []any:
+		var parts []string
+		for _, item := range v {
+			if s, ok := item.(string); ok && s != "" {
+				parts = append(parts, s)
+			}
+		}
+		return strings.Join(parts, "\n")
+	default:
+		if b, err := json.Marshal(val); err == nil && len(b) > 2 {
+			return string(b)
+		}
+		return ""
+	}
 }
 
 // handleMCPServers returns the list of configured MCP servers.
@@ -466,21 +734,145 @@ func jsonError(w http.ResponseWriter, status int, msg string) {
 	json.NewEncoder(w).Encode(map[string]string{"error": msg}) //nolint:errcheck
 }
 
-// GET /api/stats/providers — provider/model usage summary.
+// GET /api/stats/providers — provider/model usage summary from recent runs.
 func (h *apiHandlers) handleProviderStats(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+
+	hours, _ := strconv.Atoi(r.URL.Query().Get("hours"))
+	if hours <= 0 || hours > 720 {
+		hours = 24
+	}
+
+	ctx := context.Background()
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("bridge: %v", err))
+		return
+	}
+	defer bridge.Close()
+
+	client := bridge.Client()
+	since := time.Now().Add(-time.Duration(hours) * time.Hour)
+
+	type providerStat struct {
+		totalRuns       int
+		successRuns     int
+		errorRuns       int
+		totalInput      int64
+		totalOutput     int64
+		totalCostUSD    float64
+	}
+
+	allStats := make(map[string]*providerStat)
+	var totals struct {
+		runs    int
+		success int
+		errors  int
+		input   int64
+		output  int64
+		costUSD float64
+	}
+
+	// Paginate through recent runs
+	offset := 0
+	const pageSize = 200
+	for {
+		runsResp, err := client.Agents.ListProjectRuns(ctx, h.pc.ProjectID, &sdkagentrun.ListRunsOptions{
+			Limit:  pageSize,
+			Offset: offset,
+		})
+		if err != nil {
+			jsonError(w, http.StatusInternalServerError, fmt.Sprintf("list runs: %v", err))
+			return
+		}
+		if runsResp == nil || len(runsResp.Data.Items) == 0 {
+			break
+		}
+
+		for _, run := range runsResp.Data.Items {
+			if run.StartedAt.Before(since) {
+				// Runs are ordered newest-first; once we hit ones before the window, stop
+				continue
+			}
+
+			provider := "<unknown>"
+			if run.Provider != nil && *run.Provider != "" {
+				provider = *run.Provider
+			}
+			model := "<unknown>"
+			if run.Model != nil && *run.Model != "" {
+				model = *run.Model
+			}
+
+			key := provider + "/" + model
+			stat, ok := allStats[key]
+			if !ok {
+				stat = &providerStat{}
+				allStats[key] = stat
+			}
+			stat.totalRuns++
+			totals.runs++
+
+			switch run.Status {
+			case "success", "completed":
+				stat.successRuns++
+				totals.success++
+			default:
+				stat.errorRuns++
+				totals.errors++
+			}
+		}
+
+		if len(runsResp.Data.Items) < pageSize {
+			break
+		}
+		offset += pageSize
+	}
+
+	// Build response
+	type providerJSON struct {
+		ProviderName      string  `json:"provider_name"`
+		ModelName         string  `json:"model_name"`
+		TotalRuns         int     `json:"total_runs"`
+		SuccessRuns       int     `json:"success_runs"`
+		ErrorRuns         int     `json:"error_runs"`
+		TotalInputTokens  int64   `json:"total_input_tokens"`
+		TotalOutputTokens int64   `json:"total_output_tokens"`
+		TotalCostUSD      float64 `json:"total_cost_usd"`
+	}
+
+	providers := make([]providerJSON, 0, len(allStats))
+	for key, stat := range allStats {
+		parts := strings.SplitN(key, "/", 2)
+		providers = append(providers, providerJSON{
+			ProviderName:      parts[0],
+			ModelName:         parts[1],
+			TotalRuns:         stat.totalRuns,
+			SuccessRuns:       stat.successRuns,
+			ErrorRuns:         stat.errorRuns,
+			TotalInputTokens:  stat.totalInput,
+			TotalOutputTokens: stat.totalOutput,
+			TotalCostUSD:      stat.totalCostUSD,
+		})
+	}
+
+	// Sort by runs descending
+	sort.Slice(providers, func(i, j int) bool {
+		return providers[i].TotalRuns > providers[j].TotalRuns
+	})
+
 	writeJSON(w, map[string]any{
-		"providers":           []any{},
-		"total_runs":          0,
-		"total_success":       0,
-		"total_errors":        0,
-		"total_input_tokens":  0,
-		"total_output_tokens": 0,
-		"total_cost_usd":      0.0,
-		"hours":               0,
+		"providers":           providers,
+		"total_runs":          totals.runs,
+		"total_success":       totals.success,
+		"total_errors":        totals.errors,
+		"total_input_tokens":  totals.input,
+		"total_output_tokens": totals.output,
+		"total_cost_usd":      totals.costUSD,
+		"hours":               hours,
 	})
 }
 
