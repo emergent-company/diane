@@ -15,6 +15,12 @@ import (
 // companionAppPath is where Diane.app lives on macOS.
 const companionAppPath = "/Applications/Diane.app"
 
+// releaseAsset represents a single file asset in a GitHub release.
+type releaseAsset struct {
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+}
+
 // cmdUpgrade checks for a new version and upgrades everything on macOS.
 func cmdUpgrade() {
 	home, _ := os.UserHomeDir()
@@ -57,11 +63,8 @@ func cmdUpgrade() {
 	}
 
 	var release struct {
-		TagName string `json:"tag_name"`
-		Assets  []struct {
-			Name               string `json:"name"`
-			BrowserDownloadURL string `json:"browser_download_url"`
-		} `json:"assets"`
+		TagName string         `json:"tag_name"`
+		Assets  []releaseAsset `json:"assets"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to parse release: %v\n", err)
@@ -85,10 +88,7 @@ func cmdUpgrade() {
 		}
 		assetName := fmt.Sprintf("diane-%s-%s.tar.gz", goos, goarch)
 
-		var binaryAsset struct {
-			Name               string
-			BrowserDownloadURL string
-		}
+		var binaryAsset releaseAsset
 		for _, a := range release.Assets {
 			if a.Name == assetName {
 				binaryAsset = a
@@ -223,10 +223,7 @@ func installBinary(downloadURL, assetName, symlinkPath, binDir string) {
 
 // checkCompanionApp reads the companion app's version and triggers a DMG
 // upgrade if the app is outdated.
-func checkCompanionApp(tagName string, assets []struct {
-	Name               string
-	BrowserDownloadURL string
-}) {
+func checkCompanionApp(tagName string, assets []releaseAsset) {
 	if _, err := os.Stat(companionAppPath); os.IsNotExist(err) {
 		return // No companion app installed
 	}
@@ -243,10 +240,7 @@ func checkCompanionApp(tagName string, assets []struct {
 	fmt.Printf("📱 Companion app version: v%s, latest: v%s\n", currentAppVer, latestVer)
 
 	// Find DMG asset
-	var dmgAsset struct {
-		Name               string
-		BrowserDownloadURL string
-	}
+	var dmgAsset releaseAsset
 	for _, a := range assets {
 		name := a.Name
 		if strings.HasSuffix(name, ".dmg") && strings.Contains(name, "Diane") {
