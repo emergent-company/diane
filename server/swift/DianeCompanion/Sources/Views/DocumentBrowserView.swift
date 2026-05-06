@@ -221,8 +221,3 @@ struct DocumentBrowserView: View {
     }
 }
 
-// Document needs Hashable/Equatable for selection binding
-extension Document: Hashable, Equatable {
-    public static func == (lhs: Document, rhs: Document) -> Bool { lhs.id == rhs.id }
-    public func hash(into hasher: inout Hasher) { hasher.combine(id) }
-}

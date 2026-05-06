@@ -32,11 +32,11 @@ struct ProjectStatusView: View {
     // MARK: - Content
 
     @ViewBuilder
-    private func content(project: Project) -> some View {
+    private func content(project: ProjectInfo) -> some View {
         if isLoading {
             LoadingStateView(message: "Loading stats…")
         } else if let err = errorMessage {
-            ErrorBannerView(message: err, retryAction: {
+            ErrorBannerView(message: err, retry: {
                 Task { await loadStats(for: project) }
             })
             .padding()
@@ -86,7 +86,7 @@ struct ProjectStatusView: View {
     // MARK: - Data Loading
 
     @MainActor
-    private func loadStats(for project: Project) async {
+    private func loadStats(for project: ProjectInfo) async {
         isLoading = true
         errorMessage = nil
         stats = nil

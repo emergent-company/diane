@@ -13,9 +13,26 @@ final class AppState: ObservableObject {
 
     @Published var selectedSidebarItem: SidebarItem? = .dashboard
 
+    // MARK: - Project context
+
+    @Published var selectedProject: ProjectInfo? = nil
+
+    var activeProjectID: String? { selectedProject?.id }
+
     // MARK: - Computed
 
     var isReady: Bool { isConnected }
+    
+    // MARK: - Initialization
+    
+    nonisolated init() {}
+    
+    @MainActor
+    func loadDefaultProject() {
+        if selectedProject == nil {
+            selectedProject = ProjectInfo(id: "default", name: "Default Project", orgId: nil)
+        }
+    }
 }
 
 // MARK: - SidebarItem
@@ -49,4 +66,13 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         case .system:      return "gearshape.2"
         }
     }
+}
+
+// MARK: - ProjectInfo
+
+/// Represents a project context for scoping API calls.
+struct ProjectInfo: Identifiable, Hashable, Sendable {
+    let id: String
+    let name: String
+    let orgId: String?
 }

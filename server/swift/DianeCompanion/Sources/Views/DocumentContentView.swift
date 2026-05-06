@@ -36,6 +36,8 @@ struct DocumentContentView: View {
 
     @StateObject private var scrollCoordinator = ContentScrollCoordinator()
 
+    let selectedDocument: Document?
+
     @State private var loadedDocument: Document? = nil
     @State private var chunks: [DocumentChunk] = []
     @State private var isLoading = false
@@ -49,7 +51,7 @@ struct DocumentContentView: View {
                 LoadingStateView(message: "Loading document…")
             } else if let err = errorMessage {
                 VStack(spacing: 16) {
-                    ErrorBannerView(message: err, retryAction: { Task { await loadContent() } })
+                    ErrorBannerView(message: err, retry: { Task { await loadContent() } })
                 }
                 .padding()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -63,7 +65,7 @@ struct DocumentContentView: View {
                 )
             }
         }
-        .navigationTitle(loadedDocument?.filename ?? appState.contentViewDocument?.filename ?? "Document Content")
+        .navigationTitle(loadedDocument?.filename ?? selectedDocument?.filename ?? "Document Content")
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 Button {
@@ -86,7 +88,7 @@ struct DocumentContentView: View {
                 .disabled(loadedDocument?.content == nil)
             }
         }
-        .task(id: appState.contentViewDocument?.id) {
+        .task(id: selectedDocument?.id) {
             await loadContent()
         }
     }
@@ -223,7 +225,7 @@ struct DocumentContentView: View {
 
     @MainActor
     private func loadContent() async {
-        guard let doc = appState.contentViewDocument,
+        guard let doc = selectedDocument,
               let projectId = doc.projectId else { return }
 
         isLoading = true

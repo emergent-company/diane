@@ -624,7 +624,7 @@ struct AgentsView: View {
         if let ms = Int(editMaxSteps), ms > 0 { changes["max_steps"] = ms }
         if let to = Int(editTimeout), to > 0 { changes["default_timeout"] = to }
 
-        let modelNameVal = editModelName.isEmpty ? NSNull() : editModelName
+        let modelNameVal: Any = editModelName.isEmpty ? NSNull() : editModelName
         changes["model"] = ["name": modelNameVal]
 
         changes["visibility"] = editVisibility

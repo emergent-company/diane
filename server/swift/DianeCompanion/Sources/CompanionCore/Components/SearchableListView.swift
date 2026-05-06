@@ -36,7 +36,7 @@ struct SearchableListView<Item: Identifiable & Hashable, RowContent: View>: View
         VStack(spacing: 0) {
             // Error banner
             if let error = errorMessage {
-                ErrorBannerView(message: error, retryAction: onRetry)
+                ErrorBannerView(message: error, retry: onRetry)
                     .padding(.horizontal, 8)
                     .padding(.top, 6)
             }
@@ -48,7 +48,7 @@ struct SearchableListView<Item: Identifiable & Hashable, RowContent: View>: View
                 EmptyStateView(
                     title: emptyTitle,
                     icon: emptyIcon,
-                    description: emptyDescription ?? (searchText.isEmpty ? nil : "No results for \"\(searchText)\"")
+                    description: emptyDescription ?? (searchText.isEmpty ? "" : "No results for \"\(searchText)\"")
                 )
             } else {
                 List(items) { item in
