@@ -90,10 +90,53 @@ final class UpdateChecker: ObservableObject {
         logger.debug("UpdateChecker: Finished checkForUpdates")
     }
 
-    /// Open the release page instead of auto-updating since it's a Mac app
+    /// Run `diane upgrade` via the bundled CLI to perform a real upgrade.
+    /// The CLI handles binary download, DMG install, app termination, and relaunch.
     func performUpdate() {
-        if let url = downloadUrl {
-            NSWorkspace.shared.open(url)
+        guard let bundledCLI = Bundle.main.url(forResource: "diane", withExtension: nil) else {
+            // Fallback: open releases page
+            if let url = downloadUrl {
+                NSWorkspace.shared.open(url)
+            }
+            return
+        }
+
+        isUpdating = true
+        updateOutput += "⬆️  Starting upgrade via bundled CLI...\n"
+
+        let process = Process()
+        process.executableURL = bundledCLI
+        process.arguments = ["upgrade"]
+
+        // Pipe "y" to stdin so the companion app prompt is auto-confirmed
+        let stdinPipe = Pipe()
+        process.standardInput = stdinPipe
+        let stdoutPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = Pipe()
+
+        // Detach: we fire-and-forget because `diane upgrade` will pkill Diane
+        // and launch a detached install script. The calling process may be killed.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                try process.run()
+                // Auto-confirm the "Update companion app now? [Y/n]" prompt
+                stdinPipe.fileHandleForWriting.write("y\n".data(using: .utf8)!)
+                stdinPipe.fileHandleForWriting.closeFile()
+
+                process.waitUntilExit()
+
+                let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+                if let output = String(data: data, encoding: .utf8) {
+                    DispatchQueue.main.async {
+                        self?.updateOutput += output
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self?.updateOutput += "❌ Upgrade failed: \(error.localizedDescription)\n"
+                }
+            }
         }
     }
 

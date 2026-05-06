@@ -23,11 +23,13 @@ NO_SIGN=false
 # Allow VERSION override from env (CI provides github.ref_name)
 if [ -n "${VERSION:-}" ]; then
     echo "==> Setting version from environment: ${VERSION}"
-    defaults write "$(pwd)/DianeCompanion/Info.plist" CFBundleShortVersionString "${VERSION}"
-    defaults write "$(pwd)/DianeCompanion/Info.plist" CFBundleVersion "${VERSION#v}"
+    MARKETING_VERSION="${VERSION#v}"
+    CURRENT_PROJECT_VERSION="${VERSION#v}"
 else
-    VERSION=$(defaults read "$(pwd)/DianeCompanion/Info.plist" CFBundleShortVersionString 2>/dev/null || echo "0.0.0-DEVELOPMENT")
+    MARKETING_VERSION=$(defaults read "$(pwd)/DianeCompanion/Info.plist" CFBundleShortVersionString 2>/dev/null || echo "0.0.0-DEVELOPMENT")
+    CURRENT_PROJECT_VERSION="$MARKETING_VERSION"
 fi
+VERSION="${VERSION:-${MARKETING_VERSION}}"
 
 echo "==> Building Diane v${VERSION}"
 
@@ -56,6 +58,8 @@ if [ "$NO_SIGN" = true ]; then
         -scheme "${SCHEME}" \
         -configuration "${CONFIGURATION}" \
         -derivedDataPath "${DERIVED_DATA}" \
+        MARKETING_VERSION="${MARKETING_VERSION}" \
+        CURRENT_PROJECT_VERSION="${CURRENT_PROJECT_VERSION}" \
         CODE_SIGN_IDENTITY="" \
         CODE_SIGNING_REQUIRED=NO \
         CODE_SIGN_ENTITLEMENTS="" \
