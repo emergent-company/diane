@@ -389,7 +389,7 @@ final class DianeAPIClient: ObservableObject {
 
     /// Shared HTTP performer: builds request, adds Sentry span + breadcrumb, captures errors.
     private func perform(method: String, path: String, body: Data? = nil, timeout: TimeInterval = 10) async throws -> Data {
-        guard let url = URL(string: "\\(baseURL)\\(path)") else {
+        guard let url = URL(string: "\(baseURL)\(path)") else {
             throw DianeAPIError.invalidURL(path)
         }
         var request = URLRequest(url: url)
@@ -400,8 +400,8 @@ final class DianeAPIClient: ObservableObject {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
 
-        let span = SentrySDK.span?.startChild(operation: "http.client", description: "\\(method) \\(path)")
-        span?.setData(value: "\\(baseURL)\\(path)", key: "url")
+        let span = SentrySDK.span?.startChild(operation: "http.client", description: "\(method) \(path)")
+        span?.setData(value: "\(baseURL)\(path)", key: "url")
 
         let startTime = Date()
         do {
@@ -423,14 +423,14 @@ final class DianeAPIClient: ObservableObject {
             crumb.type = "http"
             crumb.data = [
                 "method": method,
-                "url": "\\(baseURL)\\(path)",
+                "url": "\(baseURL)\(path)",
                 "status_code": http.statusCode,
                 "duration_ms": durationMs,
                 "response_size": data.count,
             ]
 
             if ok {
-                crumb.message = "\\(method) \\(path) \u{2192} \\(http.statusCode)"
+                crumb.message = "\(method) \(path) \u{2192} \(http.statusCode)"
                 SentrySDK.addBreadcrumb(crumb)
                 span?.setData(value: http.statusCode, key: "status_code")
                 span?.setData(value: durationMs, key: "duration_ms")
@@ -444,7 +444,7 @@ final class DianeAPIClient: ObservableObject {
                     domain: "DianeAPIError",
                     code: http.statusCode,
                     userInfo: [
-                        NSLocalizedDescriptionKey: "HTTP \\(http.statusCode) \\(method) \\(path)",
+                        NSLocalizedDescriptionKey: "HTTP \(http.statusCode) \(method) \(path)",
                         "method": method,
                         "path": path,
                         "response": String(bodyStr.prefix(2000)),
@@ -466,10 +466,10 @@ final class DianeAPIClient: ObservableObject {
             let crumb = Breadcrumb()
             crumb.category = "http"
             crumb.type = "http"
-            crumb.message = "\\(method) \\(path) \u{2192} network error: \\(error.localizedDescription)"
+            crumb.message = "\(method) \(path) \u{2192} network error: \(error.localizedDescription)"
             crumb.data = [
                 "method": method,
-                "url": "\\(baseURL)\\(path)",
+                "url": "\(baseURL)\(path)",
                 "error": error.localizedDescription,
             ]
             SentrySDK.addBreadcrumb(crumb)
@@ -478,7 +478,7 @@ final class DianeAPIClient: ObservableObject {
                 domain: "DianeAPIError",
                 code: -1,
                 userInfo: [
-                    NSLocalizedDescriptionKey: "Network error: \\(error.localizedDescription) — \\(method) \\(path)",
+                    NSLocalizedDescriptionKey: "Network error: \(error.localizedDescription) — \(method) \(path)",
                     "method": method,
                     "path": path,
                     NSUnderlyingErrorKey: error,
