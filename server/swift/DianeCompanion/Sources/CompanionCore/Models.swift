@@ -833,6 +833,25 @@ struct ChatSendResponse: Codable, Sendable {
     }
 }
 
+// MARK: - Stream Chat Events (from ACP SSE endpoint)
+
+/// An event received from `POST /api/chat/stream` (SSE).
+struct StreamChatEvent: Codable, Sendable {
+    let type: String
+    let content: String?
+    let name: String?
+    let role: String?
+    let sessionID: String?
+    let runID: String?
+    let message: String?
+
+    enum CodingKeys: String, CodingKey {
+        case type, content, name, role, message
+        case sessionID = "session_id"
+        case runID = "run_id"
+    }
+}
+
 // MARK: - GraphObject JSON Helpers
 public struct QueryResult: Codable, Sendable {
     public let data: [QueryResultItem]?

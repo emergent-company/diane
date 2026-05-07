@@ -854,7 +854,8 @@ struct SessionsView: View {
         }
     }
 
-    /// Send a message to the current (or new) session and show the agent's response.
+    /// Send a message to the current (or new) session via ACP SSE streaming.
+    /// Shows tokens progressively as they arrive from the agent.
     @MainActor
     private func sendMessage() async {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -876,10 +877,10 @@ struct SessionsView: View {
         )
         messages.append(userMessage)
 
-        // 2. Add a "thinking" agent bubble while we wait
-        let thinkingID = "thinking-\(UUID().uuidString.prefix(8))"
-        let thinkingMessage = DianeMessage(
-            id: thinkingID,
+        // 2. Create a placeholder assistant message (replaced progressively)
+        let assistantID = UUID().uuidString
+        let assistantMessage = DianeMessage(
+            id: assistantID,
             role: "assistant",
             content: "",
             sequenceNumber: nil,
@@ -888,60 +889,130 @@ struct SessionsView: View {
             reasoningContent: nil,
             createdAt: nil
         )
-        messages.append(thinkingMessage)
+        messages.append(assistantMessage)
         isSending = true
 
-        // Determine session ID: use existing or nil for new session
         let currentID = selectedSession?.id
+        var streamSessionID: String? = currentID
+        var toolCallsBuffer: [ToolCall] = []
 
         do {
-            let response = try await dianeAPI.sendChatMessage(
+            let stream = dianeAPI.streamChatMessage(
                 sessionID: currentID,
                 content: text,
                 agentName: selectedAgent
             )
 
-            // Update selection to the new/existing session
-            if selectedSession == nil {
-                // Refresh session list to pick up the new session
+            for try await event in stream {
+                switch event.type {
+                case "token":
+                    // Append token content to the assistant message
+                    if let idx = messages.lastIndex(where: { $0.id == assistantID }),
+                       let token = event.content {
+                        let current = messages[idx]
+                        messages[idx] = DianeMessage(
+                            id: current.id,
+                            role: current.role,
+                            content: current.content + token,
+                            sequenceNumber: current.sequenceNumber,
+                            tokenCount: current.tokenCount,
+                            toolCalls: current.toolCalls,
+                            reasoningContent: current.reasoningContent,
+                            createdAt: current.createdAt
+                        )
+                    }
+
+                case "tool_call":
+                    if let name = event.name {
+                        let tc = ToolCall(id: UUID().uuidString, name: name, arguments: nil)
+                        toolCallsBuffer.append(tc)
+                        // Update message with tool calls
+                        if let idx = messages.lastIndex(where: { $0.id == assistantID }) {
+                            let current = messages[idx]
+                            messages[idx] = DianeMessage(
+                                id: current.id,
+                                role: current.role,
+                                content: current.content,
+                                sequenceNumber: current.sequenceNumber,
+                                tokenCount: current.tokenCount,
+                                toolCalls: toolCallsBuffer.isEmpty ? nil : toolCallsBuffer,
+                                reasoningContent: current.reasoningContent,
+                                createdAt: current.createdAt
+                            )
+                        }
+                    }
+
+                case "tool_result":
+                    // Tool result — just track, already shown via tool_call
+                    break
+
+                case "message":
+                    // Final assembled message — update content to full text
+                    if let idx = messages.lastIndex(where: { $0.id == assistantID }),
+                       let content = event.content, !content.isEmpty {
+                        let current = messages[idx]
+                        messages[idx] = DianeMessage(
+                            id: current.id,
+                            role: current.role,
+                            content: content,
+                            sequenceNumber: current.sequenceNumber,
+                            tokenCount: current.tokenCount,
+                            toolCalls: current.toolCalls,
+                            reasoningContent: current.reasoningContent,
+                            createdAt: current.createdAt
+                        )
+                    }
+
+                case "done":
+                    streamSessionID = event.sessionID ?? currentID
+                    // Fallback: ensure there's content
+                    if let idx = messages.lastIndex(where: { $0.id == assistantID }),
+                       messages[idx].content.isEmpty {
+                        let current = messages[idx]
+                        messages[idx] = DianeMessage(
+                            id: current.id,
+                            role: current.role,
+                            content: "✓ Done",
+                            sequenceNumber: current.sequenceNumber,
+                            tokenCount: current.tokenCount,
+                            toolCalls: current.toolCalls,
+                            reasoningContent: current.reasoningContent,
+                            createdAt: current.createdAt
+                        )
+                    }
+
+                case "error":
+                    self.error = event.message ?? "Stream error"
+                    // Replace assistant message with error
+                    messages.removeAll { $0.id == assistantID }
+                    let errorMsg = DianeMessage(
+                        id: UUID().uuidString,
+                        role: "system",
+                        content: "⚠️ Error: \(event.message ?? "Unknown error")",
+                        sequenceNumber: nil,
+                        tokenCount: nil,
+                        toolCalls: nil,
+                        reasoningContent: nil,
+                        createdAt: nil
+                    )
+                    messages.append(errorMsg)
+
+                default:
+                    break
+                }
+            }
+
+            // Update session selection if this was a new session
+            if selectedSession == nil, let sid = streamSessionID {
                 await load()
-                // Find newly created session in list
-                if let newSession = sessions.first(where: { $0.id == response.sessionID }) {
+                if let newSession = sessions.first(where: { $0.id == sid }) {
                     selectedSession = newSession
                 }
             }
 
-            // 3. Remove thinking placeholder
-            messages.removeAll { $0.id == thinkingID }
-
-            // 4. Append response messages (skip user messages — we already have it)
-            var inserted = false
-            for msg in response.messages {
-                if msg.role == "user" { continue }
-                if !msg.content.isEmpty || msg.reasoningContent != nil || msg.toolCalls != nil {
-                    messages.append(msg)
-                    inserted = true
-                }
-            }
-
-            // 5. Fallback if no substantive response
-            if !inserted {
-                let fallback = DianeMessage(
-                    id: UUID().uuidString,
-                    role: "assistant",
-                    content: "✓ Done",
-                    sequenceNumber: nil,
-                    tokenCount: nil,
-                    toolCalls: nil,
-                    reasoningContent: nil,
-                    createdAt: nil
-                )
-                messages.append(fallback)
-            }
         } catch {
             self.error = error.localizedDescription
-            // Replace thinking bubble with error
-            messages.removeAll { $0.id == thinkingID }
+            messages.removeAll { $0.id == assistantID }
             let errorMsg = DianeMessage(
                 id: UUID().uuidString,
                 role: "system",

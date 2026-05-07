@@ -16,6 +16,7 @@ import (
 	"github.com/Emergent-Comapny/diane/internal/mcpproxy"
 	"github.com/Emergent-Comapny/diane/internal/memory"
 	"github.com/Emergent-Comapny/diane/internal/schema"
+	"github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/acp"
 	sdkagents "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agentdefinitions"
 	sdkagentrun "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agents"
 	"github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/graph"
@@ -47,6 +48,7 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	mux.HandleFunc("/api/sessions", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleSessions(w, r) })
 	mux.HandleFunc("/api/sessions/", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleSessionMessages(w, r) })
 	mux.HandleFunc("/api/chat/send", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleChatSend(w, r) })
+	mux.HandleFunc("/api/chat/stream", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleChatStream(w, r) })
 	mux.HandleFunc("/api/mcp-servers", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleMCPServers(w, r) })
 	mux.HandleFunc("/api/nodes", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleNodes(w, r) })
 	mux.HandleFunc("/api/providers", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleProviders(w, r) })
@@ -54,7 +56,7 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	mux.HandleFunc("/api/schema", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleSchema(w, r) })
 	mux.HandleFunc("/api/schema/objects/", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleSchemaObjects(w, r) })
 
-	expected := 13
+	expected := 14
 	if registered != expected {
 		log.Printf("[LOCAL-API] WARNING: registered %d routes, expected %d — check for missing handlers", registered, expected)
 	}
@@ -1456,6 +1458,267 @@ func (h *apiHandlers) handleSchemaObjects(w http.ResponseWriter, r *http.Request
 		"total":     len(items),
 		"objects":   items,
 	})
+}
+
+// ── ACP SSE Chat Stream ──
+
+// POST /api/chat/stream — sends a message via ACP SSE streaming.
+// Request body: {"message": "...", "agent_name": "...", "session_id": "..."}
+// Response: text/event-stream with events:
+//
+//	data: {"type":"token","content":"..."}
+//	data: {"type":"tool_call","name":"..."}
+//	data: {"type":"tool_result","name":"..."}
+//	data: {"type":"message","role":"assistant","content":"..."}
+//	data: {"type":"done","session_id":"...","run_id":"..."}
+//	data: {"type":"error","message":"..."}
+func (h *apiHandlers) handleChatStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var req struct {
+		Message   string `json:"message"`
+		AgentName string `json:"agent_name"`
+		SessionID string `json:"session_id,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if req.Message == "" {
+		jsonError(w, http.StatusBadRequest, "message is required")
+		return
+	}
+	if req.AgentName == "" {
+		req.AgentName = "diane-default"
+	}
+
+	ctx := context.Background()
+
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "bridge: "+err.Error())
+		return
+	}
+	defer bridge.Close()
+
+	acpClient := bridge.ACP()
+
+	// 1. Create or reuse ACP session
+	sessionID := req.SessionID
+	if sessionID == "" {
+		session, err := acpClient.CreateSession(ctx, acp.CreateSessionRequest{
+			AgentName: &req.AgentName,
+		})
+		if err != nil {
+			jsonError(w, http.StatusInternalServerError, "create session: "+err.Error())
+			return
+		}
+		sessionID = session.ID
+		log.Printf("[CHAT-STREAM] Created ACP session: %s", sessionID[:12])
+	}
+
+	// 2. Build message parts from the user input
+	message := []acp.MessagePart{
+		{ContentType: "text/plain", Content: req.Message},
+	}
+
+	// 3. Create streaming run
+	stream, err := acpClient.CreateRunStream(ctx, req.AgentName, acp.CreateRunRequest{
+		Message:   message,
+		SessionID: &sessionID,
+	})
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "create run stream: "+err.Error())
+		return
+	}
+	defer stream.Close()
+
+	// 4. Set up SSE response headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	flusher, canFlush := w.(http.Flusher)
+	if !canFlush {
+		jsonError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	// 5. Read ACP SSE events and forward to client
+	var runID string
+	var sawRunCreated, sawRunComplete bool
+	var tokenCount, toolCallCount int
+	writeEvent := func(evt map[string]any) {
+		data, _ := json.Marshal(evt)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
+
+	for {
+		event, err := stream.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			log.Printf("[CHAT-STREAM] ACP stream read error: %v", err)
+			writeEvent(map[string]any{"type": "error", "message": err.Error()})
+			break
+		}
+
+		switch event.Type {
+		case "run.created":
+			sawRunCreated = true
+			if run, ok := event.Data["run"].(map[string]any); ok {
+				if id, ok := run["id"].(string); ok && id != "" {
+					runID = id
+				}
+			}
+			if runID == "" {
+				log.Printf("[CHAT-STREAM] WARNING: run.created event had no run.id — runID empty")
+			}
+
+		case "run.in-progress":
+			if runID == "" {
+				if run, ok := event.Data["run"].(map[string]any); ok {
+					if id, ok := run["id"].(string); ok && id != "" {
+						runID = id
+					}
+				}
+			}
+
+		case "message.part":
+			part, ok := event.Data["part"].(map[string]any)
+			if !ok {
+				log.Printf("[CHAT-STREAM] WARNING: message.part event had no 'part' in data — %+v", event.Data)
+				continue
+			}
+			contentType, _ := part["content_type"].(string)
+			if contentType == "" {
+				log.Printf("[CHAT-STREAM] WARNING: message.part had empty content_type — %+v", part)
+				continue
+			}
+			switch contentType {
+			case "text/plain":
+				content, _ := part["content"].(string)
+				if content != "" {
+					tokenCount++
+					writeEvent(map[string]any{
+						"type":    "token",
+						"content": content,
+					})
+				}
+			case "application/json":
+				if meta, ok := part["metadata"].(map[string]any); ok {
+					kind, _ := meta["kind"].(string)
+					if kind == "trajectory" {
+						toolName, _ := meta["tool_name"].(string)
+						if toolName == "" {
+							log.Printf("[CHAT-STREAM] WARNING: trajectory part had empty tool_name")
+						}
+						eventType := "tool_call"
+						if _, hasOutput := meta["tool_output"]; hasOutput {
+							eventType = "tool_result"
+						}
+						toolCallCount++
+						writeEvent(map[string]any{
+							"type": eventType,
+							"name": toolName,
+						})
+					}
+				}
+			default:
+				log.Printf("[CHAT-STREAM] WARNING: unexpected message.part content_type %q", contentType)
+			}
+
+		case "message.created":
+			if msg, ok := event.Data["message"].(map[string]any); ok {
+				role, _ := msg["role"].(string)
+				if role == "" {
+					log.Printf("[CHAT-STREAM] WARNING: message.created had empty role")
+				}
+				var textContent string
+				if parts, ok := msg["parts"].([]any); ok {
+					for _, p := range parts {
+						if pm, ok := p.(map[string]any); ok {
+							if ct, _ := pm["content_type"].(string); ct == "text/plain" {
+								if c, _ := pm["content"].(string); c != "" {
+									textContent += c
+								}
+							}
+						}
+					}
+				}
+				writeEvent(map[string]any{
+					"type":    "message",
+					"role":    role,
+					"content": textContent,
+				})
+			} else {
+				log.Printf("[CHAT-STREAM] WARNING: message.created had no 'message' in data — %+v", event.Data)
+			}
+
+		case "run.completed":
+			sawRunComplete = true
+			if runID == "" {
+				log.Printf("[CHAT-STREAM] WARNING: run.completed with no runID captured — stream may have missed run.created")
+			}
+			writeEvent(map[string]any{
+				"type":       "done",
+				"session_id": sessionID,
+				"run_id":     runID,
+			})
+
+		case "run.failed", "run.cancelled":
+			errMsg := "run " + strings.TrimPrefix(event.Type, "run.")
+			if run, ok := event.Data["run"].(map[string]any); ok {
+				if e, ok := run["error"].(map[string]any); ok {
+					if m, ok := e["message"].(string); ok {
+						errMsg = m
+					}
+				}
+			}
+			log.Printf("[CHAT-STREAM] Run %s: %s (session=%s)", runID[:min(len(runID), 12)], event.Type, sessionID[:min(len(sessionID), 12)])
+			writeEvent(map[string]any{
+				"type":    "error",
+				"message": errMsg,
+			})
+
+		case "run.awaiting":
+			log.Printf("[CHAT-STREAM] Agent paused, awaiting input (session=%s run=%s)", sessionID[:min(len(sessionID), 12)], runID[:min(len(runID), 12)])
+
+		case "error":
+			errMsg := "stream error"
+			if e, ok := event.Data["error"].(map[string]any); ok {
+				if m, ok := e["message"].(string); ok {
+					errMsg = m
+				}
+			}
+			log.Printf("[CHAT-STREAM] ACP error event: %s", errMsg)
+			writeEvent(map[string]any{
+				"type":    "error",
+				"message": errMsg,
+			})
+
+		default:
+			log.Printf("[CHAT-STREAM] WARNING: unexpected ACP event type %q — data: %+v", event.Type, event.Data)
+		}
+	}
+
+	// Post-stream diagnostics
+	if !sawRunCreated {
+		log.Printf("[CHAT-STREAM] WARNING: stream ended without run.created event — empty or failed run (session=%s)", sessionID[:min(len(sessionID), 12)])
+	}
+	if !sawRunComplete && tokenCount == 0 {
+		log.Printf("[CHAT-STREAM] WARNING: stream ended with no run.completed and 0 tokens — possible silent failure (session=%s)", sessionID[:min(len(sessionID), 12)])
+	}
+	log.Printf("[CHAT-STREAM] Stream complete: session=%s run=%s tokens=%d tool_calls=%d complete=%v",
+		sessionID[:min(len(sessionID), 12)],
+		runID[:min(len(runID), 12)],
+		tokenCount, toolCallCount, sawRunComplete)
 }
 
 // writeJSON marshals v as JSON and writes it to w with Content-Type header.

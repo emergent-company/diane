@@ -122,6 +122,116 @@ final class DianeAPIClient: ObservableObject {
         return try JSONDecoder().decode(ChatSendResponse.self, from: data)
     }
 
+    // MARK: - Stream Chat (ACP SSE)
+
+    /// Send a message via ACP SSE streaming and receive events progressively.
+    /// Returns an async throwing stream of StreamChatEvent.
+    /// The stream ends when a `done` or `error` event is received.
+    func streamChatMessage(
+        sessionID: String?,
+        content: String,
+        agentName: String = "diane-default"
+    ) -> AsyncThrowingStream<StreamChatEvent, Error> {
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                let startTime = Date()
+                var eventCount = 0
+                var tokenCount = 0
+                var hadDone = false
+                var hadError = false
+                var lastType: String = ""
+
+                let body: [String: Any] = [
+                    "session_id": sessionID as Any,
+                    "message": content,
+                    "agent_name": agentName
+                ]
+                guard let jsonData = try? JSONSerialization.data(withJSONObject: body),
+                      let url = URL(string: "\(baseURL)/api/chat/stream") else {
+                    logWarning("streamChatMessage: failed to build request", category: "ChatStream")
+                    continuation.finish(throwing: DianeAPIError.serverError("Invalid request"))
+                    return
+                }
+
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.httpBody = jsonData
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                request.timeoutInterval = 300
+
+                do {
+                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    guard let http = response as? HTTPURLResponse else {
+                        logWarning("streamChatMessage: no HTTP response", category: "ChatStream")
+                        continuation.finish(throwing: DianeAPIError.network("No HTTP response"))
+                        return
+                    }
+                    guard http.statusCode == 200 else {
+                        logWarning("streamChatMessage: HTTP \(http.statusCode)", category: "ChatStream")
+                        continuation.finish(throwing: DianeAPIError.httpError(http.statusCode, "SSE stream error"))
+                        return
+                    }
+
+                    var pendingData = ""
+
+                    for try await line in bytes.lines {
+                        if line.hasPrefix("data: ") {
+                            let jsonStr = String(line.dropFirst(6))
+                            pendingData = jsonStr
+                        } else if line.isEmpty && !pendingData.isEmpty {
+                            eventCount += 1
+                            if let data = pendingData.data(using: .utf8),
+                               let event = try? JSONDecoder().decode(StreamChatEvent.self, from: data) {
+                                lastType = event.type
+                                if event.type == "token" {
+                                    tokenCount += 1
+                                }
+                                if event.type == "done" {
+                                    hadDone = true
+                                }
+                                if event.type == "error" {
+                                    hadError = true
+                                }
+                                continuation.yield(event)
+                                if event.type == "done" || event.type == "error" {
+                                    break
+                                }
+                            } else {
+                                logWarning("streamChatMessage: failed to decode event: \(pendingData.prefix(100))", category: "ChatStream")
+                            }
+                            pendingData = ""
+                        }
+                    }
+
+                    // Post-stream diagnostics
+                    let duration = Date().timeIntervalSince(startTime)
+                    if !hadDone && !hadError {
+                        logWarning("streamChatMessage: stream ended without done/error event (events=\(eventCount) tokens=\(tokenCount) lastType=\(lastType) duration=\(String(format: "%.1f", duration))s)", category: "ChatStream")
+                    }
+                    if tokenCount == 0 && !hadError {
+                        logWarning("streamChatMessage: stream returned 0 tokens — possible empty response (events=\(eventCount) lastType=\(lastType))", category: "ChatStream")
+                    }
+                    logInfo("streamChatMessage: complete — events=\(eventCount) tokens=\(tokenCount) done=\(hadDone) error=\(hadError) duration=\(String(format: "%.1f", duration))s", category: "ChatStream")
+
+                    continuation.finish()
+                } catch {
+                    if Task.isCancelled {
+                        logInfo("streamChatMessage: cancelled by caller", category: "ChatStream")
+                        continuation.finish()
+                    } else {
+                        logWarning("streamChatMessage: error after \(eventCount) events: \(error.localizedDescription)", category: "ChatStream")
+                        continuation.finish(throwing: error)
+                    }
+                }
+            }
+
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
+    }
+
     // MARK: - Session Write
 
     func createSession(title: String? = nil) async throws -> DianeSession {

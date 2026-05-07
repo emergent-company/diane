@@ -2,8 +2,11 @@ import SwiftUI
 
 /// A reusable HSplitView layout component for list + detail (master-detail) views.
 ///
-/// Provides a consistent 50/50 split layout with a minimum width constraint on both
-/// panes. Used by `AgentsView`, `MCPServersView`, and `SessionsView`.
+/// Provides a 1/3 list + 2/3 detail split layout by default. The list pane has a
+/// lower `layoutPriority` so the detail pane expands first, and the divider can still
+/// be dragged by the user to adjust proportions.
+///
+/// Used by `AgentsView`, `MCPServersView`, and `SessionsView`.
 ///
 /// Usage:
 /// ```swift
@@ -21,7 +24,7 @@ struct SplitListDetailView<ListContent: View, DetailContent: View>: View {
     let emptyTitle: String
     var emptyIcon: String = "tray"
     var emptyDescription: String = ""
-    let minWidth: CGFloat
+    let listMinWidth: CGFloat
     let listContent: ListContent
     let detailContent: DetailContent
 
@@ -29,14 +32,14 @@ struct SplitListDetailView<ListContent: View, DetailContent: View>: View {
         emptyTitle: String,
         emptyIcon: String = "tray",
         emptyDescription: String = "",
-        minWidth: CGFloat = 220,
+        listMinWidth: CGFloat = 260,
         @ViewBuilder listContent: () -> ListContent,
         @ViewBuilder detailContent: () -> DetailContent
     ) {
         self.emptyTitle = emptyTitle
         self.emptyIcon = emptyIcon
         self.emptyDescription = emptyDescription
-        self.minWidth = minWidth
+        self.listMinWidth = listMinWidth
         self.listContent = listContent()
         self.detailContent = detailContent()
     }
@@ -44,11 +47,11 @@ struct SplitListDetailView<ListContent: View, DetailContent: View>: View {
     var body: some View {
         HSplitView {
             listContent
-                .frame(minWidth: minWidth)
-                .layoutPriority(1)
+                .frame(minWidth: listMinWidth)
+                .layoutPriority(0)
 
             detailContent
-                .frame(minWidth: minWidth)
+                .frame(minWidth: 400)
                 .layoutPriority(1)
         }
     }
