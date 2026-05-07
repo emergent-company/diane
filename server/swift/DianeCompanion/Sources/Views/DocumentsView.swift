@@ -17,20 +17,23 @@ struct DocumentsView: View {
     @State private var showUploadError = false
 
     var body: some View {
-        NavigationSplitView {
-            listContent
-                .navigationTitle("Documents")
-                .toolbar { uploadToolbar }
-                .task { await loadDocuments() }
-                .searchable(text: $searchText, prompt: "Search documents…")
-                .overlay { uploadingOverlay }
-                .alert("Upload Error", isPresented: $showUploadError, actions: {
-                    Button("OK") { uploadError = nil }
-                }, message: {
-                    Text(uploadError ?? "Unknown error")
-                })
-        } detail: {
-            detailContent
+        GeometryReader { geometry in
+            NavigationSplitView {
+                listContent
+                    .navigationTitle("Documents")
+                    .navigationSplitViewColumnWidth(max(260, geometry.size.width * 0.33))
+                    .toolbar { uploadToolbar }
+                    .task { await loadDocuments() }
+                    .searchable(text: $searchText, prompt: "Search documents…")
+                    .overlay { uploadingOverlay }
+                    .alert("Upload Error", isPresented: $showUploadError, actions: {
+                        Button("OK") { uploadError = nil }
+                    }, message: {
+                        Text(uploadError ?? "Unknown error")
+                    })
+            } detail: {
+                detailContent
+            }
         }
     }
 
