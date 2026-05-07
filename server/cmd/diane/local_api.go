@@ -91,9 +91,10 @@ func (h *apiHandlers) bridge(ctx context.Context) (*memory.Bridge, error) {
 
 // handleStatus returns server status including version and config info.
 func (h *apiHandlers) handleStatus(w http.ResponseWriter, r *http.Request) {
+	cleanVersion := strings.TrimPrefix(Version, "v")
 	writeJSON(w, map[string]any{
 		"ok":         true,
-		"version":    Version,
+		"version":    cleanVersion,
 		"started_at": startedAt,
 		"server_url": h.pc.ServerURL,
 		"project_id": h.pc.ProjectID,

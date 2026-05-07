@@ -305,7 +305,8 @@ struct SystemView: View {
                 // CLI / App version match
                 let cliVersion = status.version ?? "—"
                 let appVersion = updateChecker.currentVersion ?? "—"
-                let versionMatch = cliVersion == appVersion || 
+                let versionMatch = cliVersion == appVersion ||
+                    (appVersion.hasPrefix("dev") && cliVersion.hasPrefix("dev")) ||
                     (appVersion.hasPrefix("dev") && cliVersion.hasPrefix("vdev"))
                 infoRow(label: "CLI / App Match",
                         value: versionMatch ? "✅ \(cliVersion) = \(appVersion)" : "⚠️ \(cliVersion) ≠ \(appVersion)",
