@@ -315,7 +315,7 @@ final class AppStateTests: XCTestCase {
     }
 
     func testSidebarItemAllCases() {
-        XCTAssertEqual(SidebarItem.allCases.count, 9)
+        XCTAssertEqual(SidebarItem.allCases.count, 10)
         XCTAssertEqual(SidebarItem.allCases.first, .dashboard)
         XCTAssertEqual(SidebarItem.allCases.last, .system)
     }

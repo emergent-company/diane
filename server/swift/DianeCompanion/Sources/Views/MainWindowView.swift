@@ -71,6 +71,8 @@ struct MainWindowView: View {
             MCPServersView()
         case .nodes:
             RelayNodesView()
+        case .objects:
+            ObjectsBrowserView()
         case .permissions:
             PermissionsView()
         case .system:
