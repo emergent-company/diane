@@ -838,13 +838,8 @@ func (h *apiHandlers) handleStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleSessions lists sessions, optionally filtered by status.
+// handleSessions lists sessions (GET) or creates a new session (POST).
 func (h *apiHandlers) handleSessions(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "GET" {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
@@ -855,34 +850,71 @@ func (h *apiHandlers) handleSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	defer bridge.Close()
 
-	status := r.URL.Query().Get("status")
-	resp, err := bridge.Client().Graph.ListObjects(ctx, &graph.ListObjectsOptions{
-		Type: "Session",
-	})
-	if err != nil {
-		writeJSON(w, map[string]any{"error": err.Error()})
-		return
-	}
+	switch r.Method {
+	case http.MethodGet:
+		status := r.URL.Query().Get("status")
+		resp, err := bridge.Client().Graph.ListObjects(ctx, &graph.ListObjectsOptions{
+			Type: "Session",
+		})
+		if err != nil {
+			writeJSON(w, map[string]any{"error": err.Error()})
+			return
+		}
 
-	// Filter by status client-side if requested
-	items := resp.Items
-	if status != "" {
-		var filtered []*graph.GraphObject
-		for _, obj := range items {
-			if obj.Properties != nil {
-				if s, ok := obj.Properties["status"].(string); ok && s == status {
-					filtered = append(filtered, obj)
+		// Filter by status client-side if requested
+		items := resp.Items
+		if status != "" {
+			var filtered []*graph.GraphObject
+			for _, obj := range items {
+				if obj.Properties != nil {
+					if s, ok := obj.Properties["status"].(string); ok && s == status {
+						filtered = append(filtered, obj)
+					}
 				}
 			}
+			items = filtered
 		}
-		items = filtered
-	}
 
-	if items == nil {
-		items = []*graph.GraphObject{}
-	}
+		if items == nil {
+			items = []*graph.GraphObject{}
+		}
 
-	writeJSON(w, map[string]any{"items": items})
+		writeJSON(w, map[string]any{"items": items})
+
+	case http.MethodPost:
+		var body struct {
+			Title string `json:"title"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
+			writeJSON(w, map[string]any{"error": "invalid request body: " + err.Error()})
+			return
+		}
+
+		session, err := bridge.CreateSession(ctx, body.Title)
+		if err != nil {
+			writeJSON(w, map[string]any{"error": err.Error()})
+			return
+		}
+
+		var updatedAt string
+		if !session.UpdatedAt.IsZero() {
+			updatedAt = session.UpdatedAt.Format(time.RFC3339)
+		}
+
+		writeJSON(w, map[string]any{
+			"id":            session.ID,
+			"key":           session.Key,
+			"title":         session.Title,
+			"status":        session.Status,
+			"message_count": session.MessageCount,
+			"total_tokens":  session.TotalTokens,
+			"created_at":    session.CreatedAt.Format(time.RFC3339),
+			"updated_at":    updatedAt,
+		})
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // handleSessionMessages dispatches sub-resource operations on a session.
