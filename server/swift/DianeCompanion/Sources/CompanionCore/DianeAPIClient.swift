@@ -6,6 +6,9 @@ import Sentry
 /// This is the preferred data source for the companion app — it uses the
 /// same data paths as the diane CLI (Memory Bridge for sessions, local
 /// config for MCP servers, Memory Platform relay for nodes).
+///
+/// When launched with `--uitesting`, connects to port 18990 instead of 8890
+/// so the automated test suite can use a dedicated server instance.
 @MainActor
 final class DianeAPIClient: ObservableObject {
     private let session: URLSession
@@ -14,7 +17,12 @@ final class DianeAPIClient: ObservableObject {
     @Published private(set) var isReachable: Bool = false
 
     init(baseURL: String = "http://127.0.0.1:8890") {
-        self.baseURL = baseURL
+        // UITESTING override: if launched from test script, use dedicated test port
+        if CommandLine.arguments.contains("--uitesting") {
+            self.baseURL = "http://127.0.0.1:18990"
+        } else {
+            self.baseURL = baseURL
+        }
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 5
         config.timeoutIntervalForResource = 10

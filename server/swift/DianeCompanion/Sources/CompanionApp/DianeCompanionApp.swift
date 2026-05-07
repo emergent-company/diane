@@ -114,10 +114,18 @@ struct DianeCompanionApp: App {
         // Configure the API client from persisted server settings
         apiClient.configure(serverURL: serverConfig.serverURL, apiKey: serverConfig.apiKey)
 
-        // Configure the API server manager and ensure local diane serve is running
-        apiServer.configure(apiClient: dianeAPI)
-        AppLogger.shared.info("Ensuring local diane serve is running", category: "App")
-        await apiServer.ensureRunning(dianeAPI: dianeAPI)
+        // When launched with --uitesting, skip local serve management — the
+        // test harness starts an isolated server instance on a dedicated port.
+        if CommandLine.arguments.contains("--uitesting") {
+            AppLogger.shared.info("UITESTING mode: skipping local serve startup", category: "App")
+            // Give the test harness a moment to start the server
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+        } else {
+            // Configure the API server manager and ensure local diane serve is running
+            apiServer.configure(apiClient: dianeAPI)
+            AppLogger.shared.info("Ensuring local diane serve is running", category: "App")
+            await apiServer.ensureRunning(dianeAPI: dianeAPI)
+        }
 
         // Check reachability after trying to start
         let reachable = await dianeAPI.checkReachability()

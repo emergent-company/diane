@@ -19,7 +19,12 @@ final class ErrorReporter: @unchecked Sendable {
 
     private let reportQueue = DispatchQueue(label: "com.emergent-company.error-reporter", qos: .utility)
     private let reportsDir: URL
-    private let localAPIURL = URL(string: "http://127.0.0.1:8890/api/bugreport")!
+    private let localAPIURL: URL = {
+        if CommandLine.arguments.contains("--uitesting") {
+            return URL(string: "http://127.0.0.1:18990/api/bugreport")!
+        }
+        return URL(string: "http://127.0.0.1:8890/api/bugreport")!
+    }()
 
     private var previousExceptionHandler: NSUncaughtExceptionHandler?
 

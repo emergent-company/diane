@@ -16,7 +16,6 @@ struct SessionsView: View {
     @State private var isLoading = false
     @State private var acpSessionID: String? = nil
     @State private var isLoadingMessages = false
-    @State private var selectedAgent: String = "diane-default"
     @State private var isLoadingDetail = false
     @State private var error: String? = nil
     @State private var messagesError: String? = nil

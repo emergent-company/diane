@@ -64,7 +64,9 @@ final class StatusMonitor: ObservableObject {
         connectTimer?.invalidate()
         connectTimer = nil
 
-        localHealthURL = URL(string: "http://127.0.0.1:8890/api/status")
+        localHealthURL = CommandLine.arguments.contains("--uitesting")
+            ? URL(string: "http://127.0.0.1:18990/api/status")
+            : URL(string: "http://127.0.0.1:8890/api/status")
         guard let base = serverConfig.baseURL else {
             remoteHealthURL = nil
             connectionState = .unknown
