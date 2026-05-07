@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Emergent-Comapny/diane/internal/agents"
 	"github.com/Emergent-Comapny/diane/internal/config"
 	"github.com/Emergent-Comapny/diane/internal/mcpproxy"
 	"github.com/Emergent-Comapny/diane/internal/memory"
@@ -469,6 +470,27 @@ func (h *apiHandlers) handleGetAgentDetail(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	if found == nil {
+		// Fallback: check built-in registry for known agents
+		for _, builtIn := range agents.BuiltInAgents() {
+			if builtIn.Name == agentName {
+				toolCount := len(builtIn.Tools)
+				if builtIn.Tools == nil {
+					builtIn.Tools = []string{}
+				}
+				writeJSON(w, map[string]any{
+					"name":        builtIn.Name,
+					"description": builtIn.Description,
+					"system_prompt": builtIn.SystemPrompt,
+					"flow_type":   builtIn.FlowType,
+					"visibility":  builtIn.Visibility,
+					"is_default":  builtIn.Name == "diane-default",
+					"tool_count":  toolCount,
+					"tools":       builtIn.Tools,
+					"built_in":    true,
+				})
+				return
+			}
+		}
 		jsonError(w, http.StatusNotFound, "agent not found")
 		return
 	}
