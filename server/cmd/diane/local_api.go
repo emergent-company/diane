@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"sort"
@@ -267,21 +268,130 @@ func (h *apiHandlers) handleSessions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"items": items})
 }
 
-// handleSessionMessages returns messages for a session.
+// handleSessionMessages dispatches sub-resource operations on a session.
+// Paths handled:
+//
+//	/api/sessions/{id}              — GET: detail, DELETE: close, PATCH: update
+//	/api/sessions/{id}/messages     — GET: list messages, POST: append message
+//	/api/sessions/{id}/todos        — GET: list todos, POST: create todo
+//	/api/sessions/{id}/todos/{tid}  — PATCH: update todo, DELETE: delete todo
 func (h *apiHandlers) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "GET" {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Extract session ID from path: /api/sessions/{id}/messages
+	// Extract the session ID from path and determine sub-resource
 	path := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
-	sessionID := strings.TrimSuffix(path, "/messages")
-	if sessionID == "" || strings.Contains(sessionID, "/") {
+
+	// Split path into segments: ["{id}"] or ["{id}", "messages"] or ["{id}", "todos"] or ["{id}", "todos", "{todoID}"]
+	parts := strings.SplitN(path, "/", 3)
+	if len(parts) == 0 || parts[0] == "" {
 		http.Error(w, "invalid session ID", http.StatusBadRequest)
 		return
 	}
+	sessionID := parts[0]
 
+	// No sub-resource path — operate on the session itself
+	if len(parts) == 1 {
+		switch r.Method {
+		case http.MethodGet:
+			h.handleGetSession(w, r, sessionID)
+		case http.MethodDelete:
+			h.handleCloseSession(w, r, sessionID)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	}
+
+	sub := parts[1]
+	switch sub {
+	case "messages":
+		switch r.Method {
+		case http.MethodGet:
+			h.handleGetSessionMessages(w, r, sessionID)
+		case http.MethodPost:
+			h.handleAppendSessionMessage(w, r, sessionID)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	case "todos":
+		todoID := ""
+		if len(parts) == 3 && parts[2] != "" {
+			todoID = parts[2]
+		}
+		if todoID != "" {
+			switch r.Method {
+			case http.MethodPatch:
+				h.handleUpdateSessionTodo(w, r, sessionID, todoID)
+			case http.MethodDelete:
+				h.handleDeleteSessionTodo(w, r, sessionID, todoID)
+			default:
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			}
+		} else {
+			switch r.Method {
+			case http.MethodGet:
+				h.handleListSessionTodos(w, r, sessionID)
+			case http.MethodPost:
+				h.handleCreateSessionTodo(w, r, sessionID)
+			default:
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			}
+		}
+	default:
+		http.Error(w, "not found", http.StatusNotFound)
+	}
+}
+
+// ─── Session Sub-Resource Handlers ──────────────────────────
+
+// handleGetSession returns session details (aggregates + metadata).
+func (h *apiHandlers) handleGetSession(w http.ResponseWriter, r *http.Request, sessionID string) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		writeJSON(w, map[string]any{"error": err.Error()})
+		return
+	}
+	defer bridge.Close()
+
+	session, err := bridge.GetSession(ctx, sessionID)
+	if err != nil {
+		writeJSON(w, map[string]any{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, map[string]any{
+		"id":            session.ID,
+		"title":         session.Title,
+		"status":        session.Status,
+		"message_count": session.MessageCount,
+		"total_tokens":  session.TotalTokens,
+		"created_at":    session.CreatedAt.Format(time.RFC3339),
+	})
+}
+
+// handleCloseSession marks a session as completed.
+func (h *apiHandlers) handleCloseSession(w http.ResponseWriter, r *http.Request, sessionID string) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		writeJSON(w, map[string]any{"error": err.Error()})
+		return
+	}
+	defer bridge.Close()
+
+	if err := bridge.CloseSession(ctx, sessionID); err != nil {
+		writeJSON(w, map[string]any{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+// handleGetSessionMessages returns messages for a session.
+func (h *apiHandlers) handleGetSessionMessages(w http.ResponseWriter, r *http.Request, sessionID string) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
@@ -304,6 +414,151 @@ func (h *apiHandlers) handleSessionMessages(w http.ResponseWriter, r *http.Reque
 	}
 
 	writeJSON(w, map[string]any{"items": items})
+}
+
+// handleAppendSessionMessage appends a message to a session.
+func (h *apiHandlers) handleAppendSessionMessage(w http.ResponseWriter, r *http.Request, sessionID string) {
+	var req struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if req.Role == "" || req.Content == "" {
+		jsonError(w, http.StatusBadRequest, "role and content are required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		writeJSON(w, map[string]any{"error": err.Error()})
+		return
+	}
+	defer bridge.Close()
+
+	msg, err := bridge.AppendMessage(ctx, sessionID, req.Role, req.Content, 0)
+	if err != nil {
+		writeJSON(w, map[string]any{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, map[string]any{"ok": true, "id": msg.ID})
+}
+
+// ─── Session TODO Handlers ──────────────────────────────────
+
+// handleListSessionTodos lists all todos for a session.
+func (h *apiHandlers) handleListSessionTodos(w http.ResponseWriter, r *http.Request, sessionID string) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		writeJSON(w, map[string]any{"error": err.Error()})
+		return
+	}
+	defer bridge.Close()
+
+	todos, err := bridge.ListSessionTodos(ctx, sessionID)
+	if err != nil {
+		writeJSON(w, map[string]any{"error": err.Error()})
+		return
+	}
+	if todos == nil {
+		todos = []memory.SessionTodo{}
+	}
+
+	writeJSON(w, map[string]any{"items": todos})
+}
+
+// handleCreateSessionTodo creates a new todo for a session.
+func (h *apiHandlers) handleCreateSessionTodo(w http.ResponseWriter, r *http.Request, sessionID string) {
+	var req struct {
+		Content string `json:"content"`
+		Order   int    `json:"order"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if req.Content == "" {
+		jsonError(w, http.StatusBadRequest, "content is required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		writeJSON(w, map[string]any{"error": err.Error()})
+		return
+	}
+	defer bridge.Close()
+
+	todo, err := bridge.CreateSessionTodo(ctx, sessionID, req.Content, req.Order)
+	if err != nil {
+		writeJSON(w, map[string]any{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, map[string]any{"ok": true, "todo": todo})
+}
+
+// handleUpdateSessionTodo updates a specific todo item.
+func (h *apiHandlers) handleUpdateSessionTodo(w http.ResponseWriter, r *http.Request, sessionID, todoID string) {
+	var req struct {
+		Content *string `json:"content,omitempty"`
+		Status  *string `json:"status,omitempty"`
+		Order   *int    `json:"order,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		writeJSON(w, map[string]any{"error": err.Error()})
+		return
+	}
+	defer bridge.Close()
+
+	todo, err := bridge.UpdateSessionTodo(ctx, todoID, req.Content, req.Status, req.Order)
+	if err != nil {
+		writeJSON(w, map[string]any{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, map[string]any{"ok": true, "todo": todo})
+}
+
+// handleDeleteSessionTodo deletes a specific todo item.
+func (h *apiHandlers) handleDeleteSessionTodo(w http.ResponseWriter, r *http.Request, sessionID, todoID string) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		writeJSON(w, map[string]any{"error": err.Error()})
+		return
+	}
+	defer bridge.Close()
+
+	if err := bridge.DeleteSessionTodo(ctx, todoID); err != nil {
+		writeJSON(w, map[string]any{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, map[string]any{"ok": true})
 }
 
 // ─── Chat Send Handler ────────────────────────────────────
@@ -577,7 +832,9 @@ func extractContentValue(val any) string {
 func (h *apiHandlers) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 	cfg, err := mcpproxy.LoadConfig(mcpproxy.GetDefaultConfigPath())
 	if err != nil {
-		// No config file is normal — return empty list
+		// No config file is normal — return empty list.
+		// A corrupted config file also reaches here, so log a warning.
+		log.Printf("[LOCAL-API] MCP config load: %v (returning empty list)", err)
 		writeJSON(w, map[string]any{"servers": []any{}})
 		return
 	}
@@ -617,22 +874,51 @@ func (h *apiHandlers) handleNodes(w http.ResponseWriter, r *http.Request) {
 
 	req, err := http.NewRequestWithContext(ctx, "GET", relayURL, nil)
 	if err != nil {
-		writeJSON(w, map[string]any{"error": err.Error()})
+		jsonError(w, http.StatusInternalServerError, "nodes: build request: "+err.Error())
 		return
 	}
 	req.Header.Set("Authorization", "Bearer "+h.pc.Token)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		writeJSON(w, map[string]any{"nodes": []any{}, "error": err.Error()})
+		jsonError(w, http.StatusInternalServerError, "nodes: query relay: "+err.Error())
 		return
 	}
 	defer resp.Body.Close()
 
-	var nodes any
-	if err := json.NewDecoder(resp.Body).Decode(&nodes); err != nil {
-		writeJSON(w, map[string]any{"nodes": []any{}})
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("nodes: MP returned %d: %s", resp.StatusCode, string(body)))
 		return
+	}
+
+	var raw any
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		jsonError(w, http.StatusInternalServerError, "nodes: decode response: "+err.Error())
+		return
+	}
+
+	// The MP relay returns nodes as either a flat array or {"items": [...]}
+	var nodes []any
+	switch v := raw.(type) {
+	case []any:
+		nodes = v
+	case map[string]any:
+		if items, ok := v["items"].([]any); ok {
+			nodes = items
+		} else if items, ok := v["nodes"].([]any); ok {
+			nodes = items
+		} else {
+			jsonError(w, http.StatusInternalServerError, "nodes: unexpected relay response format")
+			return
+		}
+	default:
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("nodes: unexpected relay response type %T", raw))
+		return
+	}
+
+	if len(nodes) == 0 {
+		log.Printf("[LOCAL-API] WARNING: /api/nodes returned 0 nodes — expected at least the local instance")
 	}
 
 	writeJSON(w, map[string]any{"nodes": nodes})
@@ -1109,6 +1395,10 @@ func (h *apiHandlers) handleSchema(w http.ResponseWriter, r *http.Request) {
 		apiRels = append(apiRels, r.ToRelationshipJSON())
 	}
 
+	if len(apiTypes) == 0 {
+		log.Printf("[LOCAL-API] WARNING: /api/schema returned 0 node types — embedded schema definitions may be missing or corrupted")
+	}
+
 	writeJSON(w, map[string]any{
 		"node_types":    apiTypes,
 		"relationships": apiRels,
@@ -1155,6 +1445,10 @@ func (h *apiHandlers) handleSchemaObjects(w http.ResponseWriter, r *http.Request
 	items := resp.Items
 	if items == nil {
 		items = []*graph.GraphObject{}
+	}
+
+	if len(items) == 0 {
+		log.Printf("[LOCAL-API] WARNING: /api/schema/objects/%s returned 0 objects — type may not exist in this project", typeName)
 	}
 
 	writeJSON(w, map[string]any{
