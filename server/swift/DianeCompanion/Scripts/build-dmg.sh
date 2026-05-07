@@ -162,23 +162,15 @@ fi
 echo "==> Creating .dmg..."
 DMG_PATH="build/${DMG_NAME}-${VERSION}.dmg"
 if command -v create-dmg &>/dev/null; then
-    create-dmg \
-        --volname "Diane" \
-        --window-pos 200 120 \
-        --window-size 600 400 \
-        --icon-size 100 \
-        --icon "Diane.app" 175 190 \
-        --hide-extension "Diane.app" \
-        --app-drop-link 425 190 \
-        "${DMG_PATH}" \
-        "${EXPORT_PATH}/"
-else
-    # Fallback: plain hdiutil
-    hdiutil create -volname "Diane" \
-        -srcfolder "${EXPORT_PATH}" \
-        -ov -format UDZO \
-        "${DMG_PATH}"
+    # create-dmg's AppleScript window-styling times out on macOS 26+.
+    # Fall through to reliable hdiutil instead.
+    echo "⚠️  create-dmg found but AppleScript styling fails on this macOS — using hdiutil"
 fi
+# Use hdiutil directly — no flaky AppleScript dependency
+hdiutil create -volname "Diane" \
+    -srcfolder "${EXPORT_PATH}" \
+    -ov -format UDZO \
+    "${DMG_PATH}"
 
 echo ""
 echo "✓ Built: ${DMG_PATH}"
