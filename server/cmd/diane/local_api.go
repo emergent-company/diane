@@ -397,22 +397,27 @@ func (h *apiHandlers) handleAgentSubRoutes(w http.ResponseWriter, r *http.Reques
 	}
 
 	// /api/agents/{name}/override
-	if len(parts) < 2 || parts[1] != "override" {
-		jsonError(w, http.StatusNotFound, "not found")
+	if len(parts) >= 2 && parts[1] == "override" {
+		agentName := parts[0]
+		switch r.Method {
+		case http.MethodGet:
+			h.handleGetAgentOverride(w, r, agentName)
+		case http.MethodPut:
+			h.handleSaveAgentOverride(w, r, agentName)
+		case http.MethodDelete:
+			h.handleDeleteAgentOverride(w, r, agentName)
+		default:
+			jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
 		return
 	}
-	agentName := parts[0]
 
-	switch r.Method {
-	case http.MethodGet:
-		h.handleGetAgentOverride(w, r, agentName)
-	case http.MethodPut:
-		h.handleSaveAgentOverride(w, r, agentName)
-	case http.MethodDelete:
-		h.handleDeleteAgentOverride(w, r, agentName)
-	default:
+	// /api/agents/{name} — single agent detail (GET only)
+	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
 	}
+	h.handleGetAgentDetail(w, r, first)
 }
 
 // handleSeedAgents triggers a re-seed of built-in agents.
@@ -434,6 +439,69 @@ func (h *apiHandlers) handleSeedAgents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+// handleGetAgentDetail returns detail for a single agent by name.
+// GET /api/agents/{name}
+func (h *apiHandlers) handleGetAgentDetail(w http.ResponseWriter, r *http.Request, agentName string) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "bridge: "+err.Error())
+		return
+	}
+	defer bridge.Close()
+
+	defs, err := bridge.ListAgentDefs(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "list agents: "+err.Error())
+		return
+	}
+
+	// Find the agent by name
+	var found *sdkagents.AgentDefinitionSummary
+	for i, d := range defs.Data {
+		if d.Name == agentName {
+			found = &defs.Data[i]
+			break
+		}
+	}
+	if found == nil {
+		jsonError(w, http.StatusNotFound, "agent not found")
+		return
+	}
+
+	// Fetch full definition for tools
+	fullDef, err := bridge.GetAgentDef(ctx, found.ID)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "get agent: "+err.Error())
+		return
+	}
+
+	desc := ""
+	if found.Description != nil {
+		desc = *found.Description
+	}
+
+	tools := fullDef.Data.Tools
+	if tools == nil {
+		tools = []string{}
+	}
+
+	writeJSON(w, map[string]any{
+		"id":          found.ID,
+		"name":        found.Name,
+		"description": desc,
+		"flow_type":   found.FlowType,
+		"visibility":  found.Visibility,
+		"is_default":  found.IsDefault,
+		"tool_count":  found.ToolCount,
+		"tools":       tools,
+		"created_at":  found.CreatedAt.Format(time.RFC3339),
+		"updated_at":  found.UpdatedAt.Format(time.RFC3339),
+	})
 }
 
 // handleGetAgentOverride returns the override config for a built-in agent.

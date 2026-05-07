@@ -179,28 +179,31 @@ final class DianeAPIClient: ObservableObject {
                 request.timeoutInterval = 300
 
                 do {
-                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    let (data, response) = try await URLSession.shared.data(for: request)
                     guard let http = response as? HTTPURLResponse else {
                         logWarning("streamChatMessage: no HTTP response", category: "ChatStream")
                         continuation.finish(throwing: DianeAPIError.network("No HTTP response"))
                         return
                     }
                     guard http.statusCode == 200 else {
-                        logWarning("streamChatMessage: HTTP \(http.statusCode)", category: "ChatStream")
-                        continuation.finish(throwing: DianeAPIError.httpError(http.statusCode, "SSE stream error"))
+                        let body = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
+                        logWarning("streamChatMessage: HTTP \(http.statusCode) — \(body.prefix(500))", category: "ChatStream")
+                        continuation.finish(throwing: DianeAPIError.httpError(http.statusCode, body))
                         return
                     }
 
                     var pendingData = ""
 
-                    for try await line in bytes.lines {
+                    let text = String(data: data, encoding: .utf8) ?? ""
+                    let lines = text.components(separatedBy: "\n")
+                    for line in lines {
                         if line.hasPrefix("data: ") {
                             let jsonStr = String(line.dropFirst(6))
                             pendingData = jsonStr
                         } else if line.isEmpty && !pendingData.isEmpty {
                             eventCount += 1
-                            if let data = pendingData.data(using: .utf8),
-                               let event = try? JSONDecoder().decode(StreamChatEvent.self, from: data) {
+                            if let eventData = pendingData.data(using: .utf8),
+                               let event = try? JSONDecoder().decode(StreamChatEvent.self, from: eventData) {
                                 lastType = event.type
                                 if event.type == "token" {
                                     tokenCount += 1
