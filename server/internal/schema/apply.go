@@ -472,6 +472,88 @@ func parseRelationshipTypes() ([]RelationshipDefinition, error) {
 // Other helpers
 // ---------------------------------------------------------------------------
 
+// SchemaPropertyJSON is a single property in a schema type, matching the
+// companion app's SchemaProperty Codable type.
+type SchemaPropertyJSON struct {
+	Name        string   `json:"name"`
+	Type        string   `json:"type"`
+	Description string   `json:"description,omitempty"`
+	EnumValues  []string `json:"enum_values,omitempty"`
+}
+
+// SchemaNodeTypeJSON is a single node type, matching the companion app's
+// SchemaNodeType Codable type. It is enriched with object/relationship counts.
+type SchemaNodeTypeJSON struct {
+	TypeName           string               `json:"type_name"`
+	Label              string               `json:"label"`
+	Description        string               `json:"description"`
+	Namespace          string               `json:"namespace,omitempty"`
+	Properties         []SchemaPropertyJSON `json:"properties"`
+	ObjectCount        int                  `json:"object_count"`
+	RelationshipCount  int                  `json:"relationship_count"`
+}
+
+// LoadSchemaDefinitions returns all embedded schema definitions (object types + relationships).
+func LoadSchemaDefinitions() ([]SchemaDefinition, []RelationshipDefinition, error) {
+	types, err := parseObjectTypes()
+	if err != nil {
+		return nil, nil, err
+	}
+	rels, err := parseRelationshipTypes()
+	if err != nil {
+		return nil, nil, err
+	}
+	return types, rels, nil
+}
+
+// ToSchemaNodeTypeJSON converts a SchemaDefinition (with its json_schema) into
+// the API response format, extracting label and properties from the JSON schema.
+func (d *SchemaDefinition) ToSchemaNodeTypeJSON() SchemaNodeTypeJSON {
+	nt := SchemaNodeTypeJSON{
+		TypeName:    d.TypeName,
+		Description: d.Description,
+		Namespace:   d.Namespace,
+	}
+
+	// Parse json_schema for label and properties
+	var schema struct {
+		Label      string `json:"label"`
+		Properties map[string]struct {
+			Type        string   `json:"type"`
+			Description string   `json:"description,omitempty"`
+			Enum        []string `json:"enum,omitempty"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(d.JSONSchema, &schema); err == nil {
+		nt.Label = schema.Label
+		for name, prop := range schema.Properties {
+			nt.Properties = append(nt.Properties, SchemaPropertyJSON{
+				Name:        name,
+				Type:        prop.Type,
+				Description: prop.Description,
+				EnumValues:  prop.Enum,
+			})
+		}
+	}
+	if nt.Label == "" {
+		nt.Label = d.TypeName
+	}
+
+	return nt
+}
+
+// ToRelationshipJSON converts a RelationshipDefinition into the API response format.
+func (r *RelationshipDefinition) ToRelationshipJSON() map[string]any {
+	return map[string]any{
+		"name":          r.Name,
+		"label":         r.Label,
+		"inverse_label": r.InverseLabel,
+		"description":   r.Description,
+		"source_type":   r.SourceType,
+		"target_type":   r.TargetType,
+	}
+}
+
 func fetchExistingTypes(ctx context.Context, client *sdk.Client, projectID string) ([]srsdk.SchemaRegistryEntry, error) {
 	return client.SchemaRegistry.GetProjectTypes(ctx, projectID, &srsdk.ListTypesOptions{
 		EnabledOnly: boolPtr(false),

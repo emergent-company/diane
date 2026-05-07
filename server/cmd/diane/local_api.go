@@ -14,6 +14,7 @@ import (
 	"github.com/Emergent-Comapny/diane/internal/config"
 	"github.com/Emergent-Comapny/diane/internal/mcpproxy"
 	"github.com/Emergent-Comapny/diane/internal/memory"
+	"github.com/Emergent-Comapny/diane/internal/schema"
 	sdkagents "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agentdefinitions"
 	sdkagentrun "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agents"
 	"github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/graph"
@@ -37,17 +38,25 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	mux := http.NewServeMux()
 
 	api := &apiHandlers{pc: pc}
-	mux.HandleFunc("/api/status", api.handleStatus)
-	mux.HandleFunc("/api/stats", api.handleStats)
-	mux.HandleFunc("/api/stats/providers", api.handleProviderStats)
-	mux.HandleFunc("/api/stats/objects", api.handleGraphObjectStats)
-	mux.HandleFunc("/api/sessions", api.handleSessions)
-	mux.HandleFunc("/api/sessions/", api.handleSessionMessages)
-	mux.HandleFunc("/api/chat/send", api.handleChatSend)
-	mux.HandleFunc("/api/mcp-servers", api.handleMCPServers)
-	mux.HandleFunc("/api/nodes", api.handleNodes)
-	mux.HandleFunc("/api/providers", api.handleProviders)
-	mux.HandleFunc("/api/agents", api.handleAgents)
+	registered := 0
+	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleStatus(w, r) })
+	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleStats(w, r) })
+	mux.HandleFunc("/api/stats/providers", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleProviderStats(w, r) })
+	mux.HandleFunc("/api/stats/objects", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleGraphObjectStats(w, r) })
+	mux.HandleFunc("/api/sessions", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleSessions(w, r) })
+	mux.HandleFunc("/api/sessions/", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleSessionMessages(w, r) })
+	mux.HandleFunc("/api/chat/send", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleChatSend(w, r) })
+	mux.HandleFunc("/api/mcp-servers", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleMCPServers(w, r) })
+	mux.HandleFunc("/api/nodes", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleNodes(w, r) })
+	mux.HandleFunc("/api/providers", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleProviders(w, r) })
+	mux.HandleFunc("/api/agents", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleAgents(w, r) })
+	mux.HandleFunc("/api/schema", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleSchema(w, r) })
+	mux.HandleFunc("/api/schema/objects/", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleSchemaObjects(w, r) })
+
+	expected := 13
+	if registered != expected {
+		log.Printf("[LOCAL-API] WARNING: registered %d routes, expected %d — check for missing handlers", registered, expected)
+	}
 
 	srv := &localAPIServer{
 		server: &http.Server{
@@ -1039,6 +1048,119 @@ func (h *apiHandlers) handleGraphObjectStats(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, map[string]any{
 		"total":   stats.Total,
 		"by_type": stats.ByType,
+	})
+}
+
+// GET /api/schema — returns embedded graph schema definitions enriched with counts.
+func (h *apiHandlers) handleSchema(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	nodeTypes, rels, err := schema.LoadSchemaDefinitions()
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "load schema: "+err.Error())
+		return
+	}
+
+	// Build relationship counts per type
+	relCountByType := make(map[string]int)
+	for _, rel := range rels {
+		relCountByType[rel.SourceType]++
+		relCountByType[rel.TargetType]++
+	}
+
+	// Query object counts from Memory Platform
+	ctx := context.Background()
+	typeNames := make([]string, len(nodeTypes))
+	for i, nt := range nodeTypes {
+		typeNames[i] = nt.TypeName
+	}
+
+	bridge, err := h.bridge(ctx)
+	objCounts := make(map[string]int)
+	if err == nil {
+		counts, countErr := bridge.GetObjectCountsForSchema(ctx, typeNames)
+		if countErr == nil {
+			objCounts = counts
+		}
+		bridge.Close()
+	} else {
+		log.Printf("[LOCAL-API] bridge for schema counts: %v", err)
+	}
+
+	// Build response
+	apiTypes := make([]schema.SchemaNodeTypeJSON, 0, len(nodeTypes))
+	for _, nt := range nodeTypes {
+		t := nt.ToSchemaNodeTypeJSON()
+		t.ObjectCount = objCounts[nt.TypeName]
+		t.RelationshipCount = relCountByType[nt.TypeName]
+		apiTypes = append(apiTypes, t)
+	}
+
+	// Sort by object count descending
+	sort.Slice(apiTypes, func(i, j int) bool {
+		return apiTypes[i].ObjectCount > apiTypes[j].ObjectCount
+	})
+
+	apiRels := make([]map[string]any, 0, len(rels))
+	for _, r := range rels {
+		apiRels = append(apiRels, r.ToRelationshipJSON())
+	}
+
+	writeJSON(w, map[string]any{
+		"node_types":    apiTypes,
+		"relationships": apiRels,
+	})
+}
+
+// GET /api/schema/objects/{typeName} — returns recent objects of a given schema type.
+func (h *apiHandlers) handleSchemaObjects(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	typeName := strings.TrimPrefix(r.URL.Path, "/api/schema/objects/")
+	if typeName == "" || strings.Contains(typeName, "/") {
+		jsonError(w, http.StatusBadRequest, "type name required")
+		return
+	}
+
+	limit := 20
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 50 {
+			limit = parsed
+		}
+	}
+
+	ctx := context.Background()
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "bridge: "+err.Error())
+		return
+	}
+	defer bridge.Close()
+
+	resp, err := bridge.Client().Graph.ListObjects(ctx, &graph.ListObjectsOptions{
+		Type:  typeName,
+		Limit: limit,
+	})
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "list objects: "+err.Error())
+		return
+	}
+
+	items := resp.Items
+	if items == nil {
+		items = []*graph.GraphObject{}
+	}
+
+	writeJSON(w, map[string]any{
+		"type_name": typeName,
+		"total":     len(items),
+		"objects":   items,
 	})
 }
 

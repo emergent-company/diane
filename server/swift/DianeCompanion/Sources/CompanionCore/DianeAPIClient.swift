@@ -476,7 +476,7 @@ final class DianeAPIClient: ObservableObject {
                 // Network-level errors (timeout, DNS, connection refused)
                 let nsError = error as NSError
                 let isTransient = nsError.domain == NSURLErrorDomain &&
-                    [NSURLErrorCannotConnectToHost, NSURLErrorTimedOut, NSURLErrorNetworkConnectionLost].contains(nsError.code)
+                    [NSURLErrorCannotConnectToHost, NSURLErrorTimedOut, NSURLErrorNetworkConnectionLost, NSURLErrorCancelled].contains(nsError.code)
 
                 if isTransient && attempt < maxRetries - 1 {
                     // Transient error with retries left — continue the loop
