@@ -70,7 +70,7 @@ final class APIServerManager: ObservableObject {
                     "Post-upgrade detected (backup found) — restarting serve",
                     category: "APIServer"
                 )
-                kickstartLaunchd()
+                await kickstartLaunchd()
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                 if await dianeAPI.checkReachability() {
                     AppLogger.shared.info("Local Diane API running after post-upgrade kickstart", category: "APIServer")
@@ -96,7 +96,7 @@ final class APIServerManager: ObservableObject {
                         "Serve version \(runningVer) differs from bundled \(expectedVersion) — restarting with launchd kickstart",
                         category: "APIServer"
                     )
-                    kickstartLaunchd()
+                    await kickstartLaunchd()
                     try? await Task.sleep(nanoseconds: 3_000_000_000)
                     if await dianeAPI.checkReachability() {
                         AppLogger.shared.info("Local Diane API running after kickstart", category: "APIServer")
@@ -138,12 +138,12 @@ final class APIServerManager: ObservableObject {
     }
 
     /// Stop diane serve — uses launchd bootout if plist is loaded, otherwise terminates child process.
-    func stop() {
+    func stop() async {
         healthCheckTimer?.invalidate()
         healthCheckTimer = nil
 
         if usingLaunchd {
-            stopLaunchd()
+            await stopLaunchd()
         } else if let proc = process, proc.isRunning {
             logInfo("Stopping diane serve process (PID \(proc.processIdentifier))", category: "APIServer")
             proc.terminate()
@@ -184,9 +184,9 @@ final class APIServerManager: ObservableObject {
         let plistPath = launchdPlistPath()
 
         // If the plist is already bootstrapped, just kickstart the service
-        if isLaunchdLoaded() {
+        if await isLaunchdLoaded() {
             AppLogger.shared.info("launchd plist already loaded — kickstarting", category: "APIServer")
-            kickstartLaunchd()
+            await kickstartLaunchd()
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             return await dianeAPI.checkReachability()
         }
@@ -204,7 +204,7 @@ final class APIServerManager: ObservableObject {
         }
 
         // Bootstrap the service
-        guard bootstrapLaunchd(plistPath: plistPath) else {
+        guard await bootstrapLaunchd(plistPath: plistPath) else {
             AppLogger.shared.warning("Failed to bootstrap launchd service", category: "APIServer")
             return false
         }
@@ -219,21 +219,36 @@ final class APIServerManager: ObservableObject {
         return NSHomeDirectory() + "/Library/LaunchAgents/" + Self.plistLabel + ".plist"
     }
 
-    /// Check if the launchd service is currently loaded
-    private func isLaunchdLoaded() -> Bool {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        proc.arguments = ["print", "gui/\(getuid())/\(Self.plistLabel)"]
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        proc.standardError = pipe
-        do {
-            try proc.run()
-            proc.waitUntilExit()
-            return proc.terminationStatus == 0
-        } catch {
-            return false
+    // MARK: - Launchd Subprocesses
+
+    /// Run a launchctl command asynchronously, returning its exit code and stdout.
+    /// Moves the blocking `waitUntilExit()` off the main actor to prevent App Hangs.
+    private nonisolated func runLaunchctl(arguments: [String]) async -> (exitCode: Int32, stdout: String) {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().async {
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+                proc.arguments = arguments
+                let outPipe = Pipe()
+                proc.standardOutput = outPipe
+                proc.standardError = outPipe
+                do {
+                    try proc.run()
+                    proc.waitUntilExit()
+                    let data = try? outPipe.fileHandleForReading.readToEnd()
+                    let output = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                    continuation.resume(returning: (proc.terminationStatus, output))
+                } catch {
+                    continuation.resume(returning: (-1, "error: \(error.localizedDescription)"))
+                }
+            }
         }
+    }
+
+    /// Check if the launchd service is currently loaded
+    private func isLaunchdLoaded() async -> Bool {
+        let (exitCode, _) = await runLaunchctl(arguments: ["print", "gui/\(getuid())/\(Self.plistLabel)"])
+        return exitCode == 0
     }
 
     /// Generate and install the launchd plist with correct paths for this machine
@@ -293,52 +308,29 @@ final class APIServerManager: ObservableObject {
     }
 
     /// Bootstrap (load) the launchd service from the plist
-    private func bootstrapLaunchd(plistPath: String) -> Bool {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        proc.arguments = ["bootstrap", "gui/\(getuid())", plistPath]
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        proc.standardError = pipe
-        do {
-            try proc.run()
-            proc.waitUntilExit()
-            if proc.terminationStatus != 0 {
-                let data = try? pipe.fileHandleForReading.readToEnd()
-                let msg = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-                AppLogger.shared.warning("launchctl bootstrap failed (exit \(proc.terminationStatus)): \(msg)", category: "APIServer")
-            }
-            return proc.terminationStatus == 0
-        } catch {
-            AppLogger.shared.error("Failed to run launchctl bootstrap: \(error.localizedDescription)", category: "APIServer")
-            return false
+    private func bootstrapLaunchd(plistPath: String) async -> Bool {
+        let (exitCode, output) = await runLaunchctl(arguments: ["bootstrap", "gui/\(getuid())", plistPath])
+        if exitCode != 0 {
+            AppLogger.shared.warning("launchctl bootstrap failed (exit \(exitCode)): \(output)", category: "APIServer")
         }
+        return exitCode == 0
     }
 
     /// Kickstart the launchd service (restart if already loaded)
-    private func kickstartLaunchd() {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        proc.arguments = ["kickstart", "-kp", "gui/\(getuid())/\(Self.plistLabel)"]
-        do {
-            try proc.run()
-            proc.waitUntilExit()
-        } catch {
-            AppLogger.shared.warning("Failed to kickstart launchd service: \(error.localizedDescription)", category: "APIServer")
+    private func kickstartLaunchd() async {
+        let (exitCode, output) = await runLaunchctl(arguments: ["kickstart", "-kp", "gui/\(getuid())/\(Self.plistLabel)"])
+        if exitCode != 0 {
+            AppLogger.shared.warning("Failed to kickstart launchd service: \(output)", category: "APIServer")
         }
     }
 
     /// Bootout (unload) the launchd service
-    private func stopLaunchd() {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        proc.arguments = ["bootout", "gui/\(getuid())/\(Self.plistLabel)"]
-        do {
-            try proc.run()
-            proc.waitUntilExit()
+    private func stopLaunchd() async {
+        let (exitCode, output) = await runLaunchctl(arguments: ["bootout", "gui/\(getuid())/\(Self.plistLabel)"])
+        if exitCode == 0 {
             logInfo("launchd service booted out", category: "APIServer")
-        } catch {
-            logWarning("Failed to bootout launchd service: \(error.localizedDescription)", category: "APIServer")
+        } else {
+            logWarning("Failed to bootout launchd service: \(output)", category: "APIServer")
         }
     }
 
@@ -360,9 +352,8 @@ final class APIServerManager: ObservableObject {
             let bootout = Process()
             bootout.executableURL = URL(fileURLWithPath: "/bin/launchctl")
             bootout.arguments = ["bootout", "gui/\(uid)/\(label)"]
-            let nullPipe = Pipe()
-            bootout.standardOutput = nullPipe
-            bootout.standardError = nullPipe
+            bootout.standardOutput = nil  // discard output
+            bootout.standardError = nil
             do {
                 try bootout.run()
                 bootout.waitUntilExit()
@@ -545,7 +536,7 @@ final class APIServerManager: ObservableObject {
                     self.process = nil
                     if self.usingLaunchd {
                         // kickstart tells launchd to restart the service
-                        self.kickstartLaunchd()
+                        await self.kickstartLaunchd()
                         try? await Task.sleep(nanoseconds: 3_000_000_000)
                         if await client.checkReachability() {
                             self.isRunning = true

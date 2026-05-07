@@ -59,8 +59,6 @@ struct MainWindowView: View {
         switch appState.selectedSidebarItem {
         case .dashboard:
             StatsView()
-        case .chat:
-            SessionsView()
         case .sessions:
             SessionsView()
         case .documents:
