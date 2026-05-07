@@ -20,6 +20,7 @@ import (
 	"time"
 
 	sdk "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk"
+	"github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/acp"
 	"github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/chat"
 	"github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/graph"
 	sdkprovider "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/provider"
@@ -99,6 +100,14 @@ func New(cfg Config) (*Bridge, error) {
 // Client returns the raw SDK client for advanced operations.
 func (b *Bridge) Client() *sdk.Client {
 	return b.client
+}
+
+// ACP returns an ACP v1 client configured with this bridge's credentials.
+// Uses a separate HTTP client with no timeout for SSE streaming.
+func (b *Bridge) ACP() *acp.Client {
+	return acp.NewClientWithHTTP(b.serverURL, b.apiKey, &http.Client{
+		Timeout: 0, // no timeout for SSE streaming
+	})
 }
 
 // RespondToAgentQuestion submits a response to a pending agent question
@@ -619,6 +628,114 @@ func (b *Bridge) ListDiscordChannelMaps(ctx context.Context) ([]DiscordChannelMa
 		})
 	}
 	return maps, nil
+}
+
+// ============================================================================
+// Session Todo — lightweight task items attached to a session
+// ============================================================================
+
+const sessionTodoType = "SessionTodo"
+
+// SessionTodo is a task item attached to a conversation session.
+type SessionTodo struct {
+	ID        string `json:"id"`
+	SessionID string `json:"session_id"`
+	Content   string `json:"content"`
+	Status    string `json:"status"` // pending, completed, cancelled
+	Order     int    `json:"order"`
+	CreatedAt string `json:"created_at,omitempty"`
+}
+
+// CreateSessionTodo creates a new todo item for a session.
+// Key format: session:<sessionID>:order:<order>
+func (b *Bridge) CreateSessionTodo(ctx context.Context, sessionID, content string, order int) (*SessionTodo, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	key := fmt.Sprintf("session:%s:order:%d", sessionID, order)
+
+	obj, err := b.client.Graph.CreateObject(ctx, &graph.CreateObjectRequest{
+		Type: sessionTodoType,
+		Key:  &key,
+		Properties: map[string]any{
+			"session_id": sessionID,
+			"content":    content,
+			"status":     "pending",
+			"order":      order,
+			"created_at": now,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create session todo: %w", err)
+	}
+	return graphObjectToSessionTodo(obj), nil
+}
+
+// ListSessionTodos returns all todos for a session, ordered by order ascending.
+func (b *Bridge) ListSessionTodos(ctx context.Context, sessionID string) ([]SessionTodo, error) {
+	resp, err := b.client.Graph.ListObjects(ctx, &graph.ListObjectsOptions{
+		Type: sessionTodoType,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list session todos: %w", err)
+	}
+
+	todos := make([]SessionTodo, 0, len(resp.Items))
+	for _, obj := range resp.Items {
+		t := graphObjectToSessionTodo(obj)
+		if t.SessionID == sessionID {
+			todos = append(todos, *t)
+		}
+	}
+
+	sort.Slice(todos, func(i, j int) bool {
+		return todos[i].Order < todos[j].Order
+	})
+	return todos, nil
+}
+
+// UpdateSessionTodo updates the content, status, and/or order of a todo item.
+func (b *Bridge) UpdateSessionTodo(ctx context.Context, todoID string, content, status *string, order *int) (*SessionTodo, error) {
+	props := make(map[string]any)
+	if content != nil {
+		props["content"] = *content
+	}
+	if status != nil {
+		props["status"] = *status
+	}
+	if order != nil {
+		props["order"] = *order
+	}
+	if len(props) == 0 {
+		return nil, fmt.Errorf("no fields to update")
+	}
+
+	obj, err := b.client.Graph.UpdateObject(ctx, todoID, &graph.UpdateObjectRequest{
+		Properties: props,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("update session todo %s: %w", todoID, err)
+	}
+	return graphObjectToSessionTodo(obj), nil
+}
+
+// DeleteSessionTodo removes a todo item.
+func (b *Bridge) DeleteSessionTodo(ctx context.Context, todoID string) error {
+	return b.client.Graph.DeleteObject(ctx, todoID, nil)
+}
+
+func graphObjectToSessionTodo(obj *graph.GraphObject) *SessionTodo {
+	props := obj.Properties
+	order := 0
+	if o, ok := props["order"].(float64); ok {
+		order = int(o)
+	}
+	return &SessionTodo{
+		ID:        obj.EntityID,
+		SessionID: safePropStr(props, "session_id"),
+		Content:   safePropStr(props, "content"),
+		Status:    safePropStr(props, "status"),
+		Order:     order,
+		CreatedAt: safePropStr(props, "created_at"),
+	}
 }
 
 // ============================================================================
