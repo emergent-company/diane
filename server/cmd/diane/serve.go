@@ -191,13 +191,13 @@ func startAutoUpgrade(pc *config.ProjectConfig) {
 		return
 	}
 
-	// Parse check interval (default 6h)
-	interval := 6 * time.Hour
+	// Parse check interval (default 3m)
+	interval := 3 * time.Minute
 	if pc.UpgradeCheckInterval != "" {
 		if d, err := time.ParseDuration(pc.UpgradeCheckInterval); err == nil {
 			interval = d
 		} else {
-			log.Printf("[UPGRADE] Invalid upgrade_check_interval %q: %v — using default 6h", pc.UpgradeCheckInterval, err)
+			log.Printf("[UPGRADE] Invalid upgrade_check_interval %q: %v — using default 3m", pc.UpgradeCheckInterval, err)
 		}
 	}
 

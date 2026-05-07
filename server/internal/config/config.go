@@ -58,7 +58,7 @@ type ProjectConfig struct {
 
 	// Auto-upgrade settings
 	AutoUpgrade          *bool `yaml:"auto_upgrade,omitempty"`          // default: true if nil
-	UpgradeCheckInterval string `yaml:"upgrade_check_interval,omitempty"` // Go duration, default "6h"
+	UpgradeCheckInterval string `yaml:"upgrade_check_interval,omitempty"` // Go duration, default "3m"
 }
 
 // IsMaster returns true if this node is the master (default, backward-compatible).
