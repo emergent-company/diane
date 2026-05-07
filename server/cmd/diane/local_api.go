@@ -46,6 +46,7 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	mux.HandleFunc("/api/chat/send", api.handleChatSend)
 	mux.HandleFunc("/api/mcp-servers", api.handleMCPServers)
 	mux.HandleFunc("/api/nodes", api.handleNodes)
+	mux.HandleFunc("/api/providers", api.handleProviders)
 
 	srv := &localAPIServer{
 		server: &http.Server{
@@ -517,6 +518,28 @@ func (h *apiHandlers) handleNodes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, map[string]any{"nodes": nodes})
+}
+
+// handleProviders returns configured LLM providers from the project config.
+func (h *apiHandlers) handleProviders(w http.ResponseWriter, r *http.Request) {
+	providers := make([]map[string]any, 0, 2)
+
+	if gp := h.pc.GenerativeProvider; gp != nil {
+		providers = append(providers, map[string]any{
+			"provider":        gp.Provider,
+			"baseUrl":         gp.BaseURL,
+			"generativeModel": gp.Model,
+		})
+	}
+	if ep := h.pc.EmbeddingProvider; ep != nil {
+		providers = append(providers, map[string]any{
+			"provider":        ep.Provider,
+			"baseUrl":         ep.BaseURL,
+			"generativeModel": ep.Model,
+		})
+	}
+
+	writeJSON(w, map[string]any{"providers": providers})
 }
 
 // GET /api/stats — agent run statistics from the Memory Platform.
