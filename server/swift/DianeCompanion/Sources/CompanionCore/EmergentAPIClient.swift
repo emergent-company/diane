@@ -4,7 +4,7 @@ import Foundation
 /// exposed via the EmergentKit Swift Package CGO bridge.
 ///
 /// This covers: projects, stats, traces (extraction jobs), workers,
-/// graph objects, agents, MCP servers, and user profile.
+/// graph objects, agents, MCP servers, user profile, and ACP streaming chat.
 @MainActor
 final class EmergentAPIClient: ObservableObject {
 
@@ -29,6 +29,288 @@ final class EmergentAPIClient: ObservableObject {
         } else {
             baseURL = URL(string: serverURL)
             logInfo("APIClient: configured for \(serverURL)", category: "APIClient")
+        }
+    }
+
+    // MARK: - ACP v1 Streaming Chat (Direct to Memory Platform)
+
+    /// ACP session object returned by /acp/v1/sessions
+    private struct ACPSessionResponse: Decodable {
+        let id: String
+    }
+
+    /// Creates an ACP session for the given agent.
+    /// POST /acp/v1/sessions { agent_name: "..." }
+    func createACPSession(agentName: String) async throws -> String {
+        guard let base = baseURL else {
+            throw EmergentAPIError.notConfigured
+        }
+        guard let url = URL(string: "/acp/v1/sessions", relativeTo: base) else {
+            throw EmergentAPIError.invalidURL("/acp/v1/sessions")
+        }
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        setACPHeaders(&req)
+        req.httpBody = try JSONEncoder().encode(["agent_name": agentName])
+
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw EmergentAPIError.network("No HTTP response")
+        }
+        guard http.statusCode == 200 else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            logError("ACP: create session failed (\(http.statusCode)): \(body)", category: "ACP")
+            throw EmergentAPIError.httpError(http.statusCode)
+        }
+
+        let sessionResp = try JSONDecoder().decode(ACPSessionResponse.self, from: data)
+        logInfo("ACP: created session \(sessionResp.id.prefix(12))", category: "ACP")
+        return sessionResp.id
+    }
+
+    /// Stream a chat message directly to the ACP SSE endpoint.
+    /// POST /acp/v1/agents/:name/runs with mode=stream
+    ///
+    /// ACP SSE format:
+    ///   event: run.created
+    ///   data: {"run":{...}}
+    ///
+    ///   event: message.part
+    ///   data: {"part":{"content":"...","content_type":"text/plain"}}
+    ///
+    ///   event: run.completed
+    ///   data: {"run":{"run_id":"...","status":"completed"}}
+    func streamACP(agentName: String, sessionID: String, content: String) -> AsyncThrowingStream<StreamChatEvent, Error> {
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                guard let base = self.baseURL else {
+                    continuation.finish(throwing: EmergentAPIError.notConfigured)
+                    return
+                }
+                guard let url = URL(string: "/acp/v1/agents/\(agentName)/runs", relativeTo: base) else {
+                    continuation.finish(throwing: EmergentAPIError.invalidURL("/acp/v1/agents/\(agentName)/runs"))
+                    return
+                }
+
+                let body: [String: Any] = [
+                    "mode": "stream",
+                    "session_id": sessionID,
+                    "message": [
+                        ["content_type": "text/plain", "content": content]
+                    ]
+                ]
+                guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else {
+                    continuation.finish(throwing: EmergentAPIError.network("Failed to serialize request"))
+                    return
+                }
+
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.httpBody = jsonData
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                request.timeoutInterval = 300
+                self.setACPHeaders(&request)
+
+                do {
+                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    guard let http = response as? HTTPURLResponse else {
+                        continuation.finish(throwing: EmergentAPIError.network("No HTTP response"))
+                        return
+                    }
+                    guard http.statusCode == 200 else {
+                        let bodyStr = try? await String(data: Data(Array(try await URLSession.shared.data(for: request).0)), encoding: .utf8)
+                        continuation.finish(throwing: EmergentAPIError.httpError(http.statusCode))
+                        return
+                    }
+
+                    var currentEvent: String? = nil
+                    var tokenCount = 0
+                    var hadDone = false
+                    var hadError = false
+                    var runID: String? = nil
+
+                    for try await line in bytes.lines {
+                        if line.hasPrefix("event: ") {
+                            // Save the event type from the SSE event header
+                            currentEvent = String(line.dropFirst(7))
+                        } else if line.hasPrefix("data: ") {
+                            let jsonStr = String(line.dropFirst(6))
+
+                            if jsonStr == "[DONE]" {
+                                break
+                            }
+
+                            guard let data = jsonStr.data(using: .utf8),
+                                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                                continue
+                            }
+
+                            let eventType = currentEvent ?? ""
+                            currentEvent = nil // reset after consuming
+
+                            switch eventType {
+                            case "run.created":
+                                if let run = json["run"] as? [String: Any],
+                                   let rid = run["run_id"] as? String {
+                                    runID = rid
+                                }
+
+                            case "run.in-progress":
+                                // Stream is active — no UI event needed
+                                break
+
+                            case "message.part":
+                                guard let part = json["part"] as? [String: Any],
+                                      let contentType = part["content_type"] as? String else {
+                                    continue
+                                }
+                                switch contentType {
+                                case "text/plain":
+                                    if let content = part["content"] as? String, !content.isEmpty {
+                                        tokenCount += 1
+                                        continuation.yield(StreamChatEvent(
+                                            type: "token",
+                                            content: content,
+                                            name: nil,
+                                            role: nil,
+                                            sessionID: sessionID,
+                                            runID: runID,
+                                            message: nil
+                                        ))
+                                    }
+                                case "application/json":
+                                    if let meta = part["metadata"] as? [String: Any],
+                                       let kind = meta["kind"] as? String,
+                                       kind == "trajectory" {
+                                        let toolName = meta["tool_name"] as? String ?? "unknown"
+                                        let hasOutput = meta["tool_output"] != nil
+                                        continuation.yield(StreamChatEvent(
+                                            type: hasOutput ? "tool_result" : "tool_call",
+                                            content: nil,
+                                            name: toolName,
+                                            role: nil,
+                                            sessionID: sessionID,
+                                            runID: runID,
+                                            message: nil
+                                        ))
+                                    }
+                                default:
+                                    break
+                                }
+
+                            case "message.created":
+                                if let msg = json["message"] as? [String: Any] {
+                                    let role = msg["role"] as? String ?? ""
+                                    let parts = msg["parts"] as? [[String: Any]] ?? []
+                                    let textContent = parts.compactMap { p -> String? in
+                                        guard let ct = p["content_type"] as? String, ct == "text/plain" else { return nil }
+                                        return p["content"] as? String
+                                    }.joined()
+                                    continuation.yield(StreamChatEvent(
+                                        type: "message",
+                                        content: textContent.isEmpty ? nil : textContent,
+                                        name: nil,
+                                        role: role.isEmpty ? nil : role,
+                                        sessionID: sessionID,
+                                        runID: runID,
+                                        message: nil
+                                    ))
+                                }
+
+                            case "run.completed":
+                                hadDone = true
+                                continuation.yield(StreamChatEvent(
+                                    type: "done",
+                                    content: nil,
+                                    name: nil,
+                                    role: nil,
+                                    sessionID: sessionID,
+                                    runID: runID,
+                                    message: nil
+                                ))
+
+                            case "run.failed", "run.cancelled":
+                                hadError = true
+                                var errMsg = eventType
+                                if let run = json["run"] as? [String: Any],
+                                   let err = run["error"] as? [String: Any],
+                                   let m = err["message"] as? String {
+                                    errMsg = m
+                                }
+                                continuation.yield(StreamChatEvent(
+                                    type: "error",
+                                    content: nil,
+                                    name: nil,
+                                    role: nil,
+                                    sessionID: sessionID,
+                                    runID: runID,
+                                    message: errMsg
+                                ))
+
+                            case "error":
+                                hadError = true
+                                var errMsg = "stream error"
+                                if let e = json["error"] as? [String: Any],
+                                   let m = e["message"] as? String {
+                                    errMsg = m
+                                }
+                                continuation.yield(StreamChatEvent(
+                                    type: "error",
+                                    content: nil,
+                                    name: nil,
+                                    role: nil,
+                                    sessionID: sessionID,
+                                    runID: runID,
+                                    message: errMsg
+                                ))
+
+                            default:
+                                // Unknown event type — skip
+                                break
+                            }
+
+                            if hadDone || hadError {
+                                break
+                            }
+                        }
+                        // Empty lines separate SSE events — event type carries over
+                    }
+
+                    // Post-stream diagnostics
+                    if !hadDone && !hadError {
+                        logWarning("ACP stream ended without done/error (tokens=\(tokenCount))", category: "ACP")
+                    }
+                    logInfo("ACP stream complete: tokens=\(tokenCount) done=\(hadDone) error=\(hadError)", category: "ACP")
+
+                    continuation.finish()
+
+                } catch {
+                    if Task.isCancelled {
+                        continuation.finish()
+                        return
+                    }
+                    logError("ACP stream error: \(error.localizedDescription)", category: "ACP")
+                    continuation.finish(throwing: EmergentAPIError.network(error.localizedDescription))
+                }
+            }
+
+            continuation.onTermination = { @Sendable _ in
+                task.cancel()
+            }
+        }
+    }
+
+    // MARK: - ACP auth helper
+
+    private func setACPHeaders(_ req: inout URLRequest) {
+        if !apiKey.isEmpty {
+            if apiKey.hasPrefix("emt_") {
+                req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            } else {
+                req.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+            }
         }
     }
 
@@ -333,7 +615,7 @@ final class EmergentAPIClient: ObservableObject {
     }
 
     // MARK: - Diane Sessions
-    
+
     func fetchSessions(projectID: String, limit: Int = 50) async throws -> [DianeSession] {
         // Uses the Memory Platform's dedicated session API (same endpoints Diane's Go SDK uses internally)
         let path = "/api/graph/sessions?limit=\(limit)"
@@ -344,7 +626,7 @@ final class EmergentAPIClient: ObservableObject {
         }
         return (try? JSONDecoder().decode([DianeSession].self, from: data)) ?? []
     }
-    
+
     func fetchSessionMessages(projectID: String, sessionID: String, limit: Int = 200) async throws -> [DianeMessage] {
         let encoded = sessionID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionID
         let data = try await get("/api/graph/sessions/\(encoded)/messages?limit=\(limit)", projectID: projectID)
@@ -354,7 +636,7 @@ final class EmergentAPIClient: ObservableObject {
         }
         return (try? JSONDecoder().decode([DianeMessage].self, from: data)) ?? []
     }
-    
+
     // MARK: - Document Upload
 
     /// Upload a file to the Emergent platform. The upload endpoint returns `name` instead of

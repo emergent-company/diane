@@ -348,9 +348,17 @@ func installBinary(downloadURL, assetName, symlinkPath, binDir string) {
 		}
 	}
 
+	// Write new binary to temp file, then atomically rename
+	// os.Rename() works on Linux even when the target is running
+	// (unlike os.WriteFile which gets "text file busy").
 	os.MkdirAll(filepath.Dir(realTarget), 0755)
-	if err := os.WriteFile(realTarget, input, 0755); err != nil {
+	tmpTarget := realTarget + ".new"
+	if err := os.WriteFile(tmpTarget, input, 0755); err != nil {
 		exitErr("Failed to install binary: %v", err)
+	}
+	if err := os.Rename(tmpTarget, realTarget); err != nil {
+		os.Remove(tmpTarget)
+		exitErr("Failed to install binary (rename): %v", err)
 	}
 	fmt.Printf("   Binary: %s\n", realTarget)
 

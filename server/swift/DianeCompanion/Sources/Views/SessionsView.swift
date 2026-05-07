@@ -7,13 +7,16 @@ struct SessionsView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var serverConfig: ServerConfiguration
     @EnvironmentObject var dianeAPI: DianeAPIClient
+    @EnvironmentObject var apiClient: EmergentAPIClient
 
     @State private var sessions: [DianeSession] = []
     @State private var selectedSession: DianeSession? = nil
     @State private var messages: [DianeMessage] = []
     @State private var sessionDetail: SessionDetailResponse? = nil
     @State private var isLoading = false
+    @State private var acpSessionID: String? = nil
     @State private var isLoadingMessages = false
+    @State private var selectedAgent: String = "diane-default"
     @State private var isLoadingDetail = false
     @State private var error: String? = nil
     @State private var messagesError: String? = nil
@@ -1206,10 +1209,14 @@ struct SessionsView: View {
         var toolCallsBuffer: [ToolCall] = []
 
         do {
-            let stream = dianeAPI.streamChatMessage(
-                sessionID: currentID,
-                content: text,
-                agentName: selectedAgent
+            // Direct ACP: create session if needed
+            if acpSessionID == nil {
+                acpSessionID = try await apiClient.createACPSession(agentName: selectedAgent)
+            }
+            let stream = apiClient.streamACP(
+                agentName: selectedAgent,
+                sessionID: acpSessionID!,
+                content: text
             )
 
             for try await event in stream {
@@ -1419,5 +1426,6 @@ private struct PlainDisclosureGroupStyle: DisclosureGroupStyle {
         .environmentObject(AppState())
         .environmentObject(ServerConfiguration())
         .environmentObject(DianeAPIClient())
+        .environmentObject(EmergentAPIClient())
         .frame(width: 800, height: 600)
 }
