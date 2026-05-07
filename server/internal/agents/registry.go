@@ -896,6 +896,62 @@ func SeedBuiltInAgents(ctx context.Context, client *sdk.Client) error {
 	return nil
 }
 
+// SeedAgentList seeds a list of BuiltInAgent definitions to Memory Platform.
+// Unlike SeedBuiltInAgents, this accepts a custom agent list (after overrides
+// and tool pattern merges have been applied).
+func SeedAgentList(ctx context.Context, client *sdk.Client, agents []BuiltInAgent) error {
+	// Fetch existing agent definitions from MP
+	resp, err := client.AgentDefinitions.List(ctx)
+	if err != nil {
+		return fmt.Errorf("list existing agent defs: %w", err)
+	}
+
+	// Index existing by name
+	existing := make(map[string]string) // name → ID
+	if resp != nil {
+		for _, d := range resp.Data {
+			existing[d.Name] = d.ID
+		}
+	}
+
+	for _, ba := range agents {
+		req := toCreateRequest(ba)
+		defID, exists := existing[ba.Name]
+
+		if exists {
+			// Update — preserve existing ID, update fields
+			updReq := toUpdateRequest(ba)
+			_, err := client.AgentDefinitions.Update(ctx, defID, updReq)
+			if err != nil {
+				return fmt.Errorf("update built-in agent %s: %w", ba.Name, err)
+			}
+		} else {
+			// Create
+			defResp, err := client.AgentDefinitions.Create(ctx, req)
+			if err != nil {
+				return fmt.Errorf("create built-in agent %s: %w", ba.Name, err)
+			}
+
+			// Set workspace config if sandbox is enabled
+			if ba.Sandbox != nil && ba.Sandbox.Enabled && defResp != nil {
+				sbConfig := map[string]any{
+					"enabled":    true,
+					"baseImage":  ba.Sandbox.BaseImage,
+					"pullPolicy": ba.Sandbox.PullPolicy,
+				}
+				if ba.Sandbox.Env != nil {
+					sbConfig["env"] = ba.Sandbox.Env
+				}
+				if _, err := client.AgentDefinitions.SetWorkspaceConfig(ctx, defResp.Data.ID, sbConfig); err != nil {
+					return fmt.Errorf("set workspace config for %s: %w", ba.Name, err)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

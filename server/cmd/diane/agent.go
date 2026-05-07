@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"sort"
 	"strings"
@@ -514,12 +515,21 @@ func cmdAgentSync(name string) {
 }
 
 func doAgentSync(name string, cfg *config.Config, pc *config.ProjectConfig) {
-	// First seed built-in agents (ensure immutable agents are up to date)
+	// First seed built-in agents with graph configs (overrides + tool configs)
+	// This ensures immutable agents are up to date with any graph config changes.
 	seedCtx, seedCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer seedCancel()
 	seedBridge, err := newBridge(pc)
 	if err == nil {
 		fmt.Print("📦 Seeding built-in agents... ")
-		if err := agents.SeedBuiltInAgents(seedCtx, seedBridge.Client()); err != nil {
+
+		builtIns, buildErr := agents.BuildMergedAgents(seedCtx, seedBridge.Client().Graph)
+		if buildErr != nil {
+			// Fall back to raw built-in agents if graph read fails
+			log.Printf("[agent-sync] BuildMergedAgents failed (non-fatal): %v", buildErr)
+			builtIns = agents.BuiltInAgents()
+		}
+		if err := agents.SeedAgentList(seedCtx, seedBridge.Client(), builtIns); err != nil {
 			fmt.Printf("⚠️  %v\n", err)
 		} else {
 			fmt.Println("✅")
@@ -598,14 +608,67 @@ func cmdAgentSeed() {
 	}
 	defer bridge.Close()
 
+	// Read graph override configs
+	fmt.Println("🔍 Reading AgentOverrideConfig from graph...")
+	overrides, err := agents.ReadAgentOverrideConfigs(ctx, bridge.Client().Graph)
+	if err != nil {
+		fmt.Printf("⚠️  Could not read override configs (non-fatal): %v\n", err)
+	} else if len(overrides) > 0 {
+		for agentName, oc := range overrides {
+			if oc.SystemPrompt != "" {
+				fmt.Printf("  • %s: overrides system_prompt (%d chars)\n", agentName, len(oc.SystemPrompt))
+			}
+			if len(oc.Skills) > 0 {
+				fmt.Printf("  • %s: overrides skills (%d)\n", agentName, len(oc.Skills))
+			}
+			if oc.ModelProvider != "" || oc.ModelName != "" {
+				fmt.Printf("  • %s: overrides model\n", agentName)
+			}
+			if oc.MaxSteps > 0 {
+				fmt.Printf("  • %s: overrides max_steps → %d\n", agentName, oc.MaxSteps)
+			}
+			if oc.Timeout > 0 {
+				fmt.Printf("  • %s: overrides timeout → %d\n", agentName, oc.Timeout)
+			}
+			if oc.Visibility != "" {
+				fmt.Printf("  • %s: overrides visibility → %s\n", agentName, oc.Visibility)
+			}
+			if oc.SandboxEnabled != nil {
+				fmt.Printf("  • %s: overrides sandbox_enabled → %v\n", agentName, *oc.SandboxEnabled)
+			}
+		}
+	} else {
+		fmt.Println("  (none found)")
+	}
+	fmt.Println()
+
+	// Read graph tool configs
+	fmt.Println("🔍 Reading AgentToolConfig from graph...")
+	configs, cfgErr := agents.ReadAgentToolConfigs(ctx, bridge.Client().Graph)
+	if cfgErr == nil && len(configs) > 0 {
+		for agentName, patterns := range configs {
+			fmt.Printf("  • %s: %d tool pattern(s)\n", agentName, len(patterns))
+		}
+	} else {
+		fmt.Println("  (none found)")
+	}
+	fmt.Println()
+
+	// Build merged agents: built-in → overrides → tool patterns
 	builtIns := agents.BuiltInAgents()
-	fmt.Printf("Found %d built-in agent(s):\n", len(builtIns))
+	if len(overrides) > 0 {
+		builtIns = agents.ApplyOverrides(builtIns, overrides)
+	}
+	if len(configs) > 0 {
+		builtIns = agents.MergeToolPatterns(builtIns, configs)
+	}
+	fmt.Printf("Seeding %d built-in agent(s):\n", len(builtIns))
 	for _, ba := range builtIns {
 		fmt.Printf("  • %s — %s\n", ba.Name, ba.Description)
 	}
 	fmt.Println()
 
-	if err := agents.SeedBuiltInAgents(ctx, bridge.Client()); err != nil {
+	if err := agents.SeedAgentList(ctx, bridge.Client(), builtIns); err != nil {
 		fmt.Printf("❌ Seeding failed: %v\n", err)
 		return
 	}

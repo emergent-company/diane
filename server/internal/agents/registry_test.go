@@ -16,7 +16,7 @@ import (
 func TestBuiltInAgentsCount(t *testing.T) {
 	list := agents.BuiltInAgents()
 	if len(list) != 8 {
-		t.Errorf("BuiltInAgents() returned %d agents, want 8", len(list))
+		t.Errorf("BuiltInAgents() returned %d agents, want 11", len(list))
 	}
 }
 
