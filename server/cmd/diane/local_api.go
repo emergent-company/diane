@@ -53,10 +53,11 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	mux.HandleFunc("/api/nodes", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleNodes(w, r) })
 	mux.HandleFunc("/api/providers", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleProviders(w, r) })
 	mux.HandleFunc("/api/agents", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleAgents(w, r) })
+	mux.HandleFunc("/api/agents/", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleAgentSubRoutes(w, r) })
 	mux.HandleFunc("/api/schema", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleSchema(w, r) })
 	mux.HandleFunc("/api/schema/objects/", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleSchemaObjects(w, r) })
 
-	expected := 14
+	expected := 15
 	if registered != expected {
 		log.Printf("[LOCAL-API] WARNING: registered %d routes, expected %d — check for missing handlers", registered, expected)
 	}
@@ -209,6 +210,373 @@ func (h *apiHandlers) handleCreateAgent(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSON(w, resp.Data)
+}
+
+// ── Agent Sub-Route Handlers (seed, override) ──
+
+// handleAgentSubRoutes dispatches /api/agents/* requests.
+// Routes:
+//
+//	POST /api/agents/seed                  → trigger re-seed
+//	GET  /api/agents/{name}/override       → fetch override config
+//	PUT  /api/agents/{name}/override       → save/upsert override config
+//	DELETE /api/agents/{name}/override     → delete override config (restore defaults)
+func (h *apiHandlers) handleAgentSubRoutes(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/agents/")
+	parts := strings.SplitN(path, "/", 2)
+	if len(parts) == 0 || parts[0] == "" {
+		jsonError(w, http.StatusBadRequest, "invalid agent path")
+		return
+	}
+
+	first := parts[0]
+	if first == "seed" {
+		if r.Method != http.MethodPost {
+			jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		h.handleSeedAgents(w, r)
+		return
+	}
+
+	// /api/agents/{name}/override
+	if len(parts) < 2 || parts[1] != "override" {
+		jsonError(w, http.StatusNotFound, "not found")
+		return
+	}
+	agentName := parts[0]
+
+	switch r.Method {
+	case http.MethodGet:
+		h.handleGetAgentOverride(w, r, agentName)
+	case http.MethodPut:
+		h.handleSaveAgentOverride(w, r, agentName)
+	case http.MethodDelete:
+		h.handleDeleteAgentOverride(w, r, agentName)
+	default:
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+// handleSeedAgents triggers a re-seed of built-in agents.
+func (h *apiHandlers) handleSeedAgents(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	memCfg := memory.Config{
+		ServerURL:         h.pc.ServerURL,
+		APIKey:            h.pc.Token,
+		ProjectID:         h.pc.ProjectID,
+		OrgID:             h.pc.OrgID,
+		HTTPClientTimeout: 30 * time.Second,
+	}
+
+	if err := seedBuiltInAgentsFromGraph(ctx, memCfg); err != nil {
+		jsonError(w, http.StatusInternalServerError, "seed: "+err.Error())
+		return
+	}
+
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+// handleGetAgentOverride returns the override config for a built-in agent.
+func (h *apiHandlers) handleGetAgentOverride(w http.ResponseWriter, r *http.Request, agentName string) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "bridge: "+err.Error())
+		return
+	}
+	defer bridge.Close()
+
+	gc := bridge.Client().Graph
+	resp, err := gc.ListObjects(ctx, &graph.ListObjectsOptions{
+		Type:  "AgentOverrideConfig",
+		Limit: 50,
+	})
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "list overrides: "+err.Error())
+		return
+	}
+
+	// Find the matching entity
+	for _, obj := range resp.Items {
+		if obj.Properties == nil {
+			continue
+		}
+		name, _ := obj.Properties["agent_name"].(string)
+		if name == agentName {
+			// Build a clean override config from properties
+			override := buildOverrideFromProperties(obj.Properties)
+			writeJSON(w, map[string]any{"overrides": override})
+			return
+		}
+	}
+
+	// No override found — return empty
+	writeJSON(w, map[string]any{"overrides": nil})
+}
+
+// handleSaveAgentOverride upserts an override config for a built-in agent.
+func (h *apiHandlers) handleSaveAgentOverride(w http.ResponseWriter, r *http.Request, agentName string) {
+	var req struct {
+		SystemPrompt     string   `json:"system_prompt,omitempty"`
+		Skills           []string `json:"skills,omitempty"`
+		ModelProvider    string   `json:"model_provider,omitempty"`
+		ModelName        string   `json:"model_name,omitempty"`
+		ModelTemperature float64  `json:"model_temperature,omitempty"`
+		ModelMaxTokens   int      `json:"model_max_tokens,omitempty"`
+		MaxSteps         int      `json:"max_steps,omitempty"`
+		Timeout          int      `json:"timeout,omitempty"`
+		Visibility       string   `json:"visibility,omitempty"`
+		SandboxEnabled   *bool    `json:"sandbox_enabled,omitempty"`
+		Disabled         bool     `json:"disabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "bridge: "+err.Error())
+		return
+	}
+	defer bridge.Close()
+
+	gc := bridge.Client().Graph
+
+	// Build properties map
+	props := map[string]any{
+		"agent_name": agentName,
+	}
+	if req.SystemPrompt != "" {
+		props["system_prompt"] = req.SystemPrompt
+	}
+	if len(req.Skills) > 0 {
+		props["skills"] = req.Skills
+	}
+	if req.ModelProvider != "" {
+		props["model_provider"] = req.ModelProvider
+	}
+	if req.ModelName != "" {
+		props["model_name"] = req.ModelName
+	}
+	if req.ModelTemperature != 0 {
+		props["model_temperature"] = req.ModelTemperature
+	}
+	if req.ModelMaxTokens != 0 {
+		props["model_max_tokens"] = req.ModelMaxTokens
+	}
+	if req.MaxSteps > 0 {
+		props["max_steps"] = req.MaxSteps
+	}
+	if req.Timeout > 0 {
+		props["timeout"] = req.Timeout
+	}
+	if req.Visibility != "" {
+		props["visibility"] = req.Visibility
+	}
+	if req.SandboxEnabled != nil {
+		props["sandbox_enabled"] = *req.SandboxEnabled
+	}
+	props["disabled"] = req.Disabled
+
+	// Look for existing entity to update
+	resp, err := gc.ListObjects(ctx, &graph.ListObjectsOptions{
+		Type:  "AgentOverrideConfig",
+		Limit: 50,
+	})
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "list overrides: "+err.Error())
+		return
+	}
+
+	for _, obj := range resp.Items {
+		if obj.Properties == nil {
+			continue
+		}
+		name, _ := obj.Properties["agent_name"].(string)
+		if name == agentName {
+			// Update existing
+			_, err := gc.UpdateObject(ctx, obj.EntityID, &graph.UpdateObjectRequest{
+				Properties: props,
+			})
+			if err != nil {
+				jsonError(w, http.StatusInternalServerError, "update override: "+err.Error())
+				return
+			}
+			writeJSON(w, map[string]any{"ok": true, "action": "updated"})
+			return
+		}
+	}
+
+	// Create new
+	_, err = gc.CreateObject(ctx, &graph.CreateObjectRequest{
+		Type:       "AgentOverrideConfig",
+		Properties: props,
+	})
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "create override: "+err.Error())
+		return
+	}
+
+	writeJSON(w, map[string]any{"ok": true, "action": "created"})
+}
+
+// handleDeleteAgentOverride removes the override config for a built-in agent.
+func (h *apiHandlers) handleDeleteAgentOverride(w http.ResponseWriter, r *http.Request, agentName string) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "bridge: "+err.Error())
+		return
+	}
+	defer bridge.Close()
+
+	gc := bridge.Client().Graph
+	resp, err := gc.ListObjects(ctx, &graph.ListObjectsOptions{
+		Type:  "AgentOverrideConfig",
+		Limit: 50,
+	})
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "list overrides: "+err.Error())
+		return
+	}
+
+	for _, obj := range resp.Items {
+		if obj.Properties == nil {
+			continue
+		}
+		name, _ := obj.Properties["agent_name"].(string)
+		if name == agentName {
+			if err := gc.DeleteObject(ctx, obj.EntityID, nil); err != nil {
+				jsonError(w, http.StatusInternalServerError, "delete override: "+err.Error())
+				return
+			}
+			writeJSON(w, map[string]any{"ok": true})
+			return
+		}
+	}
+
+	// No override found — nothing to delete, still success
+	writeJSON(w, map[string]any{"ok": true, "note": "no override to delete"})
+}
+
+// buildOverrideFromProperties reads an AgentOverrideConfig from graph properties.
+func buildOverrideFromProperties(props map[string]any) map[string]any {
+	out := map[string]any{
+		"agent_name": propStr(props, "agent_name"),
+	}
+	if v := propStr(props, "system_prompt"); v != "" {
+		out["system_prompt"] = v
+	}
+	if v := propStr(props, "model_provider"); v != "" {
+		out["model_provider"] = v
+	}
+	if v := propStr(props, "model_name"); v != "" {
+		out["model_name"] = v
+	}
+	if v := propStr(props, "visibility"); v != "" {
+		out["visibility"] = v
+	}
+	if v := propFloat(props, "model_temperature"); v != 0 {
+		out["model_temperature"] = v
+	}
+	if v := propInt(props, "model_max_tokens"); v != 0 {
+		out["model_max_tokens"] = v
+	}
+	if v := propInt(props, "max_steps"); v != 0 {
+		out["max_steps"] = v
+	}
+	if v := propInt(props, "timeout"); v != 0 {
+		out["timeout"] = v
+	}
+	if v := propBool(props, "disabled"); v {
+		out["disabled"] = true
+	}
+	if v := propBoolPtr(props, "sandbox_enabled"); v != nil {
+		out["sandbox_enabled"] = *v
+	}
+	// Skills array
+	if raw, ok := props["skills"]; ok {
+		if arr, ok := raw.([]any); ok {
+			skills := make([]string, 0, len(arr))
+			for _, s := range arr {
+				if str, ok := s.(string); ok {
+					skills = append(skills, str)
+				}
+			}
+			if len(skills) > 0 {
+				out["skills"] = skills
+			}
+		}
+	}
+	return out
+}
+
+// ── Property extraction helpers for graph object properties ──
+
+func propStr(props map[string]any, key string) string {
+	if props == nil {
+		return ""
+	}
+	v, _ := props[key].(string)
+	return v
+}
+
+func propFloat(props map[string]any, key string) float64 {
+	if props == nil {
+		return 0
+	}
+	v, ok := props[key]
+	if !ok {
+		return 0
+	}
+	f, _ := v.(float64)
+	return f
+}
+
+func propInt(props map[string]any, key string) int {
+	if props == nil {
+		return 0
+	}
+	v, ok := props[key]
+	if !ok {
+		return 0
+	}
+	f, _ := v.(float64)
+	return int(f)
+}
+
+func propBool(props map[string]any, key string) bool {
+	if props == nil {
+		return false
+	}
+	v, _ := props[key].(bool)
+	return v
+}
+
+func propBoolPtr(props map[string]any, key string) *bool {
+	if props == nil {
+		return nil
+	}
+	v, ok := props[key]
+	if !ok {
+		return nil
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return nil
+	}
+	return &b
 }
 
 // handleStatus returns server status including version and config info.
