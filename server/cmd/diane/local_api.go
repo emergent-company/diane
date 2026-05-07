@@ -47,6 +47,7 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	mux.HandleFunc("/api/mcp-servers", api.handleMCPServers)
 	mux.HandleFunc("/api/nodes", api.handleNodes)
 	mux.HandleFunc("/api/providers", api.handleProviders)
+	mux.HandleFunc("/api/agents", api.handleAgents)
 
 	srv := &localAPIServer{
 		server: &http.Server{
@@ -88,6 +89,114 @@ func (h *apiHandlers) bridge(ctx context.Context) (*memory.Bridge, error) {
 		OrgID:             h.pc.OrgID,
 		HTTPClientTimeout: 10 * time.Second,
 	})
+}
+
+// ── Agent handlers ──
+
+// handleAgents routes /api/agents requests.
+func (h *apiHandlers) handleAgents(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		h.handleListAgents(w, r)
+	case http.MethodPost:
+		h.handleCreateAgent(w, r)
+	default:
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+// handleListAgents lists all agent definitions via the bridge.
+func (h *apiHandlers) handleListAgents(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "bridge: "+err.Error())
+		return
+	}
+	defer bridge.Close()
+
+	defs, err := bridge.ListAgentDefs(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "list agents: "+err.Error())
+		return
+	}
+
+	type agentJSON struct {
+		ID          string `json:"id"`
+		Name        string `json:"name"`
+		Description string `json:"description,omitempty"`
+		FlowType    string `json:"flow_type"`
+		Visibility  string `json:"visibility"`
+		IsDefault   bool   `json:"is_default"`
+		ToolCount   int    `json:"tool_count"`
+		CreatedAt   string `json:"created_at,omitempty"`
+		UpdatedAt   string `json:"updated_at,omitempty"`
+	}
+
+	items := make([]agentJSON, 0, len(defs.Data))
+	for _, d := range defs.Data {
+		desc := ""
+		if d.Description != nil {
+			desc = *d.Description
+		}
+		items = append(items, agentJSON{
+			ID:          d.ID,
+			Name:        d.Name,
+			Description: desc,
+			FlowType:    d.FlowType,
+			Visibility:  d.Visibility,
+			IsDefault:   d.IsDefault,
+			ToolCount:   d.ToolCount,
+			CreatedAt:   d.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:   d.UpdatedAt.Format(time.RFC3339),
+		})
+	}
+
+	writeJSON(w, map[string]any{
+		"agents": items,
+		"total":  len(items),
+	})
+}
+
+// handleCreateAgent creates a new user-defined agent definition.
+func (h *apiHandlers) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	var req sdkagents.CreateAgentDefinitionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if req.Name == "" {
+		jsonError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+
+	// Apply defaults
+	if req.Visibility == "" {
+		req.Visibility = "project"
+	}
+	if req.FlowType == "" {
+		req.FlowType = "standard"
+	}
+
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "bridge: "+err.Error())
+		return
+	}
+	defer bridge.Close()
+
+	resp, err := bridge.CreateAgentDef(ctx, &req)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "create agent: "+err.Error())
+		return
+	}
+
+	writeJSON(w, resp.Data)
 }
 
 // handleStatus returns server status including version and config info.
