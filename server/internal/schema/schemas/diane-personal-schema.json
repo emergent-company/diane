@@ -1182,5 +1182,38 @@
       "description": "An insurance policy"
     },
     "enabled": true
+  },
+  {
+    "type_name": "SessionTodo",
+    "description": "Task items attached to a conversation session",
+    "json_schema": {
+      "label": "Session Todo",
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "The session this todo belongs to"
+        },
+        "content": {
+          "type": "string",
+          "description": "Todo item text"
+        },
+        "status": {
+          "type": "string",
+          "description": "Status: pending, completed, cancelled",
+          "enum": ["pending", "completed", "cancelled"]
+        },
+        "order": {
+          "type": "integer",
+          "description": "Display order / priority"
+        },
+        "created_at": {
+          "type": "string",
+          "description": "Creation timestamp (RFC3339)"
+        }
+      },
+      "description": "A task item attached to a session"
+    },
+    "enabled": true
   }
 ]

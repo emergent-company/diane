@@ -131,11 +131,10 @@ type ActiveChannel struct {
 // JSON-serializable for persistence across bot restarts.
 // DO NOT add non-serializable fields here.
 type ChannelSession struct {
-	ChannelID    string    `json:"channel_id"`
-	SessionID    string    `json:"session_id,omitempty"`
-	Conversation string    `json:"conversation,omitempty"`
-	AgentType    string    `json:"agent_type,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
+	ChannelID string    `json:"channel_id"`
+	SessionID string    `json:"session_id,omitempty"`
+	AgentType string    `json:"agent_type,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Known agent types for session routing.
@@ -261,10 +260,10 @@ func (b *Bot) Start() error {
 
 	log.Println("✅ Discord bot connected. Press Ctrl+C to exit.")
 
-	// Load persisted sessions (channel→session mappings survive restarts)
-	b.loadSessionsFromDB()
+	// Load persisted sessions from Memory Platform (channel→session mappings survive restarts)
+	b.loadSessionsFromMP(context.Background())
 	if len(b.sessions) > 0 {
-		log.Printf("[SES] %d session(s) restored from disk", len(b.sessions))
+		log.Printf("[SES] %d channel→session mapping(s) restored from MP", len(b.sessions))
 	}
 
 	// Load persisted ask_channel config
@@ -1078,7 +1077,7 @@ func (b *Bot) sendResponse(channelID string, m *discordgo.Message, start time.Ti
 // ctx must be a cancellable context passed down from the active guard.
 func (b *Bot) buildAndSendResponse(ctx context.Context, m *discordgo.Message, responseChannel string) string {
 	// Get or create session for this response channel (thread or parent channel)
-	cs := b.getOrCreateSession(responseChannel, b.detectAgentType(m.Content))
+	cs := b.getOrCreateSession(ctx, responseChannel, b.detectAgentType(m.Content))
 	log.Printf("[SES] response_channel=%s session=%s agent=%s", responseChannel, cs.SessionID, cs.AgentType)
 
 	// Determine which MP agent to use
@@ -1105,7 +1104,7 @@ func (b *Bot) buildAndSendResponse(ctx context.Context, m *discordgo.Message, re
 // Session Management
 // ============================================================================
 
-func (b *Bot) getOrCreateSession(channelID string, agentType string) *ChannelSession {
+func (b *Bot) getOrCreateSession(ctx context.Context, channelID string, agentType string) *ChannelSession {
 	b.mu.RLock()
 	cs, exists := b.sessions[channelID]
 	b.mu.RUnlock()
@@ -1113,7 +1112,7 @@ func (b *Bot) getOrCreateSession(channelID string, agentType string) *ChannelSes
 		// Once an agent type is set, it sticks — don't override
 		if cs.AgentType == "" && agentType != "" {
 			cs.AgentType = agentType
-			b.saveSession(cs)
+			b.saveSessionToMP(ctx, cs)
 		}
 		return cs
 	}
@@ -1125,52 +1124,48 @@ func (b *Bot) getOrCreateSession(channelID string, agentType string) *ChannelSes
 	b.mu.Lock()
 	b.sessions[channelID] = cs
 	b.mu.Unlock()
-	b.saveSession(cs)
+	b.saveSessionToMP(ctx, cs)
 	return cs
 }
 
-// loadSessionsFromDB loads persisted channel→session mappings from SQLite.
-// Merges into the current sessions map (does not overwrite existing entries).
-func (b *Bot) loadSessionsFromDB() {
-	if b.sqliteDB == nil {
+// loadSessionsFromMP loads persisted channel→session mappings from Memory Platform
+// and populates the in-memory cache. Safe to call on startup — does not overwrite
+// existing entries that may have been set before bridge initialization.
+func (b *Bot) loadSessionsFromMP(ctx context.Context) {
+	if globalBridge == nil {
+		log.Println("[SES] No memory bridge — skipping session map load")
 		return
 	}
-	all, err := b.sqliteDB.GetAllDiscordSessions()
+	maps, err := globalBridge.ListDiscordChannelMaps(ctx)
 	if err != nil {
-		log.Printf("[SES] Error reading persisted sessions: %v", err)
+		log.Printf("[SES] Error reading discord channel maps from MP: %v", err)
 		return
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	count := 0
-	for _, s := range all {
-		if _, exists := b.sessions[s.ChannelID]; !exists {
-			b.sessions[s.ChannelID] = &ChannelSession{
-				ChannelID:    s.ChannelID,
-				SessionID:    s.SessionID,
-				Conversation: s.Conversation,
-				AgentType:    s.AgentType,
-				CreatedAt:    s.CreatedAt,
+	for _, m := range maps {
+		if _, exists := b.sessions[m.ChannelID]; !exists {
+			b.sessions[m.ChannelID] = &ChannelSession{
+				ChannelID: m.ChannelID,
+				SessionID: m.SessionID,
+				AgentType: m.AgentType,
 			}
 			count++
 		}
 	}
-	log.Printf("[SES] Restored %d/%d sessions from SQLite", count, len(all))
+	log.Printf("[SES] Restored %d/%d channel maps from MP", count, len(maps))
 }
 
-// saveSession writes a single channel→session mapping to SQLite.
-// Safe to call from any goroutine.
-func (b *Bot) saveSession(cs *ChannelSession) {
-	if b.sqliteDB == nil {
+// saveSessionToMP writes a single channel→session mapping to Memory Platform
+// and updates the local cache. Safe to call from any goroutine.
+func (b *Bot) saveSessionToMP(ctx context.Context, cs *ChannelSession) {
+	if globalBridge == nil {
+		log.Println("[SES] No memory bridge — skipping session save")
 		return
 	}
-	if err := b.sqliteDB.UpsertDiscordSession(&db.DiscordSession{
-		ChannelID:    cs.ChannelID,
-		SessionID:    cs.SessionID,
-		Conversation: cs.Conversation,
-		AgentType:    cs.AgentType,
-	}); err != nil {
-		log.Printf("[SES] Error persisting session: %v", err)
+	if _, err := globalBridge.UpsertDiscordChannelMap(ctx, cs.ChannelID, cs.SessionID, cs.AgentType); err != nil {
+		log.Printf("[SES] Error persisting session to MP: %v", err)
 	}
 }
 
@@ -1474,7 +1469,7 @@ func (b *Bot) triggerAgentWithContext(ctx context.Context, cs *ChannelSession, u
 		session, err := globalBridge.CreateSession(ctx, sessionTitle)
 		if err == nil {
 			cs.SessionID = session.ID
-			b.saveSession(cs)
+			b.saveSessionToMP(ctx, cs)
 			log.Printf("[SES] Created session %s for channel %s", session.ID[:12], cs.ChannelID)
 		} else {
 			log.Printf("[WARN] Failed to create session: %v", err)

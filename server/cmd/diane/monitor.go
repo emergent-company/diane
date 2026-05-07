@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/Emergent-Comapny/diane/internal/config"
-	"github.com/Emergent-Comapny/diane/internal/db"
 	"github.com/Emergent-Comapny/diane/internal/memory"
 	sdkagentrun "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agents"
 )
@@ -61,35 +60,51 @@ func cmdMonitor() {
 		fmt.Println("⚠️  Not available")
 	}
 
-	// ── 3. Active sessions from SQLite ──
-	fmt.Print("\n📋 Active sessions... ")
-	sqliteDB, err := db.New("")
+	// /─ 3. Active channel↔session mappings from MP /
+	fmt.Print("\n📋 Discord channel maps... ")
+	projCfg, err := config.Load()
 	if err != nil {
-		fmt.Printf("⚠️  SQLite: %v\n", err)
+		fmt.Printf("⚠️  Config: %v\n", err)
 	} else {
-		all, err := sqliteDB.GetAllDiscordSessions()
-		sqliteDB.Close()
-		if err != nil {
-			fmt.Printf("⚠️  %v\n", err)
-		} else if len(all) == 0 {
-			fmt.Println("None (waiting for first message)")
+		pc := projCfg.Active()
+		if pc == nil {
+			fmt.Println("⚠️  No active project")
 		} else {
-			fmt.Printf("%d session(s)\n", len(all))
-			for _, s := range all {
-				sessionID := s.SessionID
-				if len(sessionID) > 12 {
-					sessionID = sessionID[:12] + "..."
+			bridge, err := memory.New(memory.Config{
+				ServerURL:         pc.ServerURL,
+				APIKey:            pc.Token,
+				ProjectID:         pc.ProjectID,
+				OrgID:             pc.OrgID,
+				HTTPClientTimeout: 15 * time.Second,
+			})
+			if err != nil {
+				fmt.Printf("⚠️  Bridge: %v\n", err)
+				bridge.Close()
+			} else {
+				maps, err := bridge.ListDiscordChannelMaps(ctx)
+				bridge.Close()
+				if err != nil {
+					fmt.Printf("⚠️  %v\n", err)
+				} else if len(maps) == 0 {
+					fmt.Println("None (waiting for first message)")
+				} else {
+					fmt.Printf("%d mapping(s)\n", len(maps))
+					for _, m := range maps {
+						sessionID := m.SessionID
+						if len(sessionID) > 6 {
+							sessionID = sessionID[len(sessionID)-6:]
+						}
+						if sessionID == "" {
+							sessionID = "(pending)"
+						}
+						channelShort := m.ChannelID
+						if len(channelShort) > 12 {
+							channelShort = channelShort[:12] + "..."
+						}
+						fmt.Printf("   📌 #%s → session %s (agent: %s)\n",
+							channelShort, sessionID, m.AgentType)
+					}
 				}
-				if sessionID == "" {
-					sessionID = "(pending)"
-				}
-				channelShort := s.ChannelID
-				if len(channelShort) > 12 {
-					channelShort = channelShort[:12] + "..."
-				}
-				age := time.Since(s.UpdatedAt).Round(time.Second)
-				fmt.Printf("   📌 #%s → session %s (agent: %s, %v ago)\n",
-					channelShort, sessionID, s.AgentType, age)
 			}
 		}
 	}

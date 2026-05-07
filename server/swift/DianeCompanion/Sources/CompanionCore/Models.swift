@@ -816,6 +816,52 @@ public struct SessionDetailResponse: Codable, Sendable {
     }
 }
 
+// MARK: - Session Runs
+
+/// A single agent run associated with a session.
+public struct SessionRunSummary: Codable, Identifiable, Sendable {
+    public let id: String
+    public let agentName: String
+    public let status: String
+    public let startedAt: String?
+    public let durationMs: Int?
+    public let model: String?
+    public let provider: String?
+    public let errorMessage: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, status, model, provider
+        case agentName     = "agent_name"
+        case startedAt     = "started_at"
+        case durationMs    = "duration_ms"
+        case errorMessage  = "error_message"
+    }
+}
+
+/// Response from GET /api/sessions/{id}/runs
+public struct SessionRunsResponse: Codable, Sendable {
+    public let items: [SessionRunSummary]
+    public let total: Int
+}
+
+// MARK: - Session Todos
+
+/// A todo item belonging to a session.
+public struct SessionTodoItem: Codable, Identifiable, Sendable {
+    public let id: String
+    public let sessionID: String
+    public let content: String
+    public let status: String  // pending, completed, cancelled
+    public let order: Int
+    public let createdAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, content, status, order
+        case sessionID  = "session_id"
+        case createdAt  = "created_at"
+    }
+}
+
 // MARK: - Chat Send Response
 
 /// Response from POST /api/chat/send — session metadata + run messages.

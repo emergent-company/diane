@@ -1,6 +1,7 @@
 import SwiftUI
 
 /// Lists uploaded documents with extraction status and upload capability.
+/// Uses the same HSplitView column layout as SessionsView.
 struct DocumentsView: View {
     @EnvironmentObject var apiClient: EmergentAPIClient
     @EnvironmentObject var serverConfig: ServerConfiguration
@@ -17,38 +18,121 @@ struct DocumentsView: View {
     @State private var showUploadError = false
 
     var body: some View {
-        GeometryReader { geometry in
-            NavigationSplitView {
-                listContent
-                    .navigationTitle("Documents")
-                    .navigationSplitViewColumnWidth(max(260, geometry.size.width * 0.33))
-                    .toolbar { uploadToolbar }
-                    .task { await loadDocuments() }
-                    .searchable(text: $searchText, prompt: "Search documents…")
-                    .overlay { uploadingOverlay }
-                    .alert("Upload Error", isPresented: $showUploadError, actions: {
-                        Button("OK") { uploadError = nil }
-                    }, message: {
-                        Text(uploadError ?? "Unknown error")
-                    })
-            } detail: {
-                detailContent
+        SplitListDetailView(
+            emptyTitle: "Select a Document",
+            emptyIcon: "doc.text.fill",
+            emptyDescription: "Choose a document from the list to view its details and extracted objects.",
+            listContent: { listContent },
+            detailContent: {
+                if let doc = selection {
+                    DocumentDetailView(document: doc)
+                        .environmentObject(apiClient)
+                        .environmentObject(serverConfig)
+                        .id(doc.id)
+                } else {
+                    emptyDetailContent
+                }
+            }
+        )
+        .navigationTitle("Documents")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    pickAndUploadFile()
+                } label: {
+                    Label("Upload", systemImage: "plus")
+                }
+                .disabled(isUploading)
+                .help("Upload a document for extraction")
+            }
+        }
+        .task { await loadDocuments() }
+        .alert("Upload Error", isPresented: $showUploadError, actions: {
+            Button("OK") { uploadError = nil }
+        }, message: {
+            Text(uploadError ?? "Unknown error")
+        })
+    }
+
+    // MARK: - List
+
+    @ViewBuilder
+    private var listContent: some View {
+        VStack(spacing: 0) {
+            if let err = errorMessage {
+                ErrorBannerView(message: err) {
+                    Task { await loadDocuments() }
+                }
+                .padding(8)
+            }
+
+            if isLoading && documents.isEmpty {
+                LoadingStateView(message: "Loading documents…")
+            } else if filteredDocs.isEmpty {
+                EmptyStateView(
+                    title: "No Documents",
+                    icon: "doc.text",
+                    description: "Upload documents to extract objects and knowledge."
+                )
+            } else {
+                List(filteredDocs, selection: $selection) { doc in
+                    DocumentRowView(document: doc)
+                        .tag(doc)
+                }
+                .listStyle(.plain)
+                .refreshable { await loadDocuments() }
+                .searchable(text: $searchText, prompt: "Search documents…")
+            }
+
+            Divider()
+            HStack {
+                Text("\(filteredDocs.count) document\(filteredDocs.count == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Refresh") { Task { await loadDocuments() } }
+                    .font(.caption)
+                    .buttonStyle(.borderless)
+            }
+            .padding(.horizontal, Design.Padding.sectionHeader)
+            .padding(.vertical, 6)
+        }
+        .overlay {
+            if isUploading {
+                uploadingOverlay
             }
         }
     }
 
-    // MARK: - Upload Toolbar
+    // MARK: - Empty Detail (with upload button)
 
-    @ToolbarContentBuilder
-    private var uploadToolbar: some ToolbarContent {
-        ToolbarItem(placement: .primaryAction) {
-            Button {
-                pickAndUploadFile()
-            } label: {
-                Label("Upload", systemImage: "plus")
+    @ViewBuilder
+    private var emptyDetailContent: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 12) {
+                Spacer()
+                Image(systemName: "doc.text.fill")
+                    .font(.system(size: 40))
+                    .foregroundStyle(.tertiary)
+                Text("Select a Document")
+                    .font(.title3)
+                    .fontWeight(.medium)
+                Text("Choose a document from the list to view its details and extracted objects, or upload a new one.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+                Button {
+                    pickAndUploadFile()
+                } label: {
+                    Label("Upload from Drive", systemImage: "plus.circle")
+                }
+                .buttonStyle(.bordered)
+                .padding(.top, 4)
+                .disabled(isUploading)
+                Spacer()
             }
-            .disabled(isUploading)
-            .help("Upload a document for extraction")
+            .layoutPriority(1)
         }
     }
 
@@ -56,67 +140,23 @@ struct DocumentsView: View {
 
     @ViewBuilder
     private var uploadingOverlay: some View {
-        if isUploading {
-            ZStack {
-                Color.black.opacity(0.2)
-                    .ignoresSafeArea()
+        ZStack {
+            Color.black.opacity(0.2)
+                .ignoresSafeArea()
 
-                VStack(spacing: Design.Spacing.md) {
-                    ProgressView()
-                        .controlSize(.large)
-                    Text(uploadProgressMessage)
-                        .font(.headline)
-                    Text("Processing and extracting…")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(Design.Spacing.lg)
-                .background(.regularMaterial)
-                .cornerRadius(Design.CornerRadius.medium)
-                .shadow(radius: 8)
+            VStack(spacing: Design.Spacing.md) {
+                ProgressView()
+                    .controlSize(.large)
+                Text(uploadProgressMessage)
+                    .font(.headline)
+                Text("Processing and extracting…")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
             }
-        }
-    }
-
-    // MARK: - List
-
-    @ViewBuilder
-    private var listContent: some View {
-        if isLoading {
-            LoadingStateView(message: "Loading documents…")
-        } else if let err = errorMessage {
-            ErrorBannerView(message: err) { Task { await loadDocuments() } }
-        } else if filteredDocs.isEmpty {
-            EmptyStateView(
-                title: "No Documents",
-                icon: "doc.text",
-                description: "Upload documents to extract objects and knowledge."
-            )
-        } else {
-            List(filteredDocs, selection: $selection) { doc in
-                DocumentRowView(document: doc)
-                    .tag(doc)
-            }
-            .listStyle(.plain)
-            .refreshable { await loadDocuments() }
-        }
-    }
-
-    // MARK: - Detail
-
-    @ViewBuilder
-    private var detailContent: some View {
-        if let doc = selection {
-            DocumentDetailView(document: doc)
-                .environmentObject(apiClient)
-                .environmentObject(serverConfig)
-                .id(doc.id)
-        } else {
-            EmptyStateView(
-                title: "Select a Document",
-                icon: "doc.text.fill",
-                description: "Choose a document from the list to view its details and extracted objects."
-            )
+            .padding(Design.Spacing.lg)
+            .background(.regularMaterial)
+            .cornerRadius(Design.CornerRadius.medium)
+            .shadow(radius: 8)
         }
     }
 

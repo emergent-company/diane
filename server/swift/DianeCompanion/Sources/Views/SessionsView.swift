@@ -24,6 +24,12 @@ struct SessionsView: View {
     @State private var agentDefs: [AgentDef] = []
     @State private var selectedAgent: String = "diane-default"
 
+    // Session metadata panel state
+    @State private var sessionRuns: [SessionRunSummary] = []
+    @State private var sessionTodos: [SessionTodoItem] = []
+    @State private var isLoadingRuns = false
+    @State private var isLoadingTodos = false
+
     var body: some View {
         SplitListDetailView(
             emptyTitle: "Select a Session",
@@ -106,6 +112,8 @@ struct SessionsView: View {
                 Task { await loadSessionDetail(session: s) }
             } else {
                 sessionDetail = nil
+                sessionRuns = []
+                sessionTodos = []
             }
         }
     }
@@ -201,57 +209,65 @@ struct SessionsView: View {
     // MARK: - Session Detail (Chat-like Transcript)
 
     private func sessionDetailPanel(_ session: DianeSession) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Header
-            sessionHeader(session)
+        HSplitView {
+            // Left: chat area
+            VStack(alignment: .leading, spacing: 0) {
+                // Header
+                sessionHeader(session)
 
-            Divider()
+                Divider()
 
-            // Messages area (takes all remaining space)
-            Group {
-                if isLoadingMessages {
-                    LoadingStateView(message: "Loading messages…")
-                } else if let err = messagesError {
-                    ErrorBannerView(message: err) {
-                        Task {
-                            if let session = selectedSession {
-                                await loadMessages(session: session)
-                            }
-                        }
-                    }
-                    .padding(8)
-                } else if messages.isEmpty {
-                    EmptyStateView(
-                        title: "No Messages",
-                        icon: "text.bubble",
-                        description: "Type a message below to start the conversation."
-                    )
-                } else {
-                    ScrollViewReader { proxy in
-                        ScrollView {
-                            LazyVStack(spacing: 0) {
-                                ForEach(messages) { message in
-                                    messageBubble(message)
-                                        .id(message.id)
+                // Messages area (takes all remaining space)
+                Group {
+                    if isLoadingMessages {
+                        LoadingStateView(message: "Loading messages…")
+                    } else if let err = messagesError {
+                        ErrorBannerView(message: err) {
+                            Task {
+                                if let session = selectedSession {
+                                    await loadMessages(session: session)
                                 }
                             }
-                            .padding(.horizontal, Design.Spacing.lg)
-                            .padding(.vertical, 8)
                         }
-                        .onAppear {
-                            if let last = messages.last {
-                                proxy.scrollTo(last.id, anchor: .bottom)
+                        .padding(8)
+                    } else if messages.isEmpty {
+                        EmptyStateView(
+                            title: "No Messages",
+                            icon: "text.bubble",
+                            description: "Type a message below to start the conversation."
+                        )
+                    } else {
+                        ScrollViewReader { proxy in
+                            ScrollView {
+                                LazyVStack(spacing: 0) {
+                                    ForEach(messages) { message in
+                                        messageBubble(message)
+                                            .id(message.id)
+                                    }
+                                }
+                                .padding(.horizontal, Design.Spacing.lg)
+                                .padding(.vertical, 8)
+                            }
+                            .onAppear {
+                                if let last = messages.last {
+                                    proxy.scrollTo(last.id, anchor: .bottom)
+                                }
                             }
                         }
                     }
                 }
+                .layoutPriority(1)
+
+                Divider()
+
+                // Input bar
+                inputBar
             }
-            .layoutPriority(1)
+            .frame(minWidth: 400)
 
-            Divider()
-
-            // Input bar
-            inputBar
+            // Right: session metadata panel
+            sessionMetadataPanel(session: session)
+                .frame(minWidth: 280, idealWidth: 300, maxWidth: 360)
         }
         .onChange(of: messages.count) { _, _ in
             // Auto-scroll handled by ScrollViewReader id binding
@@ -441,6 +457,264 @@ struct SessionsView: View {
         .padding(.vertical, Design.Spacing.xs)
         .background(Color.primary.opacity(0.05))
         .cornerRadius(5)
+    }
+
+    // MARK: - Session Metadata Panel (Right Column)
+
+    @ViewBuilder
+    private func sessionMetadataPanel(session: DianeSession) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Design.Spacing.md) {
+                // Session Info
+                sessionInfoSection(session)
+
+                Divider()
+
+                // Summary
+                if let detail = sessionDetail {
+                    sessionSummarySection(detail)
+                    Divider()
+                }
+
+                // Run History
+                runHistorySection
+
+                Divider()
+
+                // Todo List
+                todoListSection
+            }
+            .padding(Design.Spacing.md)
+        }
+        .background(Design.Surface.cardBackground)
+    }
+
+    // MARK: - Session Info Section
+
+    @ViewBuilder
+    private func sessionInfoSection(_ session: DianeSession) -> some View {
+        VStack(alignment: .leading, spacing: Design.Spacing.xs) {
+            Label("Session Info", systemImage: "info.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            metadataRow(label: "ID", value: shortID(session.id), monospaced: true)
+            if let key = session.key, !key.isEmpty {
+                metadataRow(label: "Key", value: key, monospaced: true)
+            }
+            metadataRow(label: "Status", value: session.status ?? "active")
+            if let created = session.createdAt {
+                metadataRow(label: "Created", value: formatTimestamp(created))
+            }
+            if let detail = sessionDetail, let updated = detail.updatedAt, !updated.isEmpty {
+                metadataRow(label: "Updated", value: formatTimestamp(updated))
+            }
+        }
+    }
+
+    // MARK: - Summary Section
+
+    @ViewBuilder
+    private func sessionSummarySection(_ detail: SessionDetailResponse) -> some View {
+        VStack(alignment: .leading, spacing: Design.Spacing.xs) {
+            Label("Summary", systemImage: "chart.bar.fill")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if let agg = detail.aggregates {
+                metadataRow(label: "Runs", value: "\(agg.totalRuns)")
+                metadataRow(label: "Messages", value: "\(detail.messageCount)")
+                metadataRow(label: "Tokens", value: formatTokenCount(detail.totalTokens))
+                if agg.estimatedCostUsd > 0 {
+                    metadataRow(label: "Cost", value: formatCost(agg.estimatedCostUsd))
+                }
+                if let names = agg.agentNames, !names.isEmpty {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Agents")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                        HStack(spacing: 4) {
+                            ForEach(names, id: \.self) { name in
+                                Text(agentShortName(name))
+                                    .font(.system(size: 9, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 1)
+                                    .background(Color.primary.opacity(0.06))
+                                    .cornerRadius(3)
+                            }
+                        }
+                    }
+                }
+            } else {
+                metadataRow(label: "Messages", value: "\(detail.messageCount)")
+                metadataRow(label: "Tokens", value: formatTokenCount(detail.totalTokens))
+            }
+        }
+    }
+
+    // MARK: - Run History Section
+
+    @ViewBuilder
+    private var runHistorySection: some View {
+        VStack(alignment: .leading, spacing: Design.Spacing.xs) {
+            HStack {
+                Label("Run History", systemImage: "arrow.triangle.branch")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if isLoadingRuns {
+                    ProgressView()
+                        .scaleEffect(0.5)
+                }
+            }
+
+            if sessionRuns.isEmpty && !isLoadingRuns {
+                Text("No runs recorded for this session.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, 2)
+            } else {
+                ForEach(sessionRuns) { run in
+                    runRow(run)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func runRow(_ run: SessionRunSummary) -> some View {
+        HStack(spacing: Design.Spacing.xs) {
+            // Status dot
+            Circle()
+                .fill(runStatusColor(run.status))
+                .frame(width: 6, height: 6)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(agentShortName(run.agentName))
+                    .font(.caption2)
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+                if let model = run.model {
+                    Text(model)
+                        .font(.system(size: 8))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer()
+
+            if let ms = run.durationMs {
+                Text(formatDuration(Double(ms)))
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.vertical, 2)
+        .padding(.horizontal, 4)
+        .background(run.status == "failed" || run.status == "error" ? Color.red.opacity(0.05) : Color.clear)
+        .cornerRadius(3)
+    }
+
+    private func runStatusColor(_ status: String) -> Color {
+        switch status.lowercased() {
+        case "completed", "success": return .green
+        case "running", "pending":   return .orange
+        case "failed", "error":     return .red
+        default:                     return .gray
+        }
+    }
+
+    // MARK: - Todo List Section
+
+    @ViewBuilder
+    private var todoListSection: some View {
+        VStack(alignment: .leading, spacing: Design.Spacing.xs) {
+            HStack {
+                Label("Todo List", systemImage: "checklist")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if isLoadingTodos {
+                    ProgressView()
+                        .scaleEffect(0.5)
+                }
+            }
+
+            let pending = sessionTodos.filter { $0.status == "pending" }
+            let completed = sessionTodos.filter { $0.status == "completed" }
+
+            if sessionTodos.isEmpty && !isLoadingTodos {
+                Text("No todos for this session.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, 2)
+            } else {
+                if !pending.isEmpty {
+                    Text("To Do (\(pending.count))")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 2)
+                    ForEach(pending) { todo in
+                        todoRow(todo)
+                    }
+                }
+                if !completed.isEmpty {
+                    Text("Done (\(completed.count))")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 4)
+                    ForEach(completed) { todo in
+                        todoRow(todo)
+                            .opacity(0.6)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func todoRow(_ todo: SessionTodoItem) -> some View {
+        HStack(spacing: Design.Spacing.xs) {
+            Image(systemName: todo.status == "completed" ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 10))
+                .foregroundStyle(todo.status == "completed" ? .green : .secondary)
+
+            Text(todo.content)
+                .font(.caption2)
+                .lineLimit(2)
+                .strikethrough(todo.status == "completed")
+                .foregroundStyle(todo.status == "completed" ? .tertiary : .primary)
+
+            Spacer()
+        }
+        .padding(.vertical, 1)
+    }
+
+    // MARK: - Helpers
+
+    private func shortID(_ id: String) -> String {
+        if id.count <= 8 { return id }
+        return String(id.suffix(8))
+    }
+
+    private func metadataRow(label: String, value: String, monospaced: Bool = false) -> some View {
+        HStack(alignment: .top, spacing: Design.Spacing.xs) {
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .frame(width: 56, alignment: .leading)
+            Text(value)
+                .font(monospaced ? .system(size: 10, design: .monospaced) : .caption2)
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+            Spacer()
+        }
+    }
+
+    private func formatTimestamp(_ iso: String) -> String {
+        DateUtils.formatTimestamp(iso)
     }
 
     // MARK: - New Chat (Empty State)
@@ -816,6 +1090,34 @@ struct SessionsView: View {
             sessionDetail = nil
         }
         isLoadingDetail = false
+
+        // Load runs and todos in parallel
+        async let runsTask: () = loadSessionRuns(session: session)
+        async let todosTask: () = loadSessionTodos(session: session)
+        _ = await (runsTask, todosTask)
+    }
+
+    @MainActor
+    private func loadSessionRuns(session: DianeSession) async {
+        isLoadingRuns = true
+        do {
+            let resp = try await dianeAPI.fetchSessionRuns(sessionID: session.id)
+            sessionRuns = resp.items
+        } catch {
+            sessionRuns = []
+        }
+        isLoadingRuns = false
+    }
+
+    @MainActor
+    private func loadSessionTodos(session: DianeSession) async {
+        isLoadingTodos = true
+        do {
+            sessionTodos = try await dianeAPI.fetchSessionTodos(sessionID: session.id)
+        } catch {
+            sessionTodos = []
+        }
+        isLoadingTodos = false
     }
 
     // MARK: - Chat Actions

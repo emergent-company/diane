@@ -47,6 +47,7 @@ type Session struct {
 	TotalTokens  int // auto-maintained by server when messages have token_count
 	Status       string
 	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // Message represents a single turn in a session.
@@ -478,6 +479,40 @@ func (b *Bridge) GetProjectRunSessionStats(ctx context.Context, opts *sdkagentru
 	return b.client.Agents.GetProjectRunSessionStats(ctx, b.projectID, opts)
 }
 
+// ListSessionRuns returns agent runs associated with a given session ID.
+// It fetches recent project runs and filters by triggerMetadata.sessionId.
+func (b *Bridge) ListSessionRuns(ctx context.Context, sessionID string, limit int) ([]sdkagentrun.AgentRun, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	opts := &sdkagentrun.ListRunsOptions{
+		Limit: limit,
+	}
+	resp, err := b.client.Agents.ListProjectRuns(ctx, b.projectID, opts)
+	if err != nil {
+		return nil, fmt.Errorf("list project runs: %w", err)
+	}
+	if resp == nil {
+		return nil, nil
+	}
+	var out []sdkagentrun.AgentRun
+	for _, run := range resp.Data.Items {
+		if run.TriggerMetadata == nil {
+			continue
+		}
+		sid, ok := run.TriggerMetadata["sessionId"]
+		if !ok {
+			continue
+		}
+		sidStr, ok := sid.(string)
+		if !ok || sidStr != sessionID {
+			continue
+		}
+		out = append(out, run)
+	}
+	return out, nil
+}
+
 // ============================================================================
 // Internal helpers
 // ============================================================================
@@ -495,6 +530,15 @@ func graphObjectToSession(obj *graph.GraphObject) *Session {
 	}
 	if tt, ok := obj.Properties["total_tokens"].(float64); ok {
 		s.TotalTokens = int(tt)
+	}
+	if ua, ok := obj.Properties["updated_at"].(string); ok {
+		if t, err := time.Parse(time.RFC3339, ua); err == nil {
+			s.UpdatedAt = t
+		}
+	} else if ea, ok := obj.Properties["ended_at"].(string); ok {
+		if t, err := time.Parse(time.RFC3339, ea); err == nil {
+			s.UpdatedAt = t
+		}
 	}
 	return s
 }

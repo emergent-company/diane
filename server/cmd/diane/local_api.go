@@ -30,6 +30,7 @@ import (
 //	GET /api/sessions/{id}/messages → {"items": [GraphObject...]}
 //	GET /api/mcp-servers         → {"servers": [...]}
 //	GET /api/nodes               → {"nodes": [...]}
+//	GET /api/doctor              → DoctorResponse
 type localAPIServer struct {
 	server *http.Server
 }
@@ -56,8 +57,9 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	mux.HandleFunc("/api/agents/", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleAgentSubRoutes(w, r) })
 	mux.HandleFunc("/api/schema", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleSchema(w, r) })
 	mux.HandleFunc("/api/schema/objects/", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleSchemaObjects(w, r) })
+	mux.HandleFunc("/api/doctor", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleDoctor(w, r) })
 
-	expected := 15
+	expected := 16
 	if registered != expected {
 		log.Printf("[LOCAL-API] WARNING: registered %d routes, expected %d — check for missing handlers", registered, expected)
 	}
@@ -102,6 +104,158 @@ func (h *apiHandlers) bridge(ctx context.Context) (*memory.Bridge, error) {
 		OrgID:             h.pc.OrgID,
 		HTTPClientTimeout: 10 * time.Second,
 	})
+}
+
+// ── Doctor handler ──
+
+// DoctorResult is a single diagnostic check result in the API response.
+type DoctorResult struct {
+	Check   string `json:"check"`
+	Status  string `json:"status"` // "ok", "warning", "error"
+	Message string `json:"message"`
+	Details any    `json:"details"`
+}
+
+// DoctorResponse is the JSON response for GET /api/doctor.
+type DoctorResponse struct {
+	Ok      bool           `json:"ok"`
+	Version string         `json:"version"`
+	Results []DoctorResult `json:"results"`
+}
+
+// handleDoctor runs diagnostic checks and returns them as JSON.
+func (h *apiHandlers) handleDoctor(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	results := []DoctorResult{}
+	addResult := func(check, status, message string) {
+		results = append(results, DoctorResult{
+			Check:   check,
+			Status:  status,
+			Message: message,
+			Details: map[string]any{},
+		})
+	}
+
+	pc := h.pc
+
+	// ── 1. Config file ──
+	if pc == nil {
+		addResult("config_file", "error", "No project config loaded")
+		writeJSON(w, DoctorResponse{Ok: true, Version: Version, Results: results})
+		return
+	}
+	addResult("config_file", "ok", "Project config loaded")
+
+	// ── 2. API token ──
+	if pc.Token == "" {
+		addResult("api_token", "error", "Not set")
+		writeJSON(w, DoctorResponse{Ok: true, Version: Version, Results: results})
+		return
+	}
+	if len(pc.Token) >= 10 {
+		addResult("api_token", "ok", "Token is present")
+	} else {
+		addResult("api_token", "warning", "Token too short to be valid")
+	}
+
+	// ── 3. Memory SDK connection ──
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		addResult("sdk_connection", "error", err.Error())
+		writeJSON(w, DoctorResponse{Ok: true, Version: Version, Results: results})
+		return
+	}
+	defer bridge.Close()
+	addResult("sdk_connection", "ok", "SDK initialized")
+
+	// ── 4. Project info ──
+	sdkClient := bridge.Client()
+	proj, err := sdkClient.Projects.Get(ctx, pc.ProjectID, nil)
+	if err != nil {
+		addResult("project_info", "warning", err.Error())
+	} else {
+		addResult("project_info", "ok", fmt.Sprintf("Project: %q", proj.Name))
+		// Set org ID from project if not already set
+		if pc.OrgID == "" && proj.OrgID != "" {
+			sdkClient.SetContext(proj.OrgID, pc.ProjectID)
+		}
+	}
+
+	// ── 5. LLM provider ──
+	orgID := pc.OrgID
+	if orgID == "" {
+		if proj == nil {
+			if p2, err2 := sdkClient.Projects.Get(ctx, pc.ProjectID, nil); err2 == nil {
+				orgID = p2.OrgID
+			}
+		} else {
+			orgID = proj.OrgID
+		}
+	}
+	if orgID == "" {
+		addResult("llm_provider", "warning", "Could not determine org ID")
+	} else {
+		providers, err := sdkClient.Provider.ListOrgConfigs(ctx, orgID)
+		if err != nil {
+			addResult("llm_provider", "warning", err.Error())
+		} else if len(providers) == 0 {
+			addResult("llm_provider", "warning", "No org providers configured")
+		} else {
+			var descs []string
+			for _, p := range providers {
+				model := p.GenerativeModel
+				if model == "" {
+					model = "(auto)"
+				}
+				descs = append(descs, fmt.Sprintf("%s → %s", p.Provider, model))
+			}
+			addResult("llm_provider", "ok", strings.Join(descs, ", "))
+		}
+	}
+
+	// ── 6. Agent definitions ──
+	remoteDefs, err := bridge.ListAgentDefs(ctx)
+	remoteNameSet := map[string]*sdkagents.AgentDefinitionSummary{}
+	if err == nil && remoteDefs != nil {
+		for i := range remoteDefs.Data {
+			d := remoteDefs.Data[i]
+			remoteNameSet[d.Name] = &d
+		}
+	}
+	totalRemote := len(remoteNameSet)
+	totalLocal := len(pc.Agents)
+	deployed := 0
+	for name := range pc.Agents {
+		if remoteNameSet[name] != nil {
+			deployed++
+		}
+	}
+
+	if err != nil && totalLocal == 0 {
+		addResult("agent_definitions", "warning", "Could not fetch agent definitions: "+err.Error())
+	} else if totalLocal == 0 && totalRemote == 0 {
+		addResult("agent_definitions", "ok", "None configured")
+	} else {
+		detail := fmt.Sprintf("%d in config, %d on server", totalLocal, totalRemote)
+		if totalLocal > 0 && deployed == totalLocal {
+			detail += " — all deployed"
+			addResult("agent_definitions", "ok", detail)
+		} else if totalLocal > 0 {
+			detail += fmt.Sprintf(" — %d deployed, %d pending", deployed, totalLocal-deployed)
+			addResult("agent_definitions", "warning", detail)
+		} else {
+			addResult("agent_definitions", "ok", detail)
+		}
+	}
+
+	writeJSON(w, DoctorResponse{Ok: true, Version: Version, Results: results})
 }
 
 // ── Agent handlers ──
@@ -681,6 +835,12 @@ func (h *apiHandlers) handleSessionMessages(w http.ResponseWriter, r *http.Reque
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
+	case "runs":
+		if r.Method == http.MethodGet {
+			h.handleListSessionRuns(w, r, sessionID)
+		} else {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	case "todos":
 		todoID := ""
 		if len(parts) == 3 && parts[2] != "" {
@@ -714,7 +874,7 @@ func (h *apiHandlers) handleSessionMessages(w http.ResponseWriter, r *http.Reque
 
 // handleGetSession returns session details (aggregates + metadata).
 func (h *apiHandlers) handleGetSession(w http.ResponseWriter, r *http.Request, sessionID string) {
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
 	bridge, err := h.bridge(ctx)
@@ -730,13 +890,118 @@ func (h *apiHandlers) handleGetSession(w http.ResponseWriter, r *http.Request, s
 		return
 	}
 
+	// Fetch session runs to compute aggregates
+	runs, _ := bridge.ListSessionRuns(ctx, sessionID, 200)
+	agg := buildSessionAggregates(runs)
+
+	// Format timestamps
+	var updatedAt string
+	if !session.UpdatedAt.IsZero() {
+		updatedAt = session.UpdatedAt.Format(time.RFC3339)
+	}
+
 	writeJSON(w, map[string]any{
 		"id":            session.ID,
+		"key":           session.Key,
 		"title":         session.Title,
 		"status":        session.Status,
 		"message_count": session.MessageCount,
 		"total_tokens":  session.TotalTokens,
 		"created_at":    session.CreatedAt.Format(time.RFC3339),
+		"updated_at":    updatedAt,
+		"aggregates":    agg,
+	})
+}
+
+// buildSessionAggregates computes aggregate run stats from a list of session runs.
+func buildSessionAggregates(runs []sdkagentrun.AgentRun) map[string]any {
+	totalRuns := len(runs)
+	agentNames := make([]string, 0, totalRuns)
+	seen := make(map[string]bool)
+	var totalCost float64
+	var totalInput, totalOutput int64
+
+	for _, run := range runs {
+		name := run.AgentName
+		if name == "" {
+			name = run.AgentID
+		}
+		if name != "" && !seen[name] {
+			seen[name] = true
+			agentNames = append(agentNames, name)
+		}
+		// TokenUsage is available from the list endpoint in newer MP versions
+		if run.TokenUsage != nil {
+			totalCost += run.TokenUsage.EstimatedCostUSD
+			totalInput += run.TokenUsage.TotalInputTokens
+			totalOutput += run.TokenUsage.TotalOutputTokens
+		}
+	}
+
+	agg := map[string]any{
+		"total_runs":          totalRuns,
+		"agent_names":         agentNames,
+		"estimated_cost_usd":  totalCost,
+		"total_input_tokens":  totalInput,
+		"total_output_tokens": totalOutput,
+	}
+	return agg
+}
+
+// handleListSessionRuns lists agent runs associated with a session.
+// GET /api/sessions/{id}/runs
+func (h *apiHandlers) handleListSessionRuns(w http.ResponseWriter, r *http.Request, sessionID string) {
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		writeJSON(w, map[string]any{"error": err.Error()})
+		return
+	}
+	defer bridge.Close()
+
+	runs, err := bridge.ListSessionRuns(ctx, sessionID, 200)
+	if err != nil {
+		writeJSON(w, map[string]any{"error": err.Error()})
+		return
+	}
+	if runs == nil {
+		runs = []sdkagentrun.AgentRun{}
+	}
+
+	// Return simplified run summaries
+	type runSummary struct {
+		ID          string  `json:"id"`
+		AgentName   string  `json:"agent_name"`
+		Status      string  `json:"status"`
+		StartedAt   string  `json:"started_at"`
+		DurationMs  *int    `json:"duration_ms,omitempty"`
+		Model       *string `json:"model,omitempty"`
+		Provider    *string `json:"provider,omitempty"`
+		ErrorMsg    *string `json:"error_message,omitempty"`
+	}
+	items := make([]runSummary, 0, len(runs))
+	for _, run := range runs {
+		var startedAt string
+		if !run.StartedAt.IsZero() {
+			startedAt = run.StartedAt.Format(time.RFC3339)
+		}
+		items = append(items, runSummary{
+			ID:         run.ID,
+			AgentName:  run.AgentName,
+			Status:     run.Status,
+			StartedAt:  startedAt,
+			DurationMs: run.DurationMs,
+			Model:      run.Model,
+			Provider:   run.Provider,
+			ErrorMsg:   run.ErrorMessage,
+		})
+	}
+
+	writeJSON(w, map[string]any{
+		"items": items,
+		"total": len(items),
 	})
 }
 
@@ -1274,13 +1539,37 @@ func (h *apiHandlers) handleNodes(w http.ResponseWriter, r *http.Request) {
 	case []any:
 		nodes = v
 	case map[string]any:
+		// Check known key patterns first.
 		if items, ok := v["items"].([]any); ok {
 			nodes = items
 		} else if items, ok := v["nodes"].([]any); ok {
 			nodes = items
+		} else if items, ok := v["data"].([]any); ok {
+			nodes = items
+		} else if items, ok := v["sessions"].([]any); ok {
+			nodes = items
 		} else {
-			jsonError(w, http.StatusInternalServerError, "nodes: unexpected relay response format")
-			return
+			// Last resort: scan for any key whose value is an array.
+			found := false
+			for key, val := range v {
+				if arr, ok := val.([]any); ok {
+					log.Printf("[LOCAL-API] handleNodes: falling back to map key %q (type %T) for nodes array (len=%d)", key, val, len(arr))
+					nodes = arr
+					found = true
+					break
+				}
+			}
+			if !found {
+				// Serialize a prefix of the response for debugging.
+				rawJSON, _ := json.Marshal(raw)
+				snippet := string(rawJSON)
+				if len(snippet) > 500 {
+					snippet = snippet[:500] + "..."
+				}
+				log.Printf("[LOCAL-API] handleNodes: unexpected relay response format — body=%s", snippet)
+				jsonError(w, http.StatusInternalServerError, fmt.Sprintf("nodes: unexpected relay response format: %s", snippet))
+				return
+			}
 		}
 	default:
 		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("nodes: unexpected relay response type %T", raw))

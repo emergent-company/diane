@@ -354,74 +354,7 @@ func TestTagsSerialization(t *testing.T) {
 	}
 }
 
-// =========================================================================
-// Discord Sessions
-// =========================================================================
 
-func TestDiscordSessionRoundTrip(t *testing.T) {
-	d := setupDB(t)
-
-	// Upsert
-	s := &db.DiscordSession{
-		ChannelID:    "12345",
-		SessionID:    "sess-abc",
-		Conversation: "test-conversation",
-		AgentType:    "default",
-	}
-	if err := d.UpsertDiscordSession(s); err != nil {
-		t.Fatalf("UpsertDiscordSession: %v", err)
-	}
-
-	// Get
-	got, err := d.GetDiscordSessionByChannel("12345")
-	if err != nil {
-		t.Fatalf("GetDiscordSessionByChannel: %v", err)
-	}
-	if got == nil {
-		t.Fatal("Got nil session")
-	}
-	if got.SessionID != "sess-abc" {
-		t.Errorf("SessionID = %q", got.SessionID)
-	}
-	if got.Conversation != "test-conversation" {
-		t.Errorf("Conversation = %q", got.Conversation)
-	}
-
-	// Update
-	s.SessionID = "sess-xyz"
-	if err := d.UpsertDiscordSession(s); err != nil {
-		t.Fatalf("UpsertDiscordSession (update): %v", err)
-	}
-
-	got, err = d.GetDiscordSessionByChannel("12345")
-	if err != nil {
-		t.Fatalf("GetDiscordSessionByChannel (after update): %v", err)
-	}
-	if got.SessionID != "sess-xyz" {
-		t.Errorf("After update, SessionID = %q", got.SessionID)
-	}
-
-	// List all
-	all, err := d.GetAllDiscordSessions()
-	if err != nil {
-		t.Fatalf("GetAllDiscordSessions: %v", err)
-	}
-	if len(all) < 1 {
-		t.Error("Expected at least 1 session")
-	}
-}
-
-func TestDiscordSessionNonExistent(t *testing.T) {
-	d := setupDB(t)
-
-	s, err := d.GetDiscordSessionByChannel("does-not-exist")
-	if err != nil {
-		t.Fatalf("GetDiscordSessionByChannel(non-existent): %v", err)
-	}
-	if s != nil {
-		t.Error("Expected nil for non-existent channel")
-	}
-}
 
 // =========================================================================
 // Config Store
