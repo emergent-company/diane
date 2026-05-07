@@ -26,6 +26,9 @@ packages:
   Sentry:
     url: https://github.com/getsentry/sentry-cocoa
     version: 8.45.0
+  Textual:
+    url: https://github.com/gonzalezreal/textual
+    version: 0.3.1
 
 targets:
   Diane:
@@ -42,6 +45,8 @@ targets:
         product: Sparkle
       - package: Sentry
         product: Sentry
+      - package: Textual
+        product: Textual
     settings:
       base:
         PRODUCT_NAME: Diane

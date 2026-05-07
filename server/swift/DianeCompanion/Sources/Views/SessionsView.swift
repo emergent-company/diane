@@ -1,4 +1,5 @@
 import SwiftUI
+import Textual
 
 /// Sessions view — lists Diane conversation sessions with chat-like message transcripts.
 /// Shows session status badges, relative timestamps, collapsible tool calls, and thinking sections.
@@ -558,10 +559,16 @@ struct SessionsView: View {
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .italic()
-                    } else {
+                    } else if isUser {
+                        // User messages: plain text
                         Text(message.content)
                             .font(.body)
                             .textSelection(.enabled)
+                    } else {
+                        // Assistant messages: rich markdown with syntax highlighting
+                        StructuredText(markdown: message.content)
+                            .font(.body)
+                            .textual.textSelection(.enabled)
                     }
                 }
             }
