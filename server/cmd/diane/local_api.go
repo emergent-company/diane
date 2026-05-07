@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -1527,8 +1530,23 @@ func (h *apiHandlers) handleNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Read the raw body first so we can log it for debugging before decoding.
+	rawBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "nodes: read response: "+err.Error())
+		return
+	}
+
+	// Log the first 500 characters of the raw relay response body for debugging.
+	bodySnippet := string(rawBody)
+	if len(bodySnippet) > 500 {
+		log.Printf("[LOCAL-API] handleNodes: raw relay response (first 500 chars): %s...", bodySnippet[:500])
+	} else {
+		log.Printf("[LOCAL-API] handleNodes: raw relay response: %s", bodySnippet)
+	}
+
 	var raw any
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+	if err := json.Unmarshal(rawBody, &raw); err != nil {
 		jsonError(w, http.StatusInternalServerError, "nodes: decode response: "+err.Error())
 		return
 	}
@@ -1560,14 +1578,8 @@ func (h *apiHandlers) handleNodes(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if !found {
-				// Serialize a prefix of the response for debugging.
-				rawJSON, _ := json.Marshal(raw)
-				snippet := string(rawJSON)
-				if len(snippet) > 500 {
-					snippet = snippet[:500] + "..."
-				}
-				log.Printf("[LOCAL-API] handleNodes: unexpected relay response format — body=%s", snippet)
-				jsonError(w, http.StatusInternalServerError, fmt.Sprintf("nodes: unexpected relay response format: %s", snippet))
+				log.Printf("[LOCAL-API] handleNodes: unexpected relay response format — body=%s", bodySnippet)
+				jsonError(w, http.StatusInternalServerError, fmt.Sprintf("nodes: unexpected relay response format"))
 				return
 			}
 		}
@@ -2182,16 +2194,42 @@ func (h *apiHandlers) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		{ContentType: "text/plain", Content: req.Message},
 	}
 
-	// 3. Create streaming run
-	stream, err := acpClient.CreateRunStream(ctx, req.AgentName, acp.CreateRunRequest{
-		Message:   message,
-		SessionID: &sessionID,
+	// 3. Create streaming run via raw HTTP (ACP SDK's SSE parser doesn't handle event: headers)
+	reqBody, err := json.Marshal(map[string]any{
+		"message":    message,
+		"session_id": sessionID,
+		"mode":       "stream",
 	})
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "create run stream: "+err.Error())
+		jsonError(w, http.StatusInternalServerError, "json: "+err.Error())
 		return
 	}
-	defer stream.Close()
+
+	acpURL := fmt.Sprintf("%s/acp/v1/agents/%s/runs", h.pc.ServerURL, url.PathEscape(req.AgentName))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", acpURL, bytes.NewReader(reqBody))
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "request: "+err.Error())
+		return
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+	httpReq.Header.Set("Authorization", "Bearer "+h.pc.Token)
+
+	streamClient := &http.Client{
+		Timeout: 0, // no timeout for SSE streaming
+	}
+	acpResp, err := streamClient.Do(httpReq)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "acp connect: "+err.Error())
+		return
+	}
+	defer acpResp.Body.Close()
+
+	if acpResp.StatusCode >= 400 {
+		body, _ := io.ReadAll(acpResp.Body)
+		jsonError(w, http.StatusInternalServerError, "acp: "+string(body))
+		return
+	}
 
 	// 4. Set up SSE response headers
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -2205,7 +2243,7 @@ func (h *apiHandlers) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 5. Read ACP SSE events and forward to client
+	// 5. Read ACP SSE events (with proper event: header parsing) and forward to client
 	var runID string
 	var sawRunCreated, sawRunComplete bool
 	var tokenCount, toolCallCount int
@@ -2215,154 +2253,175 @@ func (h *apiHandlers) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 
-	for {
-		event, err := stream.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			log.Printf("[CHAT-STREAM] ACP stream read error: %v", err)
-			writeEvent(map[string]any{"type": "error", "message": err.Error()})
-			break
-		}
+	scanner := bufio.NewScanner(acpResp.Body)
+	var currentEventType string
+	for scanner.Scan() {
+		line := scanner.Text()
 
-		switch event.Type {
-		case "run.created":
-			sawRunCreated = true
-			if run, ok := event.Data["run"].(map[string]any); ok {
-				if id, ok := run["id"].(string); ok && id != "" {
-					runID = id
-				}
-			}
-			if runID == "" {
-				log.Printf("[CHAT-STREAM] WARNING: run.created event had no run.id — runID empty")
+		if strings.HasPrefix(line, "event: ") {
+			currentEventType = strings.TrimPrefix(line, "event: ")
+		} else if strings.HasPrefix(line, "data: ") {
+			dataStr := strings.TrimPrefix(line, "data: ")
+			if dataStr == "[DONE]" {
+				break
 			}
 
-		case "run.in-progress":
-			if runID == "" {
-				if run, ok := event.Data["run"].(map[string]any); ok {
-					if id, ok := run["id"].(string); ok && id != "" {
+			var rawData map[string]any
+			if err := json.Unmarshal([]byte(dataStr), &rawData); err != nil {
+				log.Printf("[CHAT-STREAM] WARNING: failed to parse SSE data: %v", err)
+				continue
+			}
+
+			eventType := currentEventType
+			currentEventType = "" // reset after consuming
+
+			if eventType == "" {
+				log.Printf("[CHAT-STREAM] WARNING: SSE event with no event: header — data: %+v", rawData)
+				continue
+			}
+
+			switch eventType {
+			case "run.created":
+				sawRunCreated = true
+				if run, ok := rawData["run"].(map[string]any); ok {
+					if id, ok := run["run_id"].(string); ok && id != "" {
 						runID = id
 					}
 				}
-			}
-
-		case "message.part":
-			part, ok := event.Data["part"].(map[string]any)
-			if !ok {
-				log.Printf("[CHAT-STREAM] WARNING: message.part event had no 'part' in data — %+v", event.Data)
-				continue
-			}
-			contentType, _ := part["content_type"].(string)
-			if contentType == "" {
-				log.Printf("[CHAT-STREAM] WARNING: message.part had empty content_type — %+v", part)
-				continue
-			}
-			switch contentType {
-			case "text/plain":
-				content, _ := part["content"].(string)
-				if content != "" {
-					tokenCount++
-					writeEvent(map[string]any{
-						"type":    "token",
-						"content": content,
-					})
+				if runID == "" {
+					log.Printf("[CHAT-STREAM] WARNING: run.created had no run_id")
 				}
-			case "application/json":
-				if meta, ok := part["metadata"].(map[string]any); ok {
-					kind, _ := meta["kind"].(string)
-					if kind == "trajectory" {
-						toolName, _ := meta["tool_name"].(string)
-						if toolName == "" {
-							log.Printf("[CHAT-STREAM] WARNING: trajectory part had empty tool_name")
+
+			case "run.in-progress":
+				if runID == "" {
+					if run, ok := rawData["run"].(map[string]any); ok {
+						if id, ok := run["run_id"].(string); ok && id != "" {
+							runID = id
 						}
-						eventType := "tool_call"
-						if _, hasOutput := meta["tool_output"]; hasOutput {
-							eventType = "tool_result"
-						}
-						toolCallCount++
-						writeEvent(map[string]any{
-							"type": eventType,
-							"name": toolName,
-						})
 					}
 				}
-			default:
-				log.Printf("[CHAT-STREAM] WARNING: unexpected message.part content_type %q", contentType)
-			}
 
-		case "message.created":
-			if msg, ok := event.Data["message"].(map[string]any); ok {
-				role, _ := msg["role"].(string)
-				if role == "" {
-					log.Printf("[CHAT-STREAM] WARNING: message.created had empty role")
+			case "message.part":
+				part, ok := rawData["part"].(map[string]any)
+				if !ok {
+					log.Printf("[CHAT-STREAM] WARNING: message.part had no 'part' — %+v", rawData)
+					continue
 				}
-				var textContent string
-				if parts, ok := msg["parts"].([]any); ok {
-					for _, p := range parts {
-						if pm, ok := p.(map[string]any); ok {
-							if ct, _ := pm["content_type"].(string); ct == "text/plain" {
-								if c, _ := pm["content"].(string); c != "" {
-									textContent += c
+				contentType, _ := part["content_type"].(string)
+				if contentType == "" {
+					log.Printf("[CHAT-STREAM] WARNING: message.part empty content_type — %+v", part)
+					continue
+				}
+				switch contentType {
+				case "text/plain":
+					content, _ := part["content"].(string)
+					if content != "" {
+						tokenCount++
+						writeEvent(map[string]any{
+							"type":    "token",
+							"content": content,
+						})
+					}
+				case "application/json":
+					if meta, ok := part["metadata"].(map[string]any); ok {
+						kind, _ := meta["kind"].(string)
+						if kind == "trajectory" {
+							toolName, _ := meta["tool_name"].(string)
+							if toolName == "" {
+								log.Printf("[CHAT-STREAM] WARNING: trajectory part had empty tool_name")
+							}
+							evtType := "tool_call"
+							if _, hasOutput := meta["tool_output"]; hasOutput {
+								evtType = "tool_result"
+							}
+							toolCallCount++
+							writeEvent(map[string]any{
+								"type": evtType,
+								"name": toolName,
+							})
+						}
+					}
+				default:
+					log.Printf("[CHAT-STREAM] WARNING: unexpected message.part content_type %q", contentType)
+				}
+
+			case "message.created":
+				if msg, ok := rawData["message"].(map[string]any); ok {
+					role, _ := msg["role"].(string)
+					if role == "" {
+						log.Printf("[CHAT-STREAM] WARNING: message.created had empty role")
+					}
+					var textContent string
+					if parts, ok := msg["parts"].([]any); ok {
+						for _, p := range parts {
+							if pm, ok := p.(map[string]any); ok {
+								if ct, _ := pm["content_type"].(string); ct == "text/plain" {
+									if c, _ := pm["content"].(string); c != "" {
+										textContent += c
+									}
 								}
 							}
 						}
 					}
+					writeEvent(map[string]any{
+						"type":    "message",
+						"role":    role,
+						"content": textContent,
+					})
+				} else {
+					log.Printf("[CHAT-STREAM] WARNING: message.created had no 'message' in data — %+v", rawData)
+				}
+
+			case "run.completed":
+				sawRunComplete = true
+				if runID == "" {
+					log.Printf("[CHAT-STREAM] WARNING: run.completed with no runID")
 				}
 				writeEvent(map[string]any{
-					"type":    "message",
-					"role":    role,
-					"content": textContent,
+					"type":       "done",
+					"session_id": sessionID,
+					"run_id":     runID,
 				})
-			} else {
-				log.Printf("[CHAT-STREAM] WARNING: message.created had no 'message' in data — %+v", event.Data)
-			}
 
-		case "run.completed":
-			sawRunComplete = true
-			if runID == "" {
-				log.Printf("[CHAT-STREAM] WARNING: run.completed with no runID captured — stream may have missed run.created")
-			}
-			writeEvent(map[string]any{
-				"type":       "done",
-				"session_id": sessionID,
-				"run_id":     runID,
-			})
+			case "run.failed", "run.cancelled":
+				errMsg := "run " + strings.TrimPrefix(eventType, "run.")
+				if run, ok := rawData["run"].(map[string]any); ok {
+					if e, ok := run["error"].(map[string]any); ok {
+						if m, ok := e["message"].(string); ok {
+							errMsg = m
+						}
+					}
+				}
+				log.Printf("[CHAT-STREAM] Run %s: %s (session=%s)", safePrefix(runID, 12), eventType, safePrefix(sessionID, 12))
+				writeEvent(map[string]any{
+					"type":    "error",
+					"message": errMsg,
+				})
 
-		case "run.failed", "run.cancelled":
-			errMsg := "run " + strings.TrimPrefix(event.Type, "run.")
-			if run, ok := event.Data["run"].(map[string]any); ok {
-				if e, ok := run["error"].(map[string]any); ok {
+			case "run.awaiting":
+				log.Printf("[CHAT-STREAM] Agent paused, awaiting input (session=%s run=%s)", safePrefix(sessionID, 12), safePrefix(runID, 12))
+
+			case "error":
+				errMsg := "stream error"
+				if e, ok := rawData["error"].(map[string]any); ok {
 					if m, ok := e["message"].(string); ok {
 						errMsg = m
 					}
 				}
+				log.Printf("[CHAT-STREAM] ACP error event: %s", errMsg)
+				writeEvent(map[string]any{
+					"type":    "error",
+					"message": errMsg,
+				})
+
+			default:
+				log.Printf("[CHAT-STREAM] WARNING: unexpected ACP event type %q — data: %+v", eventType, rawData)
 			}
-			log.Printf("[CHAT-STREAM] Run %s: %s (session=%s)", runID[:min(len(runID), 12)], event.Type, sessionID[:min(len(sessionID), 12)])
-			writeEvent(map[string]any{
-				"type":    "error",
-				"message": errMsg,
-			})
-
-		case "run.awaiting":
-			log.Printf("[CHAT-STREAM] Agent paused, awaiting input (session=%s run=%s)", sessionID[:min(len(sessionID), 12)], runID[:min(len(runID), 12)])
-
-		case "error":
-			errMsg := "stream error"
-			if e, ok := event.Data["error"].(map[string]any); ok {
-				if m, ok := e["message"].(string); ok {
-					errMsg = m
-				}
-			}
-			log.Printf("[CHAT-STREAM] ACP error event: %s", errMsg)
-			writeEvent(map[string]any{
-				"type":    "error",
-				"message": errMsg,
-			})
-
-		default:
-			log.Printf("[CHAT-STREAM] WARNING: unexpected ACP event type %q — data: %+v", event.Type, event.Data)
 		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Printf("[CHAT-STREAM] SSE scanner error: %v", err)
 	}
 
 	// Post-stream diagnostics
@@ -2384,4 +2443,12 @@ func writeJSON(w http.ResponseWriter, v any) {
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		log.Printf("[LOCAL-API] JSON encode error: %v", err)
 	}
+}
+
+// safePrefix returns the first n characters of s, or the whole string if shorter.
+func safePrefix(s string, n int) string {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
 }
