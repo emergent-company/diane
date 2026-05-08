@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 )
@@ -342,41 +340,33 @@ func TestHTTPMCPClient_401WithToken(t *testing.T) {
 }
 
 // =========================================================================
-// Test 4: Proxy with HTTP MCP server via config
+// Test 4: Proxy with HTTP MCP server via in-memory config
 // =========================================================================
 
 func TestProxy_WithHTTPServer(t *testing.T) {
 	mock := newMockMCPServerWithEcho()
 	defer mock.Close()
 
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "mcp-servers.json")
-
-	// Create config JSON pointing to the mock HTTP MCP server
-	configJSON := fmt.Sprintf(`{
-		"servers": [
-			{
-				"name": "remote-api",
-				"enabled": true,
-				"type": "http",
-				"url": "%s/mcp"
-			}
-		]
-	}`, mock.URL)
-
-	if err := os.WriteFile(configPath, []byte(configJSON), 0644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
+	// Use in-memory ServerConfig instead of writing a config file
+	servers := []ServerConfig{
+		{
+			Name:    "remote-api",
+			Enabled: true,
+			Type:    "http",
+			URL:     mock.URL + "/mcp",
+		},
 	}
 
-	// Override secretsDir to use temp dir so token loading doesn't pollute
+	// Override secretsDir to use a temp dir so token loading doesn't pollute
 	// the real secrets directory or fail on missing home dir
+	dir := t.TempDir()
 	origSecretsDir := secretsDir
 	secretsDir = func() string {
-		return filepath.Join(dir, "secrets")
+		return dir
 	}
 	defer func() { secretsDir = origSecretsDir }()
 
-	proxy, err := NewProxy(configPath)
+	proxy, err := NewProxy(servers)
 	if err != nil {
 		t.Fatalf("NewProxy failed: %v", err)
 	}

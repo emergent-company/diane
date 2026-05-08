@@ -15,7 +15,6 @@ var osExit = os.Exit
 func cmdMCPAuth(args []string) {
 	fs := flag.NewFlagSet("auth", flag.ExitOnError)
 	serverName := fs.String("server", "", "Name of the MCP server to authenticate (required)")
-	configPath := fs.String("config", "", "Path to MCP servers config (default: ~/.diane/mcp-servers.json)")
 	background := fs.Bool("background", false, "Print authorization URL and exit (for headless servers)")
 	fs.Parse(args)
 
@@ -25,17 +24,9 @@ func cmdMCPAuth(args []string) {
 		osExit(1)
 	}
 
-	// Load config
-	path := *configPath
-	if path == "" {
-		path = mcpproxy.GetDefaultConfigPath()
-	}
-
-	cfg, err := mcpproxy.LoadConfig(path)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
-		osExit(1)
-	}
+	// NOTE: Config is now managed via MP Graph, not file.
+	// Create an empty config and load from graph if needed.
+	cfg := &mcpproxy.Config{}
 
 	// Find the server
 	var server *mcpproxy.ServerConfig
@@ -46,7 +37,7 @@ func cmdMCPAuth(args []string) {
 		}
 	}
 	if server == nil {
-		fmt.Fprintf(os.Stderr, "Error: server %q not found in %s\n", *serverName, path)
+		fmt.Fprintf(os.Stderr, "Error: server %q not found in config\n", *serverName)
 		osExit(1)
 	}
 

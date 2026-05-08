@@ -81,9 +81,8 @@ func (s *MCPServer) run() {
 	}
 	defer os.Remove(pidFile)
 
-	// Initialize MCP proxy
-	configPath := mcpproxy.GetDefaultConfigPath()
-	s.proxy, err = mcpproxy.NewProxy(configPath)
+	// Initialize MCP proxy (optional — config comes from relay, not file)
+	s.proxy, err = mcpproxy.NewProxy([]mcpproxy.ServerConfig{})
 	if err != nil {
 		log.Printf("Warning: Failed to initialize MCP proxy: %v", err)
 		// Continue without proxy - built-in tools will still work
@@ -193,7 +192,7 @@ func (s *MCPServer) run() {
 		go func() {
 			for range sigChan {
 				log.Printf("Received SIGUSR1, reloading MCP configuration...")
-				if err := s.proxy.Reload(); err != nil {
+				if err := s.proxy.Reload([]mcpproxy.ServerConfig{}); err != nil {
 					log.Printf("Failed to reload MCP config: %v", err)
 				}
 			}

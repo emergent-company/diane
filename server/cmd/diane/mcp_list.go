@@ -1,55 +1,89 @@
 package main
 
 import (
-	"flag"
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
+	"github.com/Emergent-Comapny/diane/internal/config"
+	"github.com/Emergent-Comapny/diane/internal/memory"
 	"github.com/Emergent-Comapny/diane/internal/mcpproxy"
 )
 
 func cmdMCPList(args []string) {
-	fs := flag.NewFlagSet("list", flag.ExitOnError)
-	configPath := fs.String("config", "", "Path to MCP servers config (default: ~/.diane/mcp-servers.json)")
-	showTools := fs.Bool("tools", false, "Connect and list available tools from each enabled server")
-	fs.Parse(args)
-
-	path := *configPath
-	if path == "" {
-		path = mcpproxy.GetDefaultConfigPath()
+	// Parse simple flags
+	showTools := false
+	for _, a := range args {
+		if a == "--tools" || a == "-tools" {
+			showTools = true
+		}
 	}
 
-	// Load config
-	cfg, err := mcpproxy.LoadConfig(path)
+	// Load project config
+	cfg, err := config.Load()
 	if err != nil {
-		if os.IsNotExist(err) {
-			fmt.Printf("📋 MCP Servers  (%s)\n", path)
-			fmt.Println("  (no config file — create one to configure MCP servers)")
-			return
-		}
 		fmt.Fprintf(os.Stderr, "❌ Failed to load config: %v\n", err)
 		return
 	}
+	pc := cfg.Active()
+	if pc == nil {
+		fmt.Fprintf(os.Stderr, "❌ No active project configured — run: diane project init\n")
+		return
+	}
 
-	relPath := shortenHome(path)
-	fmt.Printf("📋 MCP Servers  (%s)\n", relPath)
+	// Create bridge to query graph
+	bridge, err := memory.New(memory.Config{
+		ServerURL: pc.ServerURL,
+		APIKey:    pc.Token,
+		ProjectID: pc.ProjectID,
+		OrgID:     pc.OrgID,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to connect to Memory Platform: %v\n", err)
+		return
+	}
+	defer bridge.Close()
+
+	ctx := context.Background()
+
+	// Get MCP proxy configs from the graph
+	entries, err := bridge.ListMCPProxyConfigs(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to list MCP servers from graph: %v\n", err)
+		return
+	}
+
+	// Parse entries into ServerConfig list
+	servers := make([]mcpproxy.ServerConfig, 0, len(entries))
+	for _, e := range entries {
+		var sc mcpproxy.ServerConfig
+		if err := json.Unmarshal([]byte(e.Config), &sc); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Skipping invalid config for %s: %v\n", e.Scope, err)
+			continue
+		}
+		servers = append(servers, sc)
+	}
+
+	fmt.Println("📋 MCP Servers")
 	fmt.Println()
 
-	if len(cfg.Servers) == 0 {
+	if len(servers) == 0 {
 		fmt.Println("  (no servers configured)")
+		fmt.Println()
+		fmt.Println("  Add MCP servers to your project's graph as MCPProxyConfig objects.")
 		return
 	}
 
 	// Collect tools if --tools is set
 	var toolsPerServer map[string][]string
-	if *showTools {
-		toolsPerServer = collectTools(path, cfg)
+	if showTools {
+		toolsPerServer = collectTools(servers)
 	}
 
 	// Print each server
-	for _, s := range cfg.Servers {
+	for _, s := range servers {
 		status := "✓"
 		if !s.Enabled {
 			status = "✗"
@@ -65,8 +99,11 @@ func cmdMCPList(args []string) {
 			if len(s.Env) > 0 {
 				cmdDisplay += fmt.Sprintf("  [%d env vars]", len(s.Env))
 			}
-		case "http", "remote", "ws":
-			cmdDisplay = "(remote)"
+		case "http", "sse", "streamable-http", "remote":
+			cmdDisplay = s.URL
+			if cmdDisplay == "" {
+				cmdDisplay = "(remote)"
+			}
 		default:
 			if s.Command != "" {
 				cmdDisplay = s.Command
@@ -83,7 +120,7 @@ func cmdMCPList(args []string) {
 		fmt.Printf("  %s %-25s %s → %s\n", status, s.Name, label, cmdDisplay)
 
 		// Show tools if available
-		if *showTools && s.Enabled {
+		if showTools && s.Enabled {
 			if tools, ok := toolsPerServer[s.Name]; ok {
 				if len(tools) > 0 {
 					if s.Type != "stdio" {
@@ -114,24 +151,24 @@ func cmdMCPList(args []string) {
 
 	// Summary
 	enabled := 0
-	for _, s := range cfg.Servers {
+	for _, s := range servers {
 		if s.Enabled {
 			enabled++
 		}
 	}
 	fmt.Println()
 	fmt.Printf("  %d server%s total — %d enabled, %d disabled\n",
-		len(cfg.Servers), plural(len(cfg.Servers)), enabled, len(cfg.Servers)-enabled)
+		len(servers), plural(len(servers)), enabled, len(servers)-enabled)
 }
 
 // collectTools starts a temporary proxy to discover tools from enabled servers.
-func collectTools(configPath string, cfg *mcpproxy.Config) map[string][]string {
+func collectTools(servers []mcpproxy.ServerConfig) map[string][]string {
 	result := make(map[string][]string)
 
-	proxy, err := mcpproxy.NewProxy(configPath)
+	proxy, err := mcpproxy.NewProxy(servers)
 	if err != nil {
 		// For tool discovery, graceful failure per server
-		for _, s := range cfg.Servers {
+		for _, s := range servers {
 			if s.Enabled {
 				result[s.Name] = nil // mark as failed
 			}
@@ -142,7 +179,7 @@ func collectTools(configPath string, cfg *mcpproxy.Config) map[string][]string {
 
 	allTools, err := proxy.ListAllTools()
 	if err != nil {
-		for _, s := range cfg.Servers {
+		for _, s := range servers {
 			if s.Enabled {
 				result[s.Name] = nil
 			}
@@ -162,7 +199,7 @@ func collectTools(configPath string, cfg *mcpproxy.Config) map[string][]string {
 		}
 	}
 
-	for _, s := range cfg.Servers {
+	for _, s := range servers {
 		if s.Enabled {
 			if tools, ok := serverTools[s.Name]; ok {
 				result[s.Name] = tools
@@ -185,44 +222,10 @@ func collectTools(configPath string, cfg *mcpproxy.Config) map[string][]string {
 	return result
 }
 
-// shortenHome replaces the home directory prefix with ~ for display.
-func shortenHome(path string) string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return path
-	}
-	return strings.Replace(path, home, "~", 1)
-}
-
 // plural returns "s" if n != 1, empty string otherwise.
 func plural(n int) string {
 	if n != 1 {
 		return "s"
 	}
 	return ""
-}
-
-// getMCPServersConfigPath returns the default MCP servers config path,
-// or the path from --config flag if present in args.
-func getMCPServersConfigPath(args []string) string {
-	for i, a := range args {
-		if a == "--config" && i+1 < len(args) {
-			return args[i+1]
-		}
-		if strings.HasPrefix(a, "--config=") {
-			return strings.TrimPrefix(a, "--config=")
-		}
-	}
-	return mcpproxy.GetDefaultConfigPath()
-}
-
-// ensureDianeDir creates ~/.diane if it doesn't exist.
-func ensureDianeDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	dir := filepath.Join(home, ".diane")
-	os.MkdirAll(dir, 0755)
-	return dir
 }

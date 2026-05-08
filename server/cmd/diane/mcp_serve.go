@@ -28,11 +28,12 @@ func cmdMCPServe() {
 	}
 	defer os.Remove(pidFile)
 
-	// Initialize MCP proxy
-	configPath := mcpproxy.GetDefaultConfigPath()
-	proxy, err := mcpproxy.NewProxy(configPath)
-	if err != nil {
-		log.Printf("Warning: Failed to initialize MCP proxy: %v", err)
+	// Initialize MCP proxy from graph (managed by relay, not from file)
+	// The relay creates its own proxy and passes config in-band.
+	// The subprocess proxy is optional — only needed for standalone `diane mcp serve` use.
+	proxy, proxyErr := mcpproxy.NewProxy([]mcpproxy.ServerConfig{})
+	if proxyErr != nil {
+		log.Printf("Warning: Failed to initialize MCP proxy: %v", proxyErr)
 	}
 	defer func() {
 		if proxy != nil {
@@ -51,7 +52,7 @@ func cmdMCPServe() {
 		go func() {
 			for range sigChan {
 				log.Printf("Received SIGUSR1, reloading MCP configuration...")
-				if err := proxy.Reload(); err != nil {
+				if err := proxy.Reload([]mcpproxy.ServerConfig{}); err != nil {
 					log.Printf("Failed to reload MCP config: %v", err)
 				}
 			}

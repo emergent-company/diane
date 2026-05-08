@@ -92,9 +92,8 @@ func cmdToolTest(args []string) {
 	}
 	fmt.Println()
 
-	// Initialize MCP proxy (same config as diane mcp serve)
-	configPath := mcpproxy.GetDefaultConfigPath()
-	proxy, err := mcpproxy.NewProxy(configPath)
+	// Initialize MCP proxy (managed by relay from graph, not from file)
+	proxy, err := mcpproxy.NewProxy([]mcpproxy.ServerConfig{})
 	if err != nil {
 		log.Fatalf("Failed to initialize MCP proxy: %v", err)
 	}

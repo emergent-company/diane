@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"time"
 
 	"github.com/Emergent-Comapny/diane/internal/mcpproxy"
@@ -13,24 +12,19 @@ import (
 func main() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 
-	configPath := "/tmp/mcp-relay-test/test-proxy-config.json"
-	config := map[string]interface{}{
-		"servers": []map[string]interface{}{
-			{
-				"name":    "echo-server",
-				"enabled": true,
-				"type":    "stdio",
-				"command": "/tmp/mcp-relay-test/echo-mcp",
-				"args":    []string{},
-				"env":     map[string]string{},
-			},
+	servers := []mcpproxy.ServerConfig{
+		{
+			Name:    "echo-server",
+			Enabled: true,
+			Type:    "stdio",
+			Command: "/tmp/mcp-relay-test/echo-mcp",
+			Args:    []string{},
+			Env:     map[string]string{},
 		},
 	}
-	configData, _ := json.MarshalIndent(config, "", "  ")
-	os.WriteFile(configPath, configData, 0644)
 
 	fmt.Println("=== Creating Proxy ===")
-	proxy, err := mcpproxy.NewProxy(configPath)
+	proxy, err := mcpproxy.NewProxy(servers)
 	if err != nil {
 		log.Fatalf("Failed to create proxy: %v", err)
 	}
