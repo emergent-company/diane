@@ -118,6 +118,18 @@ func cmdServe() {
 		}()
 	}
 
+// ── Update node version in graph ──
+	// Run regardless of relay/bot so the companion shows the real version even for
+	// master-only nodes or nodes that haven't connected to relay yet.
+	if hasInstance {
+		instanceID := resolveInstanceID(pc, *instancePtr)
+		go updateNodeVersionInGraph(pc.ServerURL, pc.Token, pc.ProjectID, instanceID)
+	} else {
+		// Try all known DianeNodeConfig instances when no instance_id is configured
+		// (e.g., master-only configs that still want version display)
+		go updateNodeVersionInGraph(pc.ServerURL, pc.Token, pc.ProjectID, "")
+	}
+
 	// ── Start MCP relay ──
 	if startRelay {
 		go func() {

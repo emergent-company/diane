@@ -23,6 +23,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -605,6 +606,67 @@ func syncConfigFromGraph(serverURL, token, projectID, instanceID string) {
 			log.Printf("[mcp-relay] Synced %d secrets from graph to %s/secrets/", written, dianeDir)
 		}
 	}
+}
+
+// updateNodeVersionInGraph updates the DianeNodeConfig version in the Memory
+// Platform graph for this instance, so the companion app shows the real version.
+func updateNodeVersionInGraph(serverURL, token, projectID, instanceID string) {
+	gc, err := newGraphClient(serverURL, token, projectID)
+	if err != nil {
+		log.Printf("[mcp-relay] Failed to create graph client for version update: %v", err)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// List DianeNodeConfig objects
+	resp, err := gc.ListObjects(ctx, "DianeNodeConfig", 100)
+	if err != nil {
+		log.Printf("[mcp-relay] Failed to list DianeNodeConfig: %v", err)
+		return
+	}
+
+	// Find the one matching our instance_id
+	var targetID string
+	cliVersion := strings.TrimPrefix(Version, "v")
+	ver := "v" + cliVersion
+	if cliVersion == "" {
+		ver = "dev"
+	}
+
+	if instanceID != "" {
+		for _, obj := range resp.Items {
+			if id, ok := obj.Properties["instance_id"].(string); ok && id == instanceID {
+				targetID = obj.EntityID
+				break
+			}
+		}
+		if targetID == "" {
+			log.Printf("[mcp-relay] No DianeNodeConfig found for instance %q — skipping version update", instanceID)
+			return
+		}
+	} else {
+		// No instance ID specified — update all nodes with a "dev" version
+		// so companion shows real version even for master-only configs.
+		for _, obj := range resp.Items {
+			if v, ok := obj.Properties["version"].(string); ok && (v == "dev" || v == "" || v == "1.0") {
+				if err := gc.UpdateObject(ctx, obj.EntityID, map[string]any{"version": ver}); err != nil {
+					log.Printf("[mcp-relay] Failed to update version for %s: %v", obj.EntityID, err)
+				} else {
+					log.Printf("[mcp-relay] Updated node version in graph: %s → %s", obj.EntityID, ver)
+				}
+			}
+		}
+		return
+	}
+
+	// Update version property
+	if err := gc.UpdateObject(ctx, targetID, map[string]any{"version": ver}); err != nil {
+		log.Printf("[mcp-relay] Failed to update version for %s: %v", instanceID, err)
+		return
+	}
+	log.Printf("[mcp-relay] Updated node version in graph: %s → %s", instanceID, ver)
 }
 
 // findMemoryCLI locates the memory CLI binary.

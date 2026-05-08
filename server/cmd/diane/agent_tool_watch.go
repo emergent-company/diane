@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -363,6 +364,30 @@ func (c *graphClientWrapper) ListObjects(ctx context.Context, objType string, li
 		return nil, err
 	}
 	return &result, nil
+}
+
+// UpdateObject updates a graph object's properties.
+func (c *graphClientWrapper) UpdateObject(ctx context.Context, id string, properties map[string]any) error {
+	body := map[string]any{"properties": properties}
+	data, _ := json.Marshal(body)
+	url := fmt.Sprintf("%s/api/graph/objects/%s", c.serverURL, id)
+	req, err := http.NewRequestWithContext(ctx, "PATCH", url, bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("X-Project-ID", c.projectID)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("API error: %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // toStringSlice converts []interface{} to []string for hash computation.
