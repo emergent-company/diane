@@ -1715,28 +1715,85 @@ func (h *apiHandlers) handleNodes(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[LOCAL-API] WARNING: /api/nodes returned 0 nodes — expected at least the local instance")
 	}
 
-	// Enrich each node with synthetic fields the companion app expects.
-	// The MP relay sessions API returns basic fields (instance_id, version,
-	// tool_count, connected_at) but NOT mode, online, hostname, etc.
+	// Enrich each node with metadata from the graph (DianeNodeConfig objects).
+	// The MP relay sessions API returns basic live fields (instance_id, version,
+	// tool_count, connected_at) but NOT mode, hostname, provider, etc.
+	// The graph stores these as DianeNodeConfig objects.
+	bridge, bridgeErr := h.bridge(ctx)
+	graphConfigs := make(map[string]map[string]any) // instance_id → properties
+	if bridgeErr == nil {
+		defer bridge.Close()
+		if graphResp, err := bridge.Client().Graph.ListObjects(ctx, &graph.ListObjectsOptions{
+			Type: "DianeNodeConfig",
+		}); err == nil && graphResp != nil {
+			for _, obj := range graphResp.Items {
+				if obj.Properties != nil {
+					if id, ok := obj.Properties["instance_id"].(string); ok && id != "" {
+						graphConfigs[id] = obj.Properties
+					}
+				}
+			}
+		}
+	}
+
+	seen := make(map[string]bool)
 	for i, node := range nodes {
 		m, ok := node.(map[string]any)
 		if !ok {
 			continue
 		}
+
 		// All nodes from the relay sessions list are online by definition.
 		if _, exists := m["online"]; !exists {
 			m["online"] = true
 		}
-		// Set mode: the local instance (matching config) is master; others are slave.
-		if _, exists := m["mode"]; !exists {
-			id, _ := m["instance_id"].(string)
-			if id != "" && id == h.pc.InstanceID {
-				m["mode"] = "master"
-			} else if h.pc.InstanceID != "" {
-				m["mode"] = "slave"
+
+		// Track seen instance IDs for orphan detection below.
+		id, _ := m["instance_id"].(string)
+		if id != "" {
+			seen[id] = true
+		}
+
+		// Enrich with graph config fields (mode, hostname, provider, etc.)
+		// Only set fields the relay session doesn't already have.
+		if cfg, ok := graphConfigs[id]; ok {
+			for _, key := range []string{"mode", "hostname", "provider",
+				"uptime", "relay_active", "bot_active", "healthy"} {
+				if _, exists := m[key]; !exists {
+					if val, ok := cfg[key]; ok {
+						m[key] = val
+					}
+				}
+			}
+			// Use graph config version if relay version is empty or "1.0".
+			if v, ok := m["version"]; (!ok || v == "" || v == "1.0") && cfg["version"] != nil {
+				m["version"] = cfg["version"]
 			}
 		}
+
 		nodes[i] = m
+	}
+
+	// Append registered nodes that aren't currently connected via relay.
+	// These show as offline in the companion UI but preserve their config.
+	for id, cfg := range graphConfigs {
+		if !seen[id] {
+			node := map[string]any{
+				"instance_id": id,
+				"online":      false,
+			}
+			for _, key := range []string{"mode", "hostname", "version",
+				"provider", "uptime", "relay_active", "bot_active", "healthy"} {
+				if val, ok := cfg[key]; ok {
+					node[key] = val
+				}
+			}
+			nodes = append(nodes, node)
+		}
+	}
+
+	if len(nodes) == 0 {
+		log.Printf("[LOCAL-API] WARNING: /api/nodes returned 0 nodes — expected at least the local instance")
 	}
 
 	writeJSON(w, map[string]any{"nodes": nodes})
