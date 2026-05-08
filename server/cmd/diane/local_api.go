@@ -56,6 +56,7 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	mux.HandleFunc("/api/chat/stream", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleChatStream(w, r) })
 	mux.HandleFunc("/api/mcp-servers", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleMCPServers(w, r) })
 	mux.HandleFunc("/api/nodes", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleNodes(w, r) })
+	mux.HandleFunc("/api/nodes/", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleNodeSubRoutes(w, r) })
 	mux.HandleFunc("/api/providers", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleProviders(w, r) })
 	mux.HandleFunc("/api/agents", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleAgents(w, r) })
 	mux.HandleFunc("/api/agents/", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleAgentSubRoutes(w, r) })
@@ -63,7 +64,7 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	mux.HandleFunc("/api/schema/objects/", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleSchemaObjects(w, r) })
 	mux.HandleFunc("/api/doctor", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleDoctor(w, r) })
 
-	expected := 16
+	expected := 17
 	if registered != expected {
 		log.Printf("[LOCAL-API] WARNING: registered %d routes, expected %d — check for missing handlers", registered, expected)
 	}
@@ -1715,6 +1716,104 @@ func (h *apiHandlers) handleNodes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, map[string]any{"nodes": nodes})
+}
+
+// handleNodeSubRoutes dispatches sub-resource requests under /api/nodes/.
+// Paths handled:
+//
+//	/api/nodes/{instanceID}/tools — GET: list tools for a relay node
+func (h *apiHandlers) handleNodeSubRoutes(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/nodes/")
+	parts := strings.SplitN(path, "/", 2)
+	if len(parts) == 0 || parts[0] == "" {
+		jsonError(w, http.StatusBadRequest, "invalid node instance ID")
+		return
+	}
+	instanceID := parts[0]
+
+	if len(parts) == 2 && parts[1] == "tools" {
+		if r.Method != http.MethodGet {
+			jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		h.handleNodeTools(w, r, instanceID)
+		return
+	}
+
+	jsonError(w, http.StatusNotFound, "not found")
+}
+
+// handleNodeTools returns the MCP tools for a specific relay node.
+// GET /api/nodes/{instanceID}/tools → {"tools": [...]}
+func (h *apiHandlers) handleNodeTools(w http.ResponseWriter, r *http.Request, instanceID string) {
+	ctx := r.Context()
+	relayURL := strings.TrimSuffix(h.pc.ServerURL, "/") + "/api/mcp-relay/sessions"
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, relayURL, nil)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "node tools: build request: "+err.Error())
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+h.pc.Token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "node tools: query relay: "+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("node tools: MP returned %d: %s", resp.StatusCode, string(body)))
+		return
+	}
+
+	// Decode relay sessions — handles flat array and wrapped formats
+	var sessions []relaySession
+	rawBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "node tools: read response: "+err.Error())
+		return
+	}
+
+	// Try direct array first
+	if err := json.Unmarshal(rawBody, &sessions); err != nil {
+		// Try wrapped formats
+		var wrapped struct {
+			Items    []relaySession `json:"items"`
+			Data     []relaySession `json:"data"`
+			Sessions []relaySession `json:"sessions"`
+		}
+		if err2 := json.Unmarshal(rawBody, &wrapped); err2 == nil {
+			switch {
+			case wrapped.Sessions != nil:
+				sessions = wrapped.Sessions
+			case wrapped.Items != nil:
+				sessions = wrapped.Items
+			case wrapped.Data != nil:
+				sessions = wrapped.Data
+			}
+		}
+		if sessions == nil {
+			jsonError(w, http.StatusInternalServerError, fmt.Sprintf("node tools: unexpected relay response format"))
+			return
+		}
+	}
+
+	// Find the matching node by instance ID
+	for _, s := range sessions {
+		if s.InstanceID == instanceID {
+			if s.Tools == nil {
+				writeJSON(w, map[string]any{"tools": []any{}})
+				return
+			}
+			writeJSON(w, map[string]any{"tools": s.Tools})
+			return
+		}
+	}
+
+	jsonError(w, http.StatusNotFound, fmt.Sprintf("node %q not found", instanceID))
 }
 
 // handleProviders returns configured LLM providers from the project config.
