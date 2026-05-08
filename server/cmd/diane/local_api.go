@@ -1715,6 +1715,30 @@ func (h *apiHandlers) handleNodes(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[LOCAL-API] WARNING: /api/nodes returned 0 nodes — expected at least the local instance")
 	}
 
+	// Enrich each node with synthetic fields the companion app expects.
+	// The MP relay sessions API returns basic fields (instance_id, version,
+	// tool_count, connected_at) but NOT mode, online, hostname, etc.
+	for i, node := range nodes {
+		m, ok := node.(map[string]any)
+		if !ok {
+			continue
+		}
+		// All nodes from the relay sessions list are online by definition.
+		if _, exists := m["online"]; !exists {
+			m["online"] = true
+		}
+		// Set mode: the local instance (matching config) is master; others are slave.
+		if _, exists := m["mode"]; !exists {
+			id, _ := m["instance_id"].(string)
+			if id != "" && id == h.pc.InstanceID {
+				m["mode"] = "master"
+			} else if h.pc.InstanceID != "" {
+				m["mode"] = "slave"
+			}
+		}
+		nodes[i] = m
+	}
+
 	writeJSON(w, map[string]any{"nodes": nodes})
 }
 

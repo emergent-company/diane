@@ -26,8 +26,8 @@ struct RelayNodesView: View {
                                 return try await api.fetchNodeTools(instanceID: id)
                             }
                         )
-                        vm = newVM
                         await newVM.load()
+                        vm = newVM
                     }
             }
         }
