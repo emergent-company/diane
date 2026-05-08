@@ -1395,7 +1395,7 @@ public struct SchemaObjectSummary: Codable, Sendable, Identifiable {
     public let key: String?
     public let type: String
     public let createdAt: String
-    public let relationshipCount: Int
+    public let relationshipCount: Int?
     public let title: String?
     public let status: String?
     

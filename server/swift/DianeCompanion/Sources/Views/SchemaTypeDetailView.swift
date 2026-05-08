@@ -235,16 +235,7 @@ struct SchemaTypeDetailView: View {
             .cornerRadius(Design.CornerRadius.small)
     }
 
-    private func shortTypeName(_ name: String) -> String {
-        let prefixes = ["Calendar", "Financial", "Shopping"]
-        for prefix in prefixes {
-            if name.hasPrefix(prefix) {
-                return String(name.dropFirst(prefix.count))
-            }
-        }
-        return name
-    }
-
+    func shortTypeName(_ name: String) -> String { ViewFormatting.shortTypeName(name) }
     private let personalTypes: Set<String> = [
         "MemoryFact", "Person", "Contact", "Task", "Project", "CalendarEvent",
         "FinancialTransaction", "Place", "Note", "Habit", "ShoppingItem",
@@ -252,16 +243,9 @@ struct SchemaTypeDetailView: View {
         "Trip", "Car", "Insurance", "Invoice"
     ]
 
-    private func typeNamespace(_ typeName: String) -> String {
-        if typeName.hasPrefix("Diane") || typeName == "SkillMonitorCheckpoint" {
-            return "system"
-        }
-        return "personal"
-    }
+    func typeNamespace(_ typeName: String) -> String { ViewFormatting.typeNamespace(typeName) }
 
-    private func typeNamespaceColor(_ typeName: String) -> Color {
-        typeNamespace(typeName) == "system" ? Color.purple : Color.blue
-    }
+    func typeNamespaceColor(_ typeName: String) -> Color { ViewFormatting.typeNamespaceColor(typeName) }
 
     // MARK: - Recent Objects
 
@@ -323,7 +307,7 @@ struct SchemaTypeDetailView: View {
                     .fontWeight(.medium)
                     .lineLimit(1)
                 Spacer()
-                if obj.relationshipCount > 0 {
+                if (obj.relationshipCount ?? 0) > 0 {
                     HStack(spacing: 1) {
                         Image(systemName: "arrow.triangle.branch")
                             .font(.caption2)
@@ -347,7 +331,7 @@ struct SchemaTypeDetailView: View {
                 Text(status)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                    .badgeStyle(color: statusColor(status))
+                    .badgeStyle(color: StatusColors.schemaStatus(status))
             }
 
             // Created at
@@ -364,25 +348,9 @@ struct SchemaTypeDetailView: View {
         )
     }
 
-    private func statusColor(_ status: String) -> Color {
-        switch status.lowercased() {
-        case "active", "open":   return .green
-        case "inactive", "closed": return .gray
-        case "error", "failed":  return .red
-        default:                  return .secondary
-        }
-    }
+    func statusColor(_ status: String) -> Color { StatusColors.schemaStatus(status) }
 
-    private func formatDate(_ iso: String) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        guard let date = formatter.date(from: iso) ?? ISO8601DateFormatter().date(from: iso) else {
-            return iso
-        }
-        let df = DateFormatter()
-        df.dateFormat = "MMM d, yyyy HH:mm"
-        return df.string(from: date)
-    }
+    func formatDate(_ iso: String) -> String { ViewFormatting.formatSchemaDate(iso) }
 
     // MARK: - Namespace Badge
 

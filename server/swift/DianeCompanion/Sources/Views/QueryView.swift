@@ -227,16 +227,7 @@ struct QueryView: View {
         }
     }
 
-    private func propString(_ v: AnyCodable?) -> String {
-        guard let v else { return "—" }
-        switch v.value {
-        case let s as String: return s
-        case let n as Int:    return "\(n)"
-        case let d as Double: return "\(d)"
-        case let b as Bool:   return b ? "true" : "false"
-        default:              return "\(v.value)"
-        }
-    }
+    func propString(_ v: AnyCodable?) -> String { ViewFormatting.propString(v) }
 
     // MARK: - Run
 

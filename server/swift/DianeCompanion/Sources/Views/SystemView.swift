@@ -236,7 +236,7 @@ struct SystemView: View {
     private func doctorCheckRow(_ item: DoctorCheckItem) -> some View {
         HStack(spacing: Design.Spacing.sm) {
             Image(systemName: item.iconName)
-                .foregroundStyle(doctorStatusColor(item.status))
+                .foregroundStyle(StatusColors.doctorStatus(item.status))
                 .font(.system(size: Design.IconSize.small))
                 .frame(width: 18)
 
@@ -256,14 +256,7 @@ struct SystemView: View {
         .padding(.vertical, 4)
     }
 
-    private func doctorStatusColor(_ status: String) -> Color {
-        switch status {
-        case "ok":      return .green
-        case "warning": return .orange
-        case "error":   return .red
-        default:        return .secondary
-        }
-    }
+    func doctorStatusColor(_ status: String) -> Color { StatusColors.doctorStatus(status) }
 
     private func statusBadge(_ status: String) -> some View {
         Group {
@@ -356,30 +349,9 @@ struct SystemView: View {
         }
     }
 
-    private func friendlyDate(_ iso: String) -> String {
-        // Try ISO8601 parsing
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: iso) {
-            return Self.friendlyFormatter.string(from: date)
-        }
-        formatter.formatOptions = [.withInternetDateTime]
-        if let date = formatter.date(from: iso) {
-            return Self.friendlyFormatter.string(from: date)
-        }
-        return iso
-    }
+    func friendlyDate(_ iso: String) -> String { ViewFormatting.friendlyDate(iso) }
 
-    private func friendlyDate(_ date: Date) -> String {
-        Self.friendlyFormatter.string(from: date)
-    }
-
-    private static let friendlyFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "MMM d, yyyy  h:mm a"
-        return f
-    }()
-
+    func friendlyDate(_ date: Date) -> String { ViewFormatting.friendlyDate(date) }
     // MARK: - Actions
 
     private func loadStatus() async {

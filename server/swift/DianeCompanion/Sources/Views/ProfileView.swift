@@ -204,19 +204,9 @@ struct ProfileView: View {
         }
     }
 
-    private func initials(for name: String?) -> String {
-        guard let name, !name.isEmpty else { return "?" }
-        let parts = name.split(separator: " ")
-        if parts.count >= 2 {
-            return "\(parts[0].prefix(1))\(parts[1].prefix(1))".uppercased()
-        }
-        return String(name.prefix(2)).uppercased()
-    }
+    func initials(for name: String?) -> String { ViewFormatting.initials(for: name) }
 
-    private func maskedKey(_ key: String) -> String {
-        let suffix = key.suffix(4)
-        return "****\(suffix)"
-    }
+    func maskedKey(_ key: String) -> String { ViewFormatting.maskedKey(key) }
 
     @MainActor
     private func load() async {

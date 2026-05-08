@@ -9,11 +9,11 @@ struct ObjectsBrowserView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var apiClient: EmergentAPIClient
 
-    @State private var searchText: String = ""
-    @State private var objects: [GraphObject] = []
-    @State private var selectedObject: GraphObject? = nil
-    @State private var isLoading = false
-    @State private var error: String? = nil
+    @State var searchText: String = ""
+    @State var objects: [GraphObject] = []
+    @State var selectedObject: GraphObject? = nil
+    @State var isLoading = false
+    @State var error: String? = nil
 
     // Task 7.5: Debounce via Combine publisher
     @State private var searchSubject = PassthroughSubject<String, Never>()
@@ -188,18 +188,27 @@ struct ObjectsBrowserView: View {
     }
 
     @MainActor
-    private func performSearch(_ query: String) async {
-        guard let projectID = appState.activeProjectID else { return }
+    func performSearch(_ query: String, using testClient: EmergentAPIClient? = nil, projectID: String? = nil) async {
+        guard let pid = projectID ?? appState.activeProjectID else { return }
         isLoading = true
         error = nil
-        do {
-            objects = try await apiClient.searchObjects(projectID: projectID, query: query)
-            if !objects.contains(where: { $0.id == selectedObject?.id }) {
-                selectedObject = nil
-            }
-        } catch {
-            self.error = error.localizedDescription
+        let client = testClient ?? apiClient
+        let result = await Self.searchObjects(client: client, projectID: pid, query: query)
+        objects = result.objects
+        error = result.error
+        if !objects.contains(where: { $0.id == selectedObject?.id }) {
+            selectedObject = nil
         }
         isLoading = false
+    }
+
+    /// Pure function for testing.
+    static func searchObjects(client: EmergentAPIClient, projectID: String, query: String) async -> (objects: [GraphObject], error: String?) {
+        do {
+            let objs = try await client.searchObjects(projectID: projectID, query: query)
+            return (objs, nil)
+        } catch {
+            return ([], error.localizedDescription)
+        }
     }
 }

@@ -6,10 +6,10 @@ struct WorkersView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var apiClient: EmergentAPIClient
 
-    @State private var diagnostics: ServerDiagnostics? = nil
-    @State private var isLoading = false
-    @State private var error: String? = nil
-    @State private var lastUpdated: Date? = nil
+    @State var diagnostics: ServerDiagnostics? = nil
+    @State var isLoading = false
+    @State var error: String? = nil
+    @State var lastUpdated: Date? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -103,15 +103,23 @@ struct WorkersView: View {
     }
 
     @MainActor
-    private func load() async {
+    func load(with testClient: EmergentAPIClient? = nil) async {
+        let client = testClient ?? apiClient
         if diagnostics == nil { isLoading = true }
-        do {
-            diagnostics = try await apiClient.fetchDiagnostics()
-            lastUpdated = Date()
-            error = nil
-        } catch {
-            self.error = error.localizedDescription
-        }
+        let result = await Self.fetchDiagnostics(client: client)
+        diagnostics = result.diagnostics
+        error = result.error
+        if result.diagnostics != nil { lastUpdated = Date() }
         isLoading = false
+    }
+
+    /// Pure function for testing.
+    static func fetchDiagnostics(client: EmergentAPIClient) async -> (diagnostics: ServerDiagnostics?, error: String?) {
+        do {
+            let d = try await client.fetchDiagnostics()
+            return (d, nil)
+        } catch {
+            return (nil, error.localizedDescription)
+        }
     }
 }

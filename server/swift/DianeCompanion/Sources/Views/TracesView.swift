@@ -129,7 +129,7 @@ struct TracesView: View {
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
-                .background(statusBackground(for: trace.status))
+                .background(StatusColors.traceStatusBackground(for: trace.status))
                 .clipShape(Capsule())
         }
         .padding(.vertical, 2)
@@ -137,23 +137,12 @@ struct TracesView: View {
 
     private func statusCircle(for status: String) -> some View {
         Circle()
-            .fill(statusColor(for: status))
+            .fill(StatusColors.traceStatus(for: status))
             .frame(width: 7, height: 7)
     }
 
-    private func statusColor(for status: String) -> Color {
-        switch status.lowercased() {
-        case "completed", "success": return .green
-        case "running", "processing": return .blue
-        case "failed", "error": return .red
-        case "pending", "queued": return .orange
-        default: return .secondary
-        }
-    }
-
-    private func statusBackground(for status: String) -> Color {
-        statusColor(for: status).opacity(0.15)
-    }
+    func statusColor(for status: String) -> Color { StatusColors.traceStatus(for: status) }
+    func statusBackground(for status: String) -> Color { StatusColors.traceStatusBackground(for: status) }
 
     // MARK: - Trace Detail Panel
 

@@ -2,7 +2,7 @@ import Foundation
 
 /// Manages iMessage via AppleScript.
 @MainActor
-final class MessagesManager: ObservableObject {
+final class MessagesManager: MessagesManagerProtocol, ObservableObject {
 
     @Published private(set) var isAuthorized = false
 

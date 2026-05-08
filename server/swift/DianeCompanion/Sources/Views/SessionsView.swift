@@ -194,19 +194,11 @@ struct SessionsView: View {
         if let s = status, !s.isEmpty {
             Text(s.capitalized)
                 .font(.system(size: Design.IconSize.tiny, weight: .medium))
-                .badgeStyle(color: statusColor(s))
+                .badgeStyle(color: StatusColors.sessionStatus(s))
         }
     }
 
-    private func statusColor(_ status: String) -> Color {
-        switch status.lowercased() {
-        case "active", "running": return .green
-        case "paused", "idle": return .orange
-        case "completed", "closed", "done": return .secondary
-        case "error", "failed": return .red
-        default: return .secondary
-        }
-    }
+    func statusColor(_ status: String) -> Color { StatusColors.sessionStatus(status) }
 
     // MARK: - Session Detail (Chat-like Transcript)
 
@@ -404,20 +396,10 @@ struct SessionsView: View {
     }
 
     /// Short form: last 6 characters of the session ID.
-    private func sessionIDShortForm(_ id: String) -> String {
-        if id.count <= 6 { return id }
-        return String(id.suffix(6))
-    }
+    func sessionIDShortForm(_ id: String) -> String { ViewFormatting.sessionIDShortForm(id) }
 
     /// Strip common prefixes from agent names for compact display.
-    private func agentShortName(_ name: String) -> String {
-        for prefix in ["discord-", "diane-", "agent-"] {
-            if name.hasPrefix(prefix) {
-                return String(name.dropFirst(prefix.count))
-            }
-        }
-        return name
-    }
+    func agentShortName(_ name: String) -> String { ViewFormatting.agentShortName(name) }
 
     @ViewBuilder
     private func statsBar(_ detail: SessionDetailResponse) -> some View {
@@ -884,16 +866,12 @@ struct SessionsView: View {
         .padding(.vertical, Design.Spacing.xs)
     }
 
-    private func bubbleBackground(isUser: Bool, isSystem: Bool) -> Color {
-        if isUser { return Color.blue.opacity(0.12) }
-        if isSystem { return Color.clear }
-        return Color.primary.opacity(0.05)
+    func bubbleBackground(isUser: Bool, isSystem: Bool) -> Color {
+        ViewFormatting.bubbleBackground(isUser: isUser, isSystem: isSystem)
     }
 
-    private func bubbleTailColor(isUser: Bool, isSystem: Bool) -> Color {
-        if isUser { return Color.blue.opacity(0.12) }
-        if isSystem { return Color.clear }
-        return Color.primary.opacity(0.05)
+    func bubbleTailColor(isUser: Bool, isSystem: Bool) -> Color {
+        ViewFormatting.bubbleTailColor(isUser: isUser, isSystem: isSystem)
     }
 
     // MARK: - Thinking / Reasoning Section
@@ -990,14 +968,7 @@ struct SessionsView: View {
     }
 
     /// Format tool arguments: try to pretty-print JSON, fall back to raw string.
-    private func formatToolArgs(_ raw: String) -> String {
-        guard let data = raw.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data),
-              let pretty = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys, .withoutEscapingSlashes]),
-              let str = String(data: pretty, encoding: .utf8)
-        else { return raw }
-        return str
-    }
+    func formatToolArgs(_ raw: String) -> String { ViewFormatting.formatToolArgs(raw) }
 
     // MARK: - Role Badge
 
@@ -1008,10 +979,10 @@ struct SessionsView: View {
                 .font(.caption2)
                 .fontWeight(.semibold)
         }
-        .foregroundStyle(roleColor(role))
+        .foregroundStyle(StatusColors.messageRole(role))
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
-        .background(roleColor(role).opacity(0.1))
+        .background(StatusColors.messageRole(role).opacity(0.1))
         .cornerRadius(Design.CornerRadius.small)
     }
 
@@ -1025,15 +996,7 @@ struct SessionsView: View {
         }
     }
 
-    private func roleColor(_ role: String) -> Color {
-        switch role.lowercased() {
-        case "user":      return .blue
-        case "assistant": return .green
-        case "system":    return .orange
-        case "tool":      return .purple
-        default:          return .secondary
-        }
-    }
+    func roleColor(_ role: String) -> Color { StatusColors.messageRole(role) }
 
     // MARK: - Helpers
 
@@ -1041,19 +1004,6 @@ struct SessionsView: View {
     /// Recent (< 7d) → relative; older → absolute date.
     private func relativeTimestamp(_ dateStr: String) -> String {
         DateUtils.formatTimestamp(dateStr)
-    }
-
-    /// Format large token counts: "1.5K", "12K", "1.2M".
-    private func formatTokenCount(_ count: Int) -> String {
-        switch count {
-        case 0..<1000:   return "\(count)"
-        case 1000..<1_000_000:
-            let k = Double(count) / 1000
-            return k >= 100 ? "\(Int(k))K" : String(format: "%.1fK", k)
-        default:
-            let m = Double(count) / 1_000_000
-            return m >= 10 ? "\(Int(m))M" : String(format: "%.1fM", m)
-        }
     }
 
     // MARK: - Data Loading
@@ -1353,18 +1303,6 @@ struct SessionsView: View {
             }
         } catch {
             logDebug("SessionsView: failed to load agent defs: \(error.localizedDescription)", category: "Sessions")
-        }
-    }
-
-    private func formatCost(_ usd: Double) -> String {
-        if usd >= 100 {
-            return String(format: "$%.2f", usd)
-        } else if usd >= 1 {
-            return String(format: "$%.3f", usd)
-        } else if usd >= 0.001 {
-            return String(format: "%.1f¢", usd * 100)
-        } else {
-            return String(format: "%.2f¢", usd * 100)
         }
     }
 }

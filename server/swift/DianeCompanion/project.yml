@@ -14,7 +14,8 @@ settings:
         MACOSX_DEPLOYMENT_TARGET: "15.0"
         PRODUCT_BUNDLE_IDENTIFIER: com.emergent-company.diane-companion
         DEVELOPMENT_TEAM: ""
-        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
         ENABLE_HARDENED_RUNTIME: YES
         OTHER_LDFLAGS: "-Wl,-w"
         OTHER_SWIFT_FLAGS: "-Xlinker -w"
@@ -53,11 +54,10 @@ targets:
         INFOPLIST_FILE: DianeCompanion/Info.plist
         CODE_SIGN_ENTITLEMENTS: DianeCompanion/DianeCompanion.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        MARKETING_VERSION: 1.0
-        CURRENT_PROJECT_VERSION: 1
+        MARKETING_VERSION: 1.38.32
+        CURRENT_PROJECT_VERSION: 2
       configs:
         Debug:
-          CODE_SIGN_IDENTITY: "-"
           OTHER_LDFLAGS: "-Wl,-w"
         Release:
           CODE_SIGN_IDENTITY: "Apple Distribution"
@@ -109,6 +109,7 @@ targets:
       - target: Diane
     settings:
       base:
+        INFOPLIST_FILE: DianeTests/Info.plist
         BUNDLE_LOADER: "$(TEST_HOST)"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Diane.app/Contents/MacOS/Diane"
         GENERATE_INFOPLIST_FILE: YES
@@ -128,3 +129,16 @@ targets:
         USES_XCTRUNNER: YES
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGNING_ALLOWED: NO
+    postbuildScripts:
+      - script: |
+          # Re-sign the entire XCUITest runner with consistent ad-hoc identity
+          RUNNER="${TARGET_BUILD_DIR}/DianeUITests-Runner.app"
+          if [ -d "$RUNNER" ]; then
+            # Sign runner app first, then all nested plugins
+            codesign --force --sign - --preserve-metadata=identifier,entitlements \
+              "${RUNNER}/Contents/PlugIns/DianeUITests.xctest" 2>/dev/null || true
+            codesign --force --sign - --preserve-metadata=identifier,entitlements \
+              --deep "$RUNNER"
+            echo "Re-signed XCUITest runner + plugins with consistent ad-hoc identity"
+          fi
+        name: "Re-sign XCUITest bundle identically"

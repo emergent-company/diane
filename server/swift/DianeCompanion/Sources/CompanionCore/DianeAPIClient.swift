@@ -6,9 +6,6 @@ import Sentry
 /// This is the preferred data source for the companion app — it uses the
 /// same data paths as the diane CLI (Memory Bridge for sessions, local
 /// config for MCP servers, Memory Platform relay for nodes).
-///
-/// When launched with `--uitesting`, connects to port 18990 instead of 8890
-/// so the automated test suite can use a dedicated server instance.
 @MainActor
 final class DianeAPIClient: ObservableObject {
     private let session: URLSession
@@ -17,12 +14,7 @@ final class DianeAPIClient: ObservableObject {
     @Published private(set) var isReachable: Bool = false
 
     init(baseURL: String = "http://127.0.0.1:8890") {
-        // UITESTING override: if launched from test script, use dedicated test port
-        if CommandLine.arguments.contains("--uitesting") {
-            self.baseURL = "http://127.0.0.1:18990"
-        } else {
-            self.baseURL = baseURL
-        }
+        self.baseURL = baseURL
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 5
         config.timeoutIntervalForResource = 10
@@ -116,24 +108,6 @@ final class DianeAPIClient: ObservableObject {
         return try JSONDecoder().decode(SessionDetailResponse.self, from: data)
     }
 
-    /// Fetch agent runs associated with a session.
-    /// GET /api/sessions/{id}/runs
-    func fetchSessionRuns(sessionID: String) async throws -> SessionRunsResponse {
-        let encoded = sessionID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionID
-        let data = try await get("/api/sessions/\(encoded)/runs")
-        return try JSONDecoder().decode(SessionRunsResponse.self, from: data)
-    }
-
-    /// Fetch todos for a session.
-    /// GET /api/sessions/{id}/todos
-    func fetchSessionTodos(sessionID: String) async throws -> [SessionTodoItem] {
-        let encoded = sessionID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionID
-        let data = try await get("/api/sessions/\(encoded)/todos")
-        // The API returns {"items": [...]}
-        let container = try JSONDecoder().decode([String: [SessionTodoItem]].self, from: data)
-        return container["items"] ?? []
-    }
-
     // MARK: - Chat Send
 
     /// Send a chat message and wait for the full agent response via the agent pipeline.
@@ -146,119 +120,6 @@ final class DianeAPIClient: ObservableObject {
         let jsonData = try JSONSerialization.data(withJSONObject: body)
         let data = try await post("/api/chat/send", body: jsonData, timeout: 180)
         return try JSONDecoder().decode(ChatSendResponse.self, from: data)
-    }
-
-    // MARK: - Stream Chat (ACP SSE)
-
-    /// Send a message via ACP SSE streaming and receive events progressively.
-    /// Returns an async throwing stream of StreamChatEvent.
-    /// The stream ends when a `done` or `error` event is received.
-    func streamChatMessage(
-        sessionID: String?,
-        content: String,
-        agentName: String = "diane-default"
-    ) -> AsyncThrowingStream<StreamChatEvent, Error> {
-        return AsyncThrowingStream { continuation in
-            let task = Task {
-                let startTime = Date()
-                var eventCount = 0
-                var tokenCount = 0
-                var hadDone = false
-                var hadError = false
-                var lastType: String = ""
-
-                let body: [String: Any] = [
-                    "session_id": sessionID as Any,
-                    "message": content,
-                    "agent_name": agentName
-                ]
-                guard let jsonData = try? JSONSerialization.data(withJSONObject: body),
-                      let url = URL(string: "\(baseURL)/api/chat/stream") else {
-                    logWarning("streamChatMessage: failed to build request", category: "ChatStream")
-                    continuation.finish(throwing: DianeAPIError.serverError("Invalid request"))
-                    return
-                }
-
-                var request = URLRequest(url: url)
-                request.httpMethod = "POST"
-                request.httpBody = jsonData
-                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-                request.timeoutInterval = 300
-
-                do {
-                    let (data, response) = try await URLSession.shared.data(for: request)
-                    guard let http = response as? HTTPURLResponse else {
-                        logWarning("streamChatMessage: no HTTP response", category: "ChatStream")
-                        continuation.finish(throwing: DianeAPIError.network("No HTTP response"))
-                        return
-                    }
-                    guard http.statusCode == 200 else {
-                        let body = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
-                        logWarning("streamChatMessage: HTTP \(http.statusCode) — \(body.prefix(500))", category: "ChatStream")
-                        continuation.finish(throwing: DianeAPIError.httpError(http.statusCode, body))
-                        return
-                    }
-
-                    var pendingData = ""
-
-                    let text = String(data: data, encoding: .utf8) ?? ""
-                    let lines = text.components(separatedBy: "\n")
-                    for line in lines {
-                        if line.hasPrefix("data: ") {
-                            let jsonStr = String(line.dropFirst(6))
-                            pendingData = jsonStr
-                        } else if line.isEmpty && !pendingData.isEmpty {
-                            eventCount += 1
-                            if let eventData = pendingData.data(using: .utf8),
-                               let event = try? JSONDecoder().decode(StreamChatEvent.self, from: eventData) {
-                                lastType = event.type
-                                if event.type == "token" {
-                                    tokenCount += 1
-                                }
-                                if event.type == "done" {
-                                    hadDone = true
-                                }
-                                if event.type == "error" {
-                                    hadError = true
-                                }
-                                continuation.yield(event)
-                                if event.type == "done" || event.type == "error" {
-                                    break
-                                }
-                            } else {
-                                logWarning("streamChatMessage: failed to decode event: \(pendingData.prefix(100))", category: "ChatStream")
-                            }
-                            pendingData = ""
-                        }
-                    }
-
-                    // Post-stream diagnostics
-                    let duration = Date().timeIntervalSince(startTime)
-                    if !hadDone && !hadError {
-                        logWarning("streamChatMessage: stream ended without done/error event (events=\(eventCount) tokens=\(tokenCount) lastType=\(lastType) duration=\(String(format: "%.1f", duration))s)", category: "ChatStream")
-                    }
-                    if tokenCount == 0 && !hadError {
-                        logWarning("streamChatMessage: stream returned 0 tokens — possible empty response (events=\(eventCount) lastType=\(lastType))", category: "ChatStream")
-                    }
-                    logInfo("streamChatMessage: complete — events=\(eventCount) tokens=\(tokenCount) done=\(hadDone) error=\(hadError) duration=\(String(format: "%.1f", duration))s", category: "ChatStream")
-
-                    continuation.finish()
-                } catch {
-                    if Task.isCancelled {
-                        logInfo("streamChatMessage: cancelled by caller", category: "ChatStream")
-                        continuation.finish()
-                    } else {
-                        logWarning("streamChatMessage: error after \(eventCount) events: \(error.localizedDescription)", category: "ChatStream")
-                        continuation.finish(throwing: error)
-                    }
-                }
-            }
-
-            continuation.onTermination = { _ in
-                task.cancel()
-            }
-        }
     }
 
     // MARK: - Session Write
@@ -526,163 +387,142 @@ final class DianeAPIClient: ObservableObject {
 
     // MARK: - HTTP
 
-    /// Shared HTTP performer: builds request, adds Sentry span + breadcrumb, captures errors.
-    /// Retries up to 3 times with exponential backoff for transient network errors
-    /// (connection refused, timeout, network lost) to survive startup races and restarts.
-    private func perform(method: String, path: String, body: Data? = nil, timeout: TimeInterval = 10) async throws -> Data {
+    /// Capture an HTTP response in Sentry — adds breadcrumb + captures errors.
+    private func captureSentinel(method: String, path: String, status: Int, body: String) {
+        let breadcrumb = Breadcrumb()
+        breadcrumb.category = "http"
+        breadcrumb.type = "http"
+        breadcrumb.data = [
+            "method": method,
+            "url": "\(baseURL)\(path)",
+            "status_code": status,
+            "response_body": String(body.prefix(500)),
+        ]
+        SentrySDK.addBreadcrumb(breadcrumb)
+
+        if status >= 400 {
+            let error = NSError(
+                domain: "DianeAPIError",
+                code: status,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "HTTP \(status) \(method) \(path)",
+                    "method": method,
+                    "path": path,
+                    "response": String(body.prefix(2000)),
+                ]
+            )
+            SentrySDK.capture(error: error)
+        }
+    }
+
+    private func get(_ path: String) async throws -> Data {
         guard let url = URL(string: "\(baseURL)\(path)") else {
             throw DianeAPIError.invalidURL(path)
         }
         var request = URLRequest(url: url)
-        request.httpMethod = method
-        request.timeoutInterval = timeout
+        request.httpMethod = "GET"
+        request.timeoutInterval = 10
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw DianeAPIError.network("No HTTP response")
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            captureSentinel(method: "GET", path: path, status: http.statusCode, body: body)
+            throw DianeAPIError.httpError(http.statusCode, body)
+        }
+        return data
+    }
+
+    private func post(_ path: String, body: Data?, timeout: TimeInterval? = nil) async throws -> Data {
+        guard let url = URL(string: "\(baseURL)\(path)") else {
+            throw DianeAPIError.invalidURL(path)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = timeout ?? 10
         if let b = body {
             request.httpBody = b
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
 
-        let span = SentrySDK.span?.startChild(operation: "http.client", description: "\(method) \(path)")
-        span?.setData(value: "\(baseURL)\(path)", key: "url")
-
-        let startTime = Date()
-        let maxRetries = 3
-
-        for attempt in 0..<maxRetries {
-            if attempt > 0 {
-                // Exponential backoff: 0.5s, 1s, 2s
-                let delay = UInt64(pow(2.0, Double(attempt - 1))) * 500_000_000
-                try? await Task.sleep(nanoseconds: delay)
-            }
-
-            do {
-                let (data, response) = try await session.data(for: request)
-                let durationMs = Int(Date().timeIntervalSince(startTime) * 1000)
-
-                guard let http = response as? HTTPURLResponse else {
-                    span?.setData(value: "no_http_response", key: "error")
-                    span?.finish(status: .internalError)
-                    throw DianeAPIError.network("No HTTP response")
-                }
-
-                let bodyStr = String(data: data, encoding: .utf8) ?? ""
-                let ok = (200...299).contains(http.statusCode)
-
-                // Always add breadcrumb — success or failure
-                let crumb = Breadcrumb()
-                crumb.category = "http"
-                crumb.type = "http"
-                crumb.data = [
-                    "method": method,
-                    "url": "\(baseURL)\(path)",
-                    "status_code": http.statusCode,
-                    "duration_ms": durationMs,
-                    "response_size": data.count,
-                ]
-
-                if ok {
-                    crumb.message = "\(method) \(path) → \(http.statusCode)"
-                    SentrySDK.addBreadcrumb(crumb)
-                    span?.setData(value: http.statusCode, key: "status_code")
-                    span?.setData(value: durationMs, key: "duration_ms")
-                    span?.finish(status: .ok)
-                    return data
-                } else {
-                    crumb.data?["response_body"] = String(bodyStr.prefix(500))
-                    SentrySDK.addBreadcrumb(crumb)
-
-                    let error = NSError(
-                        domain: "DianeAPIError",
-                        code: http.statusCode,
-                        userInfo: [
-                            NSLocalizedDescriptionKey: "HTTP \(http.statusCode) \(method) \(path)",
-                            "method": method,
-                            "path": path,
-                            "response": String(bodyStr.prefix(2000)),
-                        ]
-                    )
-                    SentrySDK.capture(error: error)
-
-                    span?.setData(value: http.statusCode, key: "status_code")
-                    span?.setData(value: durationMs, key: "duration_ms")
-                    span?.setData(value: String(bodyStr.prefix(500)), key: "error_body")
-                    span?.finish(status: http.statusCode == 404 ? .notFound : .internalError)
-                    throw DianeAPIError.httpError(http.statusCode, bodyStr)
-                }
-            } catch let e as DianeAPIError {
-                // HTTP errors and DianeAPIError — don't retry, rethrow immediately
-                throw e
-            } catch {
-                // Network-level errors (timeout, DNS, connection refused)
-                let nsError = error as NSError
-                let isTransient = nsError.domain == NSURLErrorDomain &&
-                    [NSURLErrorCannotConnectToHost, NSURLErrorTimedOut, NSURLErrorNetworkConnectionLost, NSURLErrorCancelled].contains(nsError.code)
-
-                if isTransient && attempt < maxRetries - 1 {
-                    // Transient error with retries left — continue the loop
-                    continue
-                }
-
-                // Last retry failed or non-transient error — report
-                let crumb = Breadcrumb()
-                crumb.category = "http"
-                crumb.type = "http"
-                crumb.message = "\(method) \(path) → \(isTransient ? "network error after \(maxRetries) retries" : "network error"): \(error.localizedDescription)"
-                crumb.data = [
-                    "method": method,
-                    "url": "\(baseURL)\(path)",
-                    "error": error.localizedDescription,
-                    "retries": attempt,
-                ]
-                SentrySDK.addBreadcrumb(crumb)
-
-                if isTransient {
-                    // Transient but all retries exhausted — don't send to Sentry (expected startup race)
-                    span?.setData(value: error.localizedDescription, key: "error")
-                    span?.finish(status: .internalError)
-                    throw DianeAPIError.network(error.localizedDescription)
-                } else {
-                    // Non-transient network error (e.g. DNS, SSL, bad URL) — capture to Sentry
-                    let capturedError = NSError(
-                        domain: "DianeAPIError",
-                        code: -1,
-                        userInfo: [
-                            NSLocalizedDescriptionKey: "Network error: \(error.localizedDescription) — \(method) \(path)",
-                            "method": method,
-                            "path": path,
-                            NSUnderlyingErrorKey: error,
-                        ]
-                    )
-                    SentrySDK.capture(error: capturedError)
-
-                    span?.setData(value: error.localizedDescription, key: "error")
-                    span?.finish(status: .internalError)
-                    throw DianeAPIError.network(error.localizedDescription)
-                }
-            }
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw DianeAPIError.network("No HTTP response")
         }
-
-        // Should never reach here — all retries exhausted above
-        throw DianeAPIError.network("Request failed after \(maxRetries) attempts")
-    }
-
-    private func get(_ path: String) async throws -> Data {
-        try await perform(method: "GET", path: path)
-    }
-
-    private func post(_ path: String, body: Data?, timeout: TimeInterval? = nil) async throws -> Data {
-        try await perform(method: "POST", path: path, body: body, timeout: timeout ?? 10)
+        guard (200...299).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            captureSentinel(method: "POST", path: path, status: http.statusCode, body: body)
+            throw DianeAPIError.httpError(http.statusCode, body)
+        }
+        return data
     }
 
     private func delete(_ path: String) async throws -> Data {
-        try await perform(method: "DELETE", path: path)
+        guard let url = URL(string: "\(baseURL)\(path)") else {
+            throw DianeAPIError.invalidURL(path)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.timeoutInterval = 10
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw DianeAPIError.network("No HTTP response")
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            captureSentinel(method: "DELETE", path: path, status: http.statusCode, body: body)
+            throw DianeAPIError.httpError(http.statusCode, body)
+        }
+        return data
     }
 
     private func put(_ path: String, body: Data?, timeout: TimeInterval? = nil) async throws -> Data {
-        try await perform(method: "PUT", path: path, body: body, timeout: timeout ?? 10)
+        guard let url = URL(string: "\(baseURL)\(path)") else {
+            throw DianeAPIError.invalidURL(path)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.timeoutInterval = timeout ?? 10
+        if let b = body {
+            request.httpBody = b
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw DianeAPIError.network("No HTTP response")
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let bodyStr = String(data: data, encoding: .utf8) ?? ""
+            captureSentinel(method: "PUT", path: path, status: http.statusCode, body: bodyStr)
+            throw DianeAPIError.httpError(http.statusCode, bodyStr)
+        }
+        return data
     }
 
     private func patch(_ path: String, body: Data?, timeout: TimeInterval? = nil) async throws -> Data {
-        try await perform(method: "PATCH", path: path, body: body, timeout: timeout ?? 10)
+        guard let url = URL(string: "\(baseURL)\(path)") else {
+            throw DianeAPIError.invalidURL(path)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"
+        request.timeoutInterval = timeout ?? 10
+        if let b = body {
+            request.httpBody = b
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw DianeAPIError.network("No HTTP response")
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let bodyStr = String(data: data, encoding: .utf8) ?? ""
+            captureSentinel(method: "PATCH", path: path, status: http.statusCode, body: bodyStr)
+            throw DianeAPIError.httpError(http.statusCode, bodyStr)
+        }
+        return data
     }
 }
 
@@ -711,7 +551,7 @@ struct RelayNode: Identifiable, Codable, Hashable, Sendable {
     let version: String?
     let toolCount: Int?
     let connectedAt: String?
-    let online: Bool           // whether node has an active relay connection
+    let online: Bool?          // whether node has an active relay connection
     let uptime: String?        // ISO 8601 — process start time
     let provider: String?      // e.g. "deepseek/deepseek-v4-flash"
     let relayActive: Bool?     // MCP relay connected

@@ -8,10 +8,10 @@ struct AccountStatusView: View {
     @EnvironmentObject var statusMonitor: StatusMonitor
     @EnvironmentObject var serverConfig: ServerConfiguration
 
-    @State private var stats: AccountStats? = nil
-    @State private var isLoading = false
-    @State private var error: String? = nil
-    @State private var lastUpdated: Date? = nil
+    @State var stats: AccountStats? = nil
+    @State var isLoading = false
+    @State var error: String? = nil
+    @State var lastUpdated: Date? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -192,15 +192,23 @@ struct AccountStatusView: View {
     }
 
     @MainActor
-    private func load() async {
+    func load(with testClient: EmergentAPIClient? = nil) async {
+        let client = testClient ?? apiClient
         if stats == nil { isLoading = true }
-        do {
-            stats = try await apiClient.fetchAccountStats()
-            lastUpdated = Date()
-            error = nil
-        } catch {
-            self.error = error.localizedDescription
-        }
+        let result = await Self.fetchAccountStats(client: client)
+        stats = result.stats
+        error = result.error
+        if let ts = result.stats { lastUpdated = Date() }
         isLoading = false
+    }
+
+    /// Pure function for testing — fetches account stats and returns result.
+    static func fetchAccountStats(client: EmergentAPIClient) async -> (stats: AccountStats?, error: String?) {
+        do {
+            let stats = try await client.fetchAccountStats()
+            return (stats, nil)
+        } catch {
+            return (nil, error.localizedDescription)
+        }
     }
 }

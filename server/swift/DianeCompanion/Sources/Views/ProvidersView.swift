@@ -351,7 +351,7 @@ struct ProvidersView: View {
 
     // MARK: - Helpers
 
-    private func providerDisplayName(_ provider: String) -> String {
+    func providerDisplayName(_ provider: String) -> String {
         switch provider {
         case "google-ai":  return "Google AI"
         case "vertex-ai":  return "Vertex AI"
@@ -359,7 +359,7 @@ struct ProvidersView: View {
         }
     }
 
-    private func policyDisplayLabel(_ policy: String) -> String {
+    func policyDisplayLabel(_ policy: String) -> String {
         switch policy {
         case "none":         return "None"
         case "organization": return "Organization"
@@ -696,7 +696,7 @@ struct SetProjectPolicySheet: View {
         }
     }
 
-    private func providerDisplayName(_ p: String) -> String {
+    func providerDisplayName(_ p: String) -> String {
         switch p {
         case "google-ai": return "Google AI"
         case "vertex-ai": return "Vertex AI"

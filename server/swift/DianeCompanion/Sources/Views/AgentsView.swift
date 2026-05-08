@@ -180,7 +180,7 @@ struct AgentsView: View {
         HStack(spacing: Design.Spacing.sm) {
             Image(systemName: agentIcon(agent.flowType))
                 .font(.system(size: Design.IconSize.small))
-                .foregroundStyle(agentColor(agent.flowType))
+                .foregroundStyle(StatusColors.agentFlow(agent.flowType))
                 .frame(width: 20, height: 20)
 
             VStack(alignment: .leading, spacing: Design.Spacing.xxs) {
@@ -235,20 +235,12 @@ struct AgentsView: View {
     private func flowBadge(_ flow: String) -> some View {
         Text(flow.isEmpty ? "chat" : flow)
             .font(.system(size: Design.IconSize.tiny, weight: .medium))
-            .badgeStyle(color: agentColor(flow))
+            .badgeStyle(color: StatusColors.agentFlow(flow))
     }
 
-    private func agentColor(_ flow: String) -> Color {
-        switch flow.lowercased() {
-        case "chat", "": return .green
-        case "agent":    return .purple
-        case "chain":    return .orange
-        case "workflow": return .blue
-        default:         return .secondary
-        }
-    }
+    func agentColor(_ flow: String) -> Color { StatusColors.agentFlow(flow) }
 
-    private func agentIcon(_ flow: String) -> String {
+    func agentIcon(_ flow: String) -> String {
         switch flow.lowercased() {
         case "chat", "": return "message"
         case "agent":    return "brain.head.profile"
@@ -692,7 +684,7 @@ struct AgentsView: View {
         editSandboxEnabled = override?.sandboxEnabled ?? false
     }
 
-    private func parseCommaList(_ str: String) -> [String] {
+    func parseCommaList(_ str: String) -> [String] {
         str.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 }

@@ -12,7 +12,6 @@ struct DianeCompanionApp: App {
     @StateObject private var dianeAPI       = DianeAPIClient()
     @StateObject private var apiClient      = EmergentAPIClient()
     @StateObject private var apiServer      = APIServerManager()
-    @StateObject private var selfTestManager = SelfTestManager()
     @State private var hasStarted           = false
 
     init() {
@@ -22,25 +21,6 @@ struct DianeCompanionApp: App {
             options.sendDefaultPii = true
             options.tracesSampleRate = 1.0
         }
-
-        // Attach a persistent device UUID to all Sentry events for session correlation.
-        SentrySDK.configureScope { scope in
-            let deviceIDKey = "com.diane.sentry_device_id"
-            if let stored = UserDefaults.standard.string(forKey: deviceIDKey) {
-                let user = User(userId: stored)
-                user.email = "maciej@kucharz.net"
-                user.username = "mcj"
-                scope.setUser(user)
-            } else {
-                let uuid = UUID().uuidString
-                UserDefaults.standard.set(uuid, forKey: deviceIDKey)
-                let user = User(userId: uuid)
-                user.email = "maciej@kucharz.net"
-                user.username = "mcj"
-                scope.setUser(user)
-            }
-        }
-
         AppLogger.shared.info("Diane Companion app launching", category: "App")
         // Log environment info for crash diagnostics
         let sysInfo = ProcessInfo.processInfo
@@ -61,14 +41,12 @@ struct DianeCompanionApp: App {
         // or full sidebar + content when configured and connected.
         Window("Diane", id: "main") {
             MainWindowView()
-                .sentryView("MainWindow")
                 .environmentObject(appState)
                 .environmentObject(apiClient)
                 .environmentObject(statusMonitor)
                 .environmentObject(serverConfig)
                 .environmentObject(dianeAPI)
                 .environmentObject(updateChecker)
-                .environmentObject(selfTestManager)
                 .task { await startIfNeeded() }
         }
         .windowStyle(.titleBar)
@@ -84,7 +62,6 @@ struct DianeCompanionApp: App {
                 .environmentObject(cliManager)
                 .environmentObject(appState)
                 .environmentObject(apiClient)
-                .environmentObject(selfTestManager)
                 .task { await startIfNeeded() }
         } label: {
             Image(systemName: menuBarIconName)
@@ -114,18 +91,10 @@ struct DianeCompanionApp: App {
         // Configure the API client from persisted server settings
         apiClient.configure(serverURL: serverConfig.serverURL, apiKey: serverConfig.apiKey)
 
-        // When launched with --uitesting, skip local serve management — the
-        // test harness starts an isolated server instance on a dedicated port.
-        if CommandLine.arguments.contains("--uitesting") {
-            AppLogger.shared.info("UITESTING mode: skipping local serve startup", category: "App")
-            // Give the test harness a moment to start the server
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-        } else {
-            // Configure the API server manager and ensure local diane serve is running
-            apiServer.configure(apiClient: dianeAPI)
-            AppLogger.shared.info("Ensuring local diane serve is running", category: "App")
-            await apiServer.ensureRunning(dianeAPI: dianeAPI)
-        }
+        // Configure the API server manager and ensure local diane serve is running
+        apiServer.configure(apiClient: dianeAPI)
+        AppLogger.shared.info("Ensuring local diane serve is running", category: "App")
+        await apiServer.ensureRunning(dianeAPI: dianeAPI)
 
         // Check reachability after trying to start
         let reachable = await dianeAPI.checkReachability()
@@ -137,10 +106,14 @@ struct DianeCompanionApp: App {
         await updateChecker.start()
         AppLogger.shared.info("App startup complete", category: "App")
 
-        // Post-upgrade self-test: runs after upgrade detection
-        if let version = updateChecker.currentVersion {
-            await selfTestManager.checkPostUpgrade(installedVersion: version)
-            await selfTestManager.runIfPending()
+        // In uitesting mode, bring the main window to front so XCUITest can interact
+        if CommandLine.arguments.contains("--uitesting") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                NSApp.activate(ignoringOtherApps: true)
+                if let window = NSApp.windows.first(where: { $0.title == "Diane" }) {
+                    window.makeKeyAndOrderFront(nil)
+                }
+            }
         }
     }
 }

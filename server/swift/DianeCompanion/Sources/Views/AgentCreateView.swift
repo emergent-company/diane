@@ -5,18 +5,18 @@ struct AgentCreateView: View {
     let onCreate: (CreateAgentRequest) async throws -> Void
     let onClose: () -> Void
 
-    @State private var name: String = ""
-    @State private var description: String = ""
-    @State private var systemPrompt: String = ""
-    @State private var toolsString: String = ""
-    @State private var skillsString: String = ""
-    @State private var maxSteps: String = ""
-    @State private var timeout: String = ""
-    @State private var visibility: String = "project"
-    @State private var flowType: String = "standard"
+    @State var name: String = ""
+    @State var description: String = ""
+    @State var systemPrompt: String = ""
+    @State var toolsString: String = ""
+    @State var skillsString: String = ""
+    @State var maxSteps: String = ""
+    @State var timeout: String = ""
+    @State var visibility: String = "project"
+    @State var flowType: String = "standard"
 
-    @State private var isCreating = false
-    @State private var error: String?
+    @State var isCreating = false
+    @State var error: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -144,16 +144,48 @@ struct AgentCreateView: View {
         .frame(width: 520, height: 620)
     }
 
-    private func create() async {
+    func create() async {
         isCreating = true
         error = nil
 
-        let trimmedName = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmedName.isEmpty else {
+        guard let req = Self.buildRequest(
+            name: name,
+            description: description,
+            systemPrompt: systemPrompt,
+            toolsString: toolsString,
+            skillsString: skillsString,
+            maxSteps: maxSteps,
+            timeout: timeout,
+            visibility: visibility,
+            flowType: flowType
+        ) else {
             error = "Name is required"
             isCreating = false
             return
         }
+
+        do {
+            try await onCreate(req)
+        } catch {
+            self.error = error.localizedDescription
+        }
+        isCreating = false
+    }
+
+    /// Build a CreateAgentRequest from form fields, returning nil if validation fails.
+    static func buildRequest(
+        name: String,
+        description: String,
+        systemPrompt: String,
+        toolsString: String,
+        skillsString: String,
+        maxSteps: String,
+        timeout: String,
+        visibility: String,
+        flowType: String
+    ) -> CreateAgentRequest? {
+        let trimmedName = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmedName.isEmpty else { return nil }
 
         var req = CreateAgentRequest(name: trimmedName)
         req.description = description.isEmpty ? nil : description
@@ -170,11 +202,6 @@ struct AgentCreateView: View {
         if let ms = Int(maxSteps), ms > 0 { req.maxSteps = ms }
         if let to = Int(timeout), to > 0 { req.defaultTimeout = to }
 
-        do {
-            try await onCreate(req)
-        } catch {
-            self.error = error.localizedDescription
-        }
-        isCreating = false
+        return req
     }
 }

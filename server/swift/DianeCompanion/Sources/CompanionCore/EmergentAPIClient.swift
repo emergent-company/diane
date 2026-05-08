@@ -6,7 +6,7 @@ import Foundation
 /// This covers: projects, stats, traces (extraction jobs), workers,
 /// graph objects, agents, MCP servers, user profile, and ACP streaming chat.
 @MainActor
-final class EmergentAPIClient: ObservableObject {
+class EmergentAPIClient: ObservableObject {
 
     private let session: URLSession
     private var baseURL: URL?

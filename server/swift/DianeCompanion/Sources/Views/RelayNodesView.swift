@@ -7,23 +7,44 @@ struct RelayNodesView: View {
     @EnvironmentObject var dianeAPI: DianeAPIClient
     @EnvironmentObject var serverConfig: ServerConfiguration
 
-    @State private var nodes: [RelayNode] = []
-    @State private var expandedTools: Set<String> = []
-    @State private var nodeTools: [String: [MCPToolInfo]] = [:]
-    @State private var loadingTools: Set<String> = []
-    @State private var isLoading = false
-    @State private var error: String? = nil
+    @State private var vm: RelayNodesViewModel?
 
     var body: some View {
+        Group {
+            if let vm {
+                content(vm: vm)
+            } else {
+                ProgressView()
+                    .task {
+                        let newVM = RelayNodesViewModel(
+                            fetchNodes: { [weak dianeAPI] in
+                                guard let api = dianeAPI else { return [] }
+                                return try await api.fetchRelayNodes()
+                            },
+                            fetchTools: { [weak dianeAPI] id in
+                                guard let api = dianeAPI else { return [] }
+                                return try await api.fetchNodeTools(instanceID: id)
+                            }
+                        )
+                        vm = newVM
+                        await newVM.load()
+                    }
+            }
+        }
+        .navigationTitle("Relay Nodes")
+    }
+
+    @ViewBuilder
+    private func content(vm: RelayNodesViewModel) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                if let err = error {
+                if let err = vm.error {
                     ErrorBannerView(message: err) {
-                        Task { await load() }
+                        Task { await vm.load() }
                     }
                 }
 
-                if isLoading && nodes.isEmpty {
+                if vm.isLoading && vm.nodes.isEmpty {
                     VStack(spacing: 12) {
                         ProgressView()
                         Text("Loading relay nodes…")
@@ -32,7 +53,7 @@ struct RelayNodesView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.top, 60)
-                } else if nodes.isEmpty {
+                } else if vm.nodes.isEmpty {
                     EmptyStateView(
                         title: "No Connected Nodes",
                         icon: "server.rack",
@@ -40,40 +61,31 @@ struct RelayNodesView: View {
                     )
                     .padding(.top, 60)
                 } else {
-                    // Summary header
-                    summaryHeader
-
-                    // Per-node cards
-                    ForEach(nodes) { node in
-                        nodeCard(node)
+                    summaryHeader(vm: vm)
+                    ForEach(vm.nodes) { node in
+                        nodeCard(vm: vm, node: node)
                     }
                 }
             }
             .padding()
         }
-        .navigationTitle("Relay Nodes")
-        .task { await load() }
     }
 
     // MARK: - Summary Header
 
-    private var summaryHeader: some View {
-        let masterCount = nodes.filter { $0.mode == "master" }.count
-        let slaveCount = nodes.filter { $0.mode == "slave" }.count
-        let onlineCount = nodes.filter { $0.online }.count
-
-        return HStack(spacing: 12) {
-            Label("\(onlineCount)/\(nodes.count) nodes", systemImage: "server.rack")
+    private func summaryHeader(vm: RelayNodesViewModel) -> some View {
+        HStack(spacing: 12) {
+            Label("\(vm.onlineCount)/\(vm.nodes.count) nodes", systemImage: "server.rack")
                 .font(.subheadline)
                 .fontWeight(.medium)
 
-            if masterCount > 0 {
-                Text("● \(masterCount) master")
+            if vm.masterCount > 0 {
+                Text("● \(vm.masterCount) master")
                     .font(.caption)
                     .foregroundStyle(.green)
             }
-            if slaveCount > 0 {
-                Text("● \(slaveCount) slave")
+            if vm.slaveCount > 0 {
+                Text("● \(vm.slaveCount) slave")
                     .font(.caption)
                     .foregroundStyle(.blue)
             }
@@ -81,7 +93,7 @@ struct RelayNodesView: View {
             Spacer()
 
             Button("Refresh") {
-                Task { await load() }
+                Task { await vm.load() }
             }
             .font(.caption)
             .buttonStyle(.borderless)
@@ -93,21 +105,20 @@ struct RelayNodesView: View {
 
     // MARK: - Node Card
 
-    private func nodeCard(_ node: RelayNode) -> some View {
-        let toolsExpanded = expandedTools.contains(node.instanceID)
-        let isLoadingTools = loadingTools.contains(node.instanceID)
-        let tools = nodeTools[node.instanceID] ?? []
+    private func nodeCard(vm: RelayNodesViewModel, node: RelayNode) -> some View {
+        let toolsExpanded = vm.isExpanded(node)
+        let isLoadingTools = vm.isLoadingTools(for: node)
+        let tools = vm.tools(for: node)
 
         return VStack(alignment: .leading, spacing: 0) {
-            // ── Header Row (always visible; no toggle) ──
+            // ── Header Row ──
             HStack(spacing: Design.Spacing.sm) {
-                // Mode badge (colored)
                 modeBadge(node.mode)
 
                 VStack(alignment: .leading, spacing: Design.Spacing.xxs) {
                     HStack(spacing: Design.Spacing.xs) {
                         Circle()
-                            .fill(node.online ? Color.green : Color.gray.opacity(0.4))
+                            .fill(node.online == true ? Color.green : Color.gray.opacity(0.4))
                             .frame(width: 7, height: 7)
                         Text(node.hostname ?? node.instanceID)
                             .font(.subheadline)
@@ -127,7 +138,7 @@ struct RelayNodesView: View {
                                 .foregroundStyle(.secondary)
                         }
                         if let connected = node.connectedAt {
-                            Text(formatTime(connected))
+                            Text(DateUtils.formatTimestamp(connected))
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
                         }
@@ -140,7 +151,7 @@ struct RelayNodesView: View {
 
             Divider().padding(.horizontal, 12)
 
-            // ── Node Info Section (always visible) ──
+            // ── Node Info Section ──
             VStack(alignment: .leading, spacing: Design.Spacing.xs) {
                 HStack {
                     Text("Node Info")
@@ -154,7 +165,7 @@ struct RelayNodesView: View {
                 .padding(.top, Design.Spacing.sm)
 
                 if let uptime = node.uptime, !uptime.isEmpty {
-                    infoRow(label: "Uptime", value: formatTime(uptime))
+                    infoRow(label: "Uptime", value: DateUtils.formatTimestamp(uptime))
                 }
                 if let provider = node.provider, !provider.isEmpty {
                     infoRow(label: "Provider", value: provider)
@@ -175,20 +186,9 @@ struct RelayNodesView: View {
 
             Divider().padding(.horizontal, 12)
 
-            // ── MCP Tools Section (collapsible) ──
+            // ── MCP Tools Section ──
             VStack(alignment: .leading, spacing: 0) {
-                Button(action: {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        if toolsExpanded {
-                            expandedTools.remove(node.instanceID)
-                        } else {
-                            expandedTools.insert(node.instanceID)
-                            if nodeTools[node.instanceID] == nil {
-                                Task { await loadTools(node: node) }
-                            }
-                        }
-                    }
-                }) {
+                Button(action: { vm.toggleTools(node: node) }) {
                     HStack {
                         Text("MCP Tools")
                             .font(.caption)
@@ -257,7 +257,6 @@ struct RelayNodesView: View {
 
     // MARK: - Mode Badge
 
-    /// Shows master/slave mode badge from graph config.
     private func modeBadge(_ mode: String?) -> some View {
         switch mode {
         case "master":
@@ -312,11 +311,6 @@ struct RelayNodesView: View {
 
     // MARK: - Helpers
 
-    private func formatTime(_ iso: String) -> String {
-        DateUtils.formatTimestamp(iso)
-    }
-
-    /// A labeled info row for the node info section.
     private func infoRow(label: String, value: String, valueColor: Color = .primary) -> some View {
         HStack(spacing: Design.Spacing.sm) {
             Text(label)
@@ -332,59 +326,4 @@ struct RelayNodesView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 2)
     }
-
-    /// Sort nodes so master is first, then slave, then others. Within same mode, sort by hostname.
-    private func sortedNodes(_ nodes: [RelayNode]) -> [RelayNode] {
-        nodes.sorted { a, b in
-            let orderA = modeOrder(a.mode)
-            let orderB = modeOrder(b.mode)
-            if orderA != orderB { return orderA < orderB }
-            return (a.hostname ?? a.instanceID) < (b.hostname ?? b.instanceID)
-        }
-    }
-
-    private func modeOrder(_ mode: String?) -> Int {
-        switch mode {
-        case "master": return 0
-        case "slave":  return 1
-        default:       return 2
-        }
-    }
-
-    // MARK: - Data Loading
-
-    @MainActor
-    private func load() async {
-        isLoading = true
-        do {
-            let raw = try await dianeAPI.fetchRelayNodes()
-            nodes = sortedNodes(raw)
-            error = nil
-        } catch {
-            self.error = error.localizedDescription
-        }
-        isLoading = false
-    }
-
-    @MainActor
-    private func loadTools(node: RelayNode) async {
-        loadingTools.insert(node.instanceID)
-        do {
-            let tools = try await dianeAPI.fetchNodeTools(instanceID: node.instanceID)
-            nodeTools[node.instanceID] = tools
-        } catch {
-            nodeTools[node.instanceID] = []
-        }
-        loadingTools.remove(node.instanceID)
-    }
-}
-
-// MARK: - Previews
-
-#Preview {
-    RelayNodesView()
-        .environmentObject(AppState())
-        .environmentObject(DianeAPIClient())
-        .environmentObject(ServerConfiguration())
-        .frame(width: 800, height: 600)
 }
