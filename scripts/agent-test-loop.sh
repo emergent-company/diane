@@ -4,8 +4,8 @@
 # XCUITest currently blocked by MenuBarExtra + ad-hoc code signing on this machine.
 set -euo pipefail
 
-SWIFT_DIR="$HOME/Developer/diane/server/swift/DianeCompanion"
-GO_DIR="$HOME/Developer/diane/server"
+SWIFT_DIR="/Users/mcj/src/diane/server/swift/DianeCompanion"
+GO_DIR="/Users/mcj/src/diane/server"
 
 echo "========================================="
 echo " Diane Agent Test Loop"
@@ -84,21 +84,5 @@ echo ""
 echo "========================================="
 echo " Results: $PASS passed, $FAIL failed"
 echo "========================================="
-echo ""
-echo "NOTE: XCUITest is not included in this loop."
-echo "Reason: MenuBarExtra architecture prevents"
-echo "XCUITest from finding the main window."
-echo "UI verification is done via AppleScript +"
-echo "UI verification: 367 XCTest cases covering formatting, decoding, and edge cases."
-echo ""
-echo "Live integration tests: DianeBridgeIntegrationTests (9 tests)"
-echo "Unit tests: 77 XCTest cases covering"
-echo "  - Model decoding (sessions, agents, MCP, etc.)"
-echo "  - ViewModel data formatting (counts, costs, durations)"
-echo "  - Date formatting (relative timestamps)"
-echo "  - Server diagnostics display"
-echo "  - Embedding status display"
-echo "  - Graph object display"
-echo ""
 
 exit $FAIL

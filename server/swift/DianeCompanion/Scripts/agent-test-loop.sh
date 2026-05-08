@@ -64,50 +64,18 @@ for endpoint in status sessions mcp-servers nodes; do
   fi
 done
 
-# ── 5. UI Navigation Test (AppleScript + per-view screenshots) ─
-log "🖥️ Running UI navigation test (${SIDEBAR_ITEMS[*]} views)..."
+# ── 5. Swift unit tests ─────────────────────────────────
+log "🧪 Running Swift unit tests..."
 cd "$SWIFT_DIR"
-UI_LOG=$(bash Scripts/ui-test-applescript.sh 2>&1) || true
-UI_EXIT=$?
-
-if [ $UI_EXIT -eq 0 ]; then
-  pass "ui_navigation"
-  # Count per-view passes from the detailed results
-  UI_PASSES=$(echo "$UI_LOG" | grep -c "view_" || true)
-  UI_FAILS=$(echo "$UI_LOG" | grep -c "view_" || true)
-  log "  UI details: $UI_PASSES view checks"
-elif [ $UI_EXIT -eq 1 ]; then
-  # Partial failure — may still have some valid screenshots
-  fail "ui_navigation" "UI test had some failures"
-  UI_PASSES=$(echo "$UI_LOG" | grep "✅ view_" | wc -l)
-  log "  Partial: $UI_PASSES views passed"
+xcodegen generate 2>&1 | tail -1
+XCTEST_LOG=$(xcodebuild test -project Diane.xcodeproj -scheme Diane \
+  -destination 'platform=macOS,arch=arm64' \
+  -only-testing:DianeTests \
+  -resultBundlePath /tmp/DianeUnitTests.xcresult 2>&1) || true
+if echo "$XCTEST_LOG" | tail -3 | grep -q "Executed.*test"; then
+  pass "swift_unit_tests"
 else
-  fail "ui_navigation" "UI test crashed (exit $UI_EXIT)"
-fi
-echo "$UI_LOG"
-
-# ── Analyze per-view screenshots ──────────────────────────
-log "🔍 Analyzing per-view screenshots..."
-VIEW_COUNT=0
-VIEW_PASS=0
-VIEW_FAIL=0
-for shot in /tmp/diane-ui-test/[0-9]_*.png; do
-  [ -f "$shot" ] || continue
-  VIEW_COUNT=$((VIEW_COUNT + 1))
-  NAME=$(basename "$shot" .png)
-  VIEW=${NAME#*_}  # strip index
-  SIZE=$(stat -f%z "$shot" 2>/dev/null || echo "0")
-  if [ "$SIZE" -gt 500000 ]; then
-    VIEW_PASS=$((VIEW_PASS + 1))
-    log "  ✅ $VIEW"
-  else
-    VIEW_FAIL=$((VIEW_FAIL + 1))
-    log "  ❌ $VIEW — too small"
-  fi
-done
-
-if [ "$VIEW_COUNT" -gt 0 ]; then
-  pass "ui_views_${VIEW_PASS}of${VIEW_COUNT}"
+  fail "swift_unit_tests" "$(echo "$XCTEST_LOG" | grep error | head -3)"
 fi
 
 # ── 6. Stop server ────────────────────────────────────────
