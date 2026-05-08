@@ -246,6 +246,10 @@ func buildAgentList() []BuiltInAgent {
 				// Memory (save and retrieve facts)
 				"entity-create",
 
+				// MCP relay tools (node-provided, glob patterns)
+				"*github*",
+				"*infakt*",
+
 				// User interaction — ask for approval during agent runs
 				"ask_user",
 			},

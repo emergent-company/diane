@@ -45,6 +45,7 @@ func main() {
 		fmt.Println("  monitor         Show bot status, sessions, recent activity")
 		fmt.Println("  nodes           List all connected MCP relay nodes")
 		fmt.Println("  upgrade         Upgrade Diane to the latest version")
+		fmt.Println("  version         Show CLI and companion app versions")
 		fmt.Println("  service         Manage the MCP relay as a service (start|stop|status|restart)")
 		fmt.Println("  mcp             Manage MCP servers (list, relay, serve)")
 		fmt.Println("  tool            Test MCP tools through the proxy (test)")
@@ -61,6 +62,8 @@ func main() {
 		cmdBot()
 	case "projects":
 		cmdProjects()
+	case "version":
+		cmdVersion()
 	case "tool":
 		if len(os.Args) < 3 {
 			fmt.Println("Usage: diane tool <command>")
