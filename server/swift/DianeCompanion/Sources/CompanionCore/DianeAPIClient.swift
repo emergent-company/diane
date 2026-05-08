@@ -108,6 +108,24 @@ final class DianeAPIClient: ObservableObject {
         return try JSONDecoder().decode(SessionDetailResponse.self, from: data)
     }
 
+    /// Fetch agent runs associated with a session.
+    /// GET /api/sessions/{id}/runs
+    func fetchSessionRuns(sessionID: String) async throws -> SessionRunsResponse {
+        let encoded = sessionID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionID
+        let data = try await get("/api/sessions/\(encoded)/runs")
+        return try JSONDecoder().decode(SessionRunsResponse.self, from: data)
+    }
+
+    /// Fetch todos for a session.
+    /// GET /api/sessions/{id}/todos
+    func fetchSessionTodos(sessionID: String) async throws -> [SessionTodoItem] {
+        let encoded = sessionID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionID
+        let data = try await get("/api/sessions/\(encoded)/todos")
+        // The API returns {"items": [...]}
+        let container = try JSONDecoder().decode([String: [SessionTodoItem]].self, from: data)
+        return container["items"] ?? []
+    }
+
     // MARK: - Chat Send
 
     /// Send a chat message and wait for the full agent response via the agent pipeline.
