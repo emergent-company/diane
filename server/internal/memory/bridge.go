@@ -580,6 +580,43 @@ func safePropStr(props map[string]any, key string) string {
 	return s
 }
 
+// safePropBool extracts a bool from a map by key, defaulting to false.
+func safePropBool(props map[string]any, key string) bool {
+	if props == nil {
+		return false
+	}
+	v, ok := props[key]
+	if !ok {
+		return false
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return false
+	}
+	return b
+}
+
+// safePropVersion extracts an int from a map by key, handling JSON float64 encoding.
+func safePropVersion(props map[string]any, key string) int {
+	if props == nil {
+		return 0
+	}
+	v, ok := props[key]
+	if !ok {
+		return 0
+	}
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	case int64:
+		return int(n)
+	default:
+		return 0
+	}
+}
+
 func boolPtr(v bool) *bool {
 	return &v
 }
@@ -860,4 +897,44 @@ func (b *Bridge) GetObjectCountsForSchema(ctx context.Context, typeNames []strin
 		counts[tn] = count
 	}
 	return counts, nil
+}
+
+// MCPProxyConfigType is the graph object type name for MCP proxy config objects.
+const MCPProxyConfigType = "MCPProxyConfig"
+
+// MCPProxyConfigEntry holds a parsed MCP proxy config for the local API.
+type MCPProxyConfigEntry struct {
+	Scope    string `json:"scope"`
+	Config   string `json:"config"`
+	Version  int    `json:"version"`
+	EntityID string `json:"entity_id"`
+}
+
+// ListMCPProxyConfigs returns all MCP proxy configs registered in the project's graph.
+func (b *Bridge) ListMCPProxyConfigs(ctx context.Context) ([]MCPProxyConfigEntry, error) {
+	resp, err := b.client.Graph.ListObjects(ctx, &graph.ListObjectsOptions{
+		Type: MCPProxyConfigType,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list mcp proxy configs: %w", err)
+	}
+
+	entries := make([]MCPProxyConfigEntry, 0, len(resp.Items))
+	for _, obj := range resp.Items {
+		props := obj.Properties
+		if props == nil {
+			continue
+		}
+		scope := safePropStr(props, "scope")
+		if scope == "" {
+			continue
+		}
+		entries = append(entries, MCPProxyConfigEntry{
+			Scope:    scope,
+			Config:   safePropStr(props, "config"),
+			Version:  safePropVersion(props, "version"),
+			EntityID: obj.EntityID,
+		})
+	}
+	return entries, nil
 }

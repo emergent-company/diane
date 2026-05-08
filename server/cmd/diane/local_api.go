@@ -17,7 +17,6 @@ import (
 
 	"github.com/Emergent-Comapny/diane/internal/agents"
 	"github.com/Emergent-Comapny/diane/internal/config"
-	"github.com/Emergent-Comapny/diane/internal/mcpproxy"
 	"github.com/Emergent-Comapny/diane/internal/memory"
 	"github.com/Emergent-Comapny/diane/internal/schema"
 	"github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/acp"
@@ -1589,13 +1588,22 @@ func extractContentValue(val any) string {
 	}
 }
 
-// handleMCPServers returns the list of configured MCP servers.
+// handleMCPServers returns the list of MCP servers from the graph.
 func (h *apiHandlers) handleMCPServers(w http.ResponseWriter, r *http.Request) {
-	cfg, err := mcpproxy.LoadConfig(mcpproxy.GetDefaultConfigPath())
+	ctx := r.Context()
+
+	// Query MCP proxy configs from the graph
+	bridge, err := h.bridge(ctx)
 	if err != nil {
-		// No config file is normal — return empty list.
-		// A corrupted config file also reaches here, so log a warning.
-		log.Printf("[LOCAL-API] MCP config load: %v (returning empty list)", err)
+		log.Printf("[LOCAL-API] handleMCPServers: bridge: %v", err)
+		writeJSON(w, map[string]any{"servers": []any{}})
+		return
+	}
+	defer bridge.Close()
+
+	entries, err := bridge.ListMCPProxyConfigs(ctx)
+	if err != nil {
+		log.Printf("[LOCAL-API] list MCP proxy configs: %v", err)
 		writeJSON(w, map[string]any{"servers": []any{}})
 		return
 	}
@@ -1604,23 +1612,28 @@ func (h *apiHandlers) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 		Name    string `json:"name"`
 		Type    string `json:"type"`
 		Enabled bool   `json:"enabled"`
-		Command string `json:"command,omitempty"`
-		URL     string `json:"url,omitempty"`
+		Scope   string `json:"scope"`
+		Version int    `json:"version"`
 	}
 
-	servers := make([]serverEntry, 0, len(cfg.Servers))
-	for _, s := range cfg.Servers {
-		entry := serverEntry{
-			Name:    s.Name,
-			Type:    s.Type,
-			Enabled: s.Enabled,
+	servers := make([]serverEntry, 0, len(entries))
+	for _, e := range entries {
+		var sc struct {
+			Name    string `json:"name"`
+			Type    string `json:"type"`
+			Enabled bool   `json:"enabled"`
 		}
-		if s.Type == "stdio" {
-			entry.Command = s.Command
-		} else {
-			entry.URL = s.URL
+		if err := json.Unmarshal([]byte(e.Config), &sc); err != nil {
+			log.Printf("[LOCAL-API] mcp server config unmarshal (%s): %v", e.Scope, err)
+			continue
 		}
-		servers = append(servers, entry)
+		servers = append(servers, serverEntry{
+			Name:    sc.Name,
+			Type:    sc.Type,
+			Enabled: sc.Enabled,
+			Scope:   e.Scope,
+			Version: e.Version,
+		})
 	}
 
 	writeJSON(w, map[string]any{"servers": servers})
