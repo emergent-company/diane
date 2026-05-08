@@ -1828,9 +1828,13 @@ func (h *apiHandlers) handleNodeSubRoutes(w http.ResponseWriter, r *http.Request
 // GET /api/nodes/{instanceID}/tools → {"tools": [...]}
 func (h *apiHandlers) handleNodeTools(w http.ResponseWriter, r *http.Request, instanceID string) {
 	ctx := r.Context()
-	relayURL := strings.TrimSuffix(h.pc.ServerURL, "/") + "/api/mcp-relay/sessions"
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, relayURL, nil)
+	// Query the per-instance tools endpoint on the MP relay.
+	// The sessions list endpoint (/api/mcp-relay/sessions) does NOT embed tools;
+	// tools are available at /api/mcp-relay/sessions/{instanceID}/tools.
+	toolsURL := strings.TrimSuffix(h.pc.ServerURL, "/") + "/api/mcp-relay/sessions/" + url.PathEscape(instanceID) + "/tools"
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, toolsURL, nil)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "node tools: build request: "+err.Error())
 		return
@@ -1844,57 +1848,25 @@ func (h *apiHandlers) handleNodeTools(w http.ResponseWriter, r *http.Request, in
 	}
 	defer resp.Body.Close()
 
+	// If the node isn't found (404) or there's another error, return an empty tool list.
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("node tools: MP returned %d: %s", resp.StatusCode, string(body)))
+		writeJSON(w, map[string]any{"tools": []any{}})
 		return
 	}
 
-	// Decode relay sessions — handles flat array and wrapped formats
-	var sessions []relaySession
-	rawBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "node tools: read response: "+err.Error())
+	var result struct {
+		Tools []any `json:"tools"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		log.Printf("[LOCAL-API] handleNodeTools: decode response: %v", err)
+		writeJSON(w, map[string]any{"tools": []any{}})
 		return
 	}
 
-	// Try direct array first
-	if err := json.Unmarshal(rawBody, &sessions); err != nil {
-		// Try wrapped formats
-		var wrapped struct {
-			Items    []relaySession `json:"items"`
-			Data     []relaySession `json:"data"`
-			Sessions []relaySession `json:"sessions"`
-		}
-		if err2 := json.Unmarshal(rawBody, &wrapped); err2 == nil {
-			switch {
-			case wrapped.Sessions != nil:
-				sessions = wrapped.Sessions
-			case wrapped.Items != nil:
-				sessions = wrapped.Items
-			case wrapped.Data != nil:
-				sessions = wrapped.Data
-			}
-		}
-		if sessions == nil {
-			jsonError(w, http.StatusInternalServerError, fmt.Sprintf("node tools: unexpected relay response format"))
-			return
-		}
+	if result.Tools == nil {
+		result.Tools = []any{}
 	}
-
-	// Find the matching node by instance ID
-	for _, s := range sessions {
-		if s.InstanceID == instanceID {
-			if s.Tools == nil {
-				writeJSON(w, map[string]any{"tools": []any{}})
-				return
-			}
-			writeJSON(w, map[string]any{"tools": s.Tools})
-			return
-		}
-	}
-
-	jsonError(w, http.StatusNotFound, fmt.Sprintf("node %q not found", instanceID))
+	writeJSON(w, map[string]any{"tools": result.Tools})
 }
 
 // handleProviders returns configured LLM providers from the project config.
