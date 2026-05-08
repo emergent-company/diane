@@ -621,6 +621,20 @@ func runDoctorJSON() {
 		add("Memory search", "pass", fmt.Sprintf("%d results", len(results)))
 	}
 
+	// ── 10. CLI / App version match ──
+	appVer := readInstalledAppVersion()
+	if appVer == "" {
+		add("CLI / App version", "skip", "Diane.app not installed")
+	} else {
+		cliVer := strings.TrimPrefix(Version, "v")
+		appVerClean := strings.TrimPrefix(appVer, "v")
+		if cliVer == appVerClean || (cliVer == "dev" && strings.HasPrefix(appVerClean, "dev")) {
+			add("CLI / App version", "pass", fmt.Sprintf("CLI=%s, App=%s — match", Version, appVer))
+		} else {
+			add("CLI / App version", "warn", fmt.Sprintf("CLI=%s, App=%s — MISMATCH", Version, appVer))
+		}
+	}
+
 	// ── 11. Discord config ──
 	if pc.DiscordBotToken != "" {
 		add("Discord bot", "pass", fmt.Sprintf("configured (%d channels)", len(pc.DiscordChannelIDs)))

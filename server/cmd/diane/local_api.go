@@ -259,6 +259,23 @@ func (h *apiHandlers) handleDoctor(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// ── 7. CLI / App version match ──
+	appVer := readInstalledAppVersion()
+	vmStatus := "ok"
+	vmMsg := "Diane.app not installed"
+	if appVer != "" {
+		cliVer := strings.TrimPrefix(Version, "v")
+		appVerClean := strings.TrimPrefix(appVer, "v")
+		if cliVer == appVerClean || (cliVer == "dev" && strings.HasPrefix(appVerClean, "dev")) {
+			vmStatus = "ok"
+			vmMsg = fmt.Sprintf("CLI=%s, App=%s — match", Version, appVer)
+		} else {
+			vmStatus = "warning"
+			vmMsg = fmt.Sprintf("CLI=%s, App=%s — MISMATCH", Version, appVer)
+		}
+	}
+	addResult("version_match", vmStatus, vmMsg)
+
 	writeJSON(w, DoctorResponse{Ok: true, Version: Version, Results: results})
 }
 

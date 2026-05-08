@@ -222,6 +222,36 @@ func (s *MCPSession) run() error {
 
 			switch frame.Type {
 			case "request":
+				// For tools/call, strip the instance ID prefix from the tool name
+				// so the MCP subprocess sees the unprefixed name.
+				if frame.Payload != nil {
+					var jr struct {
+						Method string          `json:"method"`
+						Params json.RawMessage `json:"params,omitempty"`
+					}
+					if err := json.Unmarshal(frame.Payload, &jr); err == nil && jr.Method == "tools/call" && jr.Params != nil {
+						var callParams struct {
+							Name      string                 `json:"name"`
+							Arguments map[string]interface{} `json:"arguments,omitempty"`
+						}
+						if err := json.Unmarshal(jr.Params, &callParams); err == nil {
+							prefix := s.cfg.InstanceID + "_"
+							if strings.HasPrefix(callParams.Name, prefix) {
+								callParams.Name = strings.TrimPrefix(callParams.Name, prefix)
+								if newParams, err := json.Marshal(callParams); err == nil {
+									// Rebuild the full JSON-RPC payload with stripped name
+									var payloadCopy map[string]interface{}
+									if err := json.Unmarshal(frame.Payload, &payloadCopy); err == nil {
+										payloadCopy["params"] = newParams
+										if newPayload, err := json.Marshal(payloadCopy); err == nil {
+											frame.Payload = newPayload
+										}
+									}
+								}
+							}
+						}
+					}
+				}
 				s.forwardToMCP(frame)
 			case "ping":
 				s.sendWS(json.RawMessage(`{"type":"pong"}`))
@@ -398,6 +428,12 @@ func (s *MCPSession) doRegister(data []byte) {
 			toolsData = mcpResponse.Result
 		}
 	}
+
+	// Prefix tool names with instance ID for multi-node dedup.
+	// This prevents collisions when multiple nodes register the same
+	// MCP server (e.g., github). The agent definition glob pattern
+	// (*github*) still matches because * matches any substring.
+	toolsData = prefixToolsInData(toolsData, s.cfg.InstanceID+"_")
 
 	// Send register frame to relay
 	hostname, _ := os.Hostname()
@@ -707,6 +743,24 @@ func mergeProxyConfigs(configs []scoredConfig) string {
 
 	data, _ := json.MarshalIndent(merged, "", "  ")
 	return string(data)
+}
+
+// prefixToolsInData parses a tools JSON payload ({"tools": [...]}), prefixes
+// each tool name with the given prefix, and returns the modified JSON.
+func prefixToolsInData(data json.RawMessage, prefix string) json.RawMessage {
+	var toolsPayload struct {
+		Tools []map[string]interface{} `json:"tools"`
+	}
+	if err := json.Unmarshal(data, &toolsPayload); err != nil || toolsPayload.Tools == nil {
+		return data // passthrough on error or empty
+	}
+	for _, tool := range toolsPayload.Tools {
+		if name, ok := tool["name"].(string); ok {
+			tool["name"] = prefix + name
+		}
+	}
+	result, _ := json.Marshal(toolsPayload)
+	return json.RawMessage(result)
 }
 
 // ── Actual CLI integration ──
