@@ -191,10 +191,7 @@ final class UpdateChecker: ObservableObject {
         // Find DMG asset
         guard let dmgAsset = release.assets?.first(where: { $0.name.hasSuffix(".dmg") && $0.name.hasPrefix("Diane-") }),
               let dmgURL = URL(string: dmgAsset.browserDownloadUrl) else {
-            logError("UpdateChecker: No DMG asset found in release", category: "Updates")
-            if let url = URL(string: release.htmlUrl) {
-                NSWorkspace.shared.open(url)
-            }
+            logError("UpdateChecker: No DMG asset found in release \(release.tagName) — will retry on next check", category: "Updates")
             return
         }
 
@@ -366,10 +363,8 @@ rm -f "\(scriptPath.path)"
                 labels: "update"
             )
 
-            // Fallback: open release page so user can manually install
-            if !shouldAutoUpdate, let url = URL(string: releaseData?.htmlUrl ?? "https://github.com/\(repoOwner)/\(repoName)/releases/latest") {
-                NSWorkspace.shared.open(url)
-            }
+            // Never open browser — log and let the next poll cycle retry
+            logError("UpdateChecker: Auto-update failed for \(releaseData?.tagName ?? "?"): \(error.localizedDescription)", category: "Updates")
             shouldAutoUpdate = false
         }
     }
