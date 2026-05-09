@@ -649,6 +649,8 @@ func cmdAgentSeed() {
 	if len(overrides) > 0 {
 		builtIns = agents.ApplyOverrides(builtIns, overrides)
 	}
+	// Filter disabled agents
+	builtIns = agents.FilterDisabled(builtIns, overrides)
 	if len(configs) > 0 {
 		builtIns = agents.MergeToolPatterns(builtIns, configs)
 	}
@@ -664,7 +666,6 @@ func cmdAgentSeed() {
 	}
 
 	fmt.Println("✅ All built-in agents seeded to Memory Platform")
-	fmt.Println("   They are immutable: cannot be deleted or renamed via CLI/API.")
 }
 
 func syncOneAgent(ctx context.Context, bridge *memory.Bridge, name string, ac *config.AgentConfig) error {
@@ -926,7 +927,64 @@ func cmdAgentTrigger(name, prompt string) {
 func cmdAgentDelete(name string) {
 	cfg := mustConfig()
 	pc := cfg.Active()
-	if pc == nil || pc.Agents == nil || pc.Agents[name] == nil {
+	if pc == nil {
+		fmt.Println("No project configured.")
+		return
+	}
+
+	// Check if this is a built-in agent
+	isBuiltIn := false
+	for _, ba := range agents.BuiltInAgents() {
+		if ba.Name == name {
+			isBuiltIn = true
+			break
+		}
+	}
+
+	if isBuiltIn {
+		// Built-in agents: disable via graph override
+		fmt.Printf("🧱 '%s' is a built-in agent — disabling via graph override\n", name)
+		reader := bufio.NewReader(os.Stdin)
+		fmt.Printf("Set disabled=true override for '%s' and re-seed? [y/N]: ", name)
+		if yn := readLine(reader); strings.ToLower(yn) != "y" && strings.ToLower(yn) != "yes" {
+			fmt.Println("Aborted.")
+			return
+		}
+
+		ctx := context.Background()
+		bridge, err := newBridge(pc)
+		if err != nil {
+			fmt.Printf("❌ Connection failed: %v\n", err)
+			return
+		}
+		defer bridge.Close()
+
+		// Create/update override with disabled=true
+		if err := agents.UpsertDisableOverride(ctx, bridge.Client().Graph, name); err != nil {
+			fmt.Printf("❌ Failed to create disable override: %v\n", err)
+			return
+		}
+		fmt.Println("✅ Disable override created in graph")
+
+		// Build and seed merged agents (will skip this agent)
+		fmt.Print("📦 Re-seeding agents... ")
+		builtIns, buildErr := agents.BuildMergedAgents(ctx, bridge.Client().Graph)
+		if buildErr != nil {
+			fmt.Printf("⚠️  BuildMergedAgents failed (falling back): %v\n", buildErr)
+			builtIns = agents.BuiltInAgents()
+		}
+		if err := agents.SeedAgentList(ctx, bridge.Client(), builtIns); err != nil {
+			fmt.Printf("❌ Re-seed failed: %v\n", err)
+			return
+		}
+		fmt.Println("✅")
+		fmt.Printf("✅ Agent '%s' disabled. It will no longer appear in agent lists.\n", name)
+		fmt.Println("   To re-enable, remove the AgentOverrideConfig entity from the graph.")
+		return
+	}
+
+	// User-defined agent: delete from local config + MP
+	if pc.Agents == nil || pc.Agents[name] == nil {
 		fmt.Printf("Agent '%s' not found in local config.\n", name)
 		return
 	}

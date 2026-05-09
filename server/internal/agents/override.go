@@ -32,6 +32,10 @@ type AgentOverrideConfig struct {
 
 	// SandboxEnabled uses *bool to distinguish "not set" (nil) from "set to false".
 	SandboxEnabled *bool `json:"sandbox_enabled,omitempty"`
+
+	// Disabled marks the agent as disabled. When true, the agent is skipped
+	// during seeding and will not appear in the active agent list.
+	Disabled bool `json:"disabled,omitempty"`
 }
 
 // HasOverrides returns true if any override field is set (beyond agent_name).
@@ -45,7 +49,8 @@ func (o *AgentOverrideConfig) HasOverrides() bool {
 		o.MaxSteps != 0 ||
 		o.Timeout != 0 ||
 		o.Visibility != "" ||
-		o.SandboxEnabled != nil
+		o.SandboxEnabled != nil ||
+		o.Disabled
 }
 
 // ReadAgentOverrideConfigs queries the project graph for AgentOverrideConfig entities
@@ -221,4 +226,65 @@ func propBoolPtr(props map[string]any, key string) *bool {
 		return nil
 	}
 	return &b
+}
+
+// FilterDisabled removes agents from the list that have a disabled override
+// in the given overrides map. Returns a new slice — the original is not modified.
+func FilterDisabled(agents []BuiltInAgent, overrides map[string]*AgentOverrideConfig) []BuiltInAgent {
+	filtered := make([]BuiltInAgent, 0, len(agents))
+	for _, a := range agents {
+		oc, ok := overrides[a.Name]
+		if ok && oc != nil && oc.Disabled {
+			log.Printf("[override] Agent %q: filtered out (disabled via override)", a.Name)
+			continue
+		}
+		filtered = append(filtered, a)
+	}
+	return filtered
+}
+
+// UpsertDisableOverride creates or updates an AgentOverrideConfig entity
+// in the graph with disabled=true for the given agent name. If an entity
+// already exists, it adds disabled=true to the existing properties.
+func UpsertDisableOverride(ctx context.Context, graphClient *graph.Client, agentName string) error {
+	// Check if an override entity already exists
+	resp, err := graphClient.ListObjects(ctx, &graph.ListObjectsOptions{
+		Type:  "AgentOverrideConfig",
+		Limit: 100,
+	})
+	if err != nil {
+		return fmt.Errorf("list existing overrides: %w", err)
+	}
+
+	for _, obj := range resp.Items {
+		name := propString(obj.Properties, "agent_name")
+		if name == agentName {
+			// Update existing — merge disabled=true
+			props := make(map[string]any)
+			for k, v := range obj.Properties {
+				props[k] = v
+			}
+			props["disabled"] = true
+			_, err := graphClient.UpdateObject(ctx, obj.ID, &graph.UpdateObjectRequest{Properties: props})
+			if err != nil {
+				return fmt.Errorf("update override for %s: %w", agentName, err)
+			}
+			log.Printf("[override] Agent %q: disabled=true added to existing override", agentName)
+			return nil
+		}
+	}
+
+	// Create new override entity
+	_, err = graphClient.CreateObject(ctx, &graph.CreateObjectRequest{
+		Type: "AgentOverrideConfig",
+		Properties: map[string]any{
+			"agent_name": agentName,
+			"disabled":   true,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("create disable override for %s: %w", agentName, err)
+	}
+	log.Printf("[override] Agent %q: override entity created with disabled=true", agentName)
+	return nil
 }
