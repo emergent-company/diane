@@ -442,7 +442,7 @@ func (s *MCPSession) doRegister(data []byte) {
 		Type:       "register",
 		InstanceID: s.cfg.InstanceID,
 		Hostname:   hostname,
-		Version:    "1.0",
+		Version:    Version,
 		Tools:      json.RawMessage(toolsData),
 	}
 	data, _ = json.Marshal(reg)
