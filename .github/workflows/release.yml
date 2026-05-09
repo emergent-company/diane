@@ -10,8 +10,29 @@ permissions:
   contents: write
 
 jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    outputs:
+      exists: ${{ steps.check_release.outputs.exists }}
+    steps:
+      - name: Check if release already exists
+        id: check_release
+        run: |
+          if gh release view "${{ github.ref_name }}" --repo ${{ github.repository }} &>/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release ${{ github.ref_name }} already exists — skipping."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Release ${{ github.ref_name }} does not exist — proceeding."
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build:
     name: Build
+    needs: check
+    if: needs.check.outputs.exists == 'false'
     runs-on: ubuntu-latest
     strategy:
       matrix:
