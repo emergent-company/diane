@@ -241,8 +241,9 @@ func TestDockerUpgradeDryRun(t *testing.T) {
 	}
 }
 
-// TestDockerToolTest runs 'diane tool test get_time' inside the container.
-func TestDockerToolTest(t *testing.T) {
+// TestDockerDoctor runs 'diane doctor' inside the container to verify
+// MP connectivity and basic diagnostics work.
+func TestDockerDoctor(t *testing.T) {
 	dockerEnsureEnv(t)
 	if !dockerAvailable() {
 		t.Skip("Docker not available")
@@ -251,21 +252,21 @@ func TestDockerToolTest(t *testing.T) {
 	containerID, cleanup := dockerRun(t)
 	defer cleanup()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	output, err := dockerExec(ctx, t, containerID, "diane", "tool", "test", "get_time")
-	t.Logf("=== 'diane tool test get_time' ===\n%s\n=== end ===", output)
+	output, err := dockerExec(ctx, t, containerID, "diane", "doctor")
+	t.Logf("=== 'diane doctor' ===\n%s\n=== end ===", output)
 
 	if err != nil {
 		t.Logf("Exit error: %v", err)
 	}
 
-	// Should return time data
-	if strings.Contains(output, "status:") || strings.Contains(output, "success") || strings.Contains(output, `"time"`) {
-		t.Log("✅ Tool test returned expected output")
+	// Should show connection status
+	if strings.Contains(output, "connection") || strings.Contains(output, "MP") || strings.Contains(output, "healthy") || strings.Contains(output, "✅") {
+		t.Log("✅ Doctor check returned expected output")
 	} else {
-		t.Logf("⚠️  Unexpected output (may still be valid): %s", output)
+		t.Logf("⚠️  Output: %s", output)
 	}
 }
 
