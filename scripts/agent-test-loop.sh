@@ -48,9 +48,9 @@ xcodebuild test -project Diane.xcodeproj -scheme Diane \
   -only-testing:DianeTests \
   -skip-testing:DianeUITests \
   -resultBundlePath /tmp/DianeUnitTests.xcresult \
-  2>&1 | tee /tmp/test-output.txt | grep -E "Test Suite|error:|FAILED|passed" | head -20
+  2>&1 | tee /tmp/test-output.txt | grep -E "Test Suite|error:|failed|passed"
 
-if grep -q "FAILED" /tmp/test-output.txt 2>/dev/null; then
+if grep -qi "failed" /tmp/test-output.txt 2>/dev/null; then
     echo "✗ Unit tests FAILED"
     ((FAIL++))
     grep "error:" /tmp/test-output.txt | head -5
