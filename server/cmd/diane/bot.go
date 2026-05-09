@@ -5,9 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/Emergent-Comapny/diane/internal/agents"
 	"github.com/Emergent-Comapny/diane/internal/config"
-	"github.com/Emergent-Comapny/diane/internal/db"
 	"github.com/Emergent-Comapny/diane/internal/discord"
 	"github.com/Emergent-Comapny/diane/internal/memory"
 )
@@ -29,19 +27,6 @@ func runBotOnce(pc *config.ProjectConfig) error {
 		return fmt.Errorf("this is a slave node (mode=slave) — run 'diane mcp relay' instead of 'diane bot'")
 	}
 
-	// Seed built-in agents to local SQLite database on every startup.
-	// This ensures the local DB is always in sync with the Go code.
-	// On slave nodes, skip seeding — no agent management needed.
-	if localDB, err := db.New(""); err == nil {
-		if err := agents.SeedToDB(localDB); err != nil {
-			log.Printf("[WARN] Failed to seed agents to local DB: %v", err)
-		} else {
-			log.Printf("[DB] Seeded built-in agents to local SQLite database")
-		}
-		localDB.Close()
-	} else {
-		log.Printf("[WARN] Cannot open local DB: %v", err)
-	}
 	// Build Discord config
 	dc := discord.DefaultConfig()
 	dc.BotToken = pc.DiscordBotToken

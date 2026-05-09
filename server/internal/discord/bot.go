@@ -23,7 +23,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Emergent-Comapny/diane/internal/db"
 	"github.com/Emergent-Comapny/diane/internal/events"
 	"github.com/Emergent-Comapny/diane/internal/memory"
 	"github.com/bwmarrin/discordgo"
@@ -73,7 +72,6 @@ type Bot struct {
 
 	mu       sync.RWMutex
 	sessions map[string]*ChannelSession // channelID → session
-	sqliteDB *db.DB                     // SQLite connection for session persistence
 
 	typingMu     sync.RWMutex
 	typingCancel map[string]context.CancelFunc // channelID → cancel for typing indicator loop
@@ -209,14 +207,6 @@ func New(cfg Config) (*Bot, error) {
 		runChannels:      make(map[string]string),
 	}
 
-	// Initialize SQLite for session persistence
-	sqliteDB, err := db.New("")
-	if err != nil {
-		log.Printf("[WARN] SQLite unavailable — sessions won't persist across restarts: %v", err)
-	} else {
-		bot.sqliteDB = sqliteDB
-	}
-
 	dg.AddHandler(bot.onMessageCreate)
 	dg.AddHandler(bot.onReady)
 	dg.AddHandler(bot.onInteractionCreate)
@@ -264,14 +254,6 @@ func (b *Bot) Start() error {
 	b.loadSessionsFromMP(context.Background())
 	if len(b.sessions) > 0 {
 		log.Printf("[SES] %d channel→session mapping(s) restored from MP", len(b.sessions))
-	}
-
-	// Load persisted ask_channel config
-	if b.sqliteDB != nil {
-		if chID, err := b.sqliteDB.GetConfig("ask_channel"); err == nil && chID != "" {
-			b.questionChannelID = chID
-			log.Printf("[CFG] Loaded ask_channel: %s", chID)
-		}
 	}
 
 	// Start SSE listener for Notification Platform events
@@ -844,11 +826,6 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) 
 	// /set_ask_channel — set this channel as the destination for agent questions
 	if strings.HasPrefix(strings.TrimSpace(m.Content), "/set_ask_channel") {
 		b.questionChannelID = m.ChannelID
-		if b.sqliteDB != nil {
-			if err := b.sqliteDB.SetConfig("ask_channel", m.ChannelID); err != nil {
-				log.Printf("[CFG] Failed to persist ask_channel: %v", err)
-			}
-		}
 		// Fetch channel name for confirmation
 		chName := m.ChannelID
 		if ch, err := b.api.Channel(m.ChannelID); err == nil {
@@ -1688,64 +1665,13 @@ pollLoop:
 		responseText = toolTrail + "\n\n" + responseText
 	}
 
-	// 7. Store messages in session for cross-run context
+	// Store messages in session for cross-run context
 	if cs.SessionID != "" {
 		go func() {
 			storeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			globalBridge.AppendMessage(storeCtx, cs.SessionID, "user", userMsg, 0)
 			globalBridge.AppendMessage(storeCtx, cs.SessionID, "assistant", responseText, 0)
-		}()
-	}
-
-	// Record run stats for A/B analytics (non-blocking)
-	if b.sqliteDB != nil {
-		go func() {
-			recordCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-
-			// Fetch run details for token usage and step count
-			runDetail, err := globalBridge.GetProjectRun(recordCtx, runID)
-			if err != nil {
-				return
-			}
-
-			// Safely extract values from pointers
-			durMs := 0
-			if runDetail.Data.DurationMs != nil {
-				durMs = *runDetail.Data.DurationMs
-			}
-			inTokens := 0
-			if runDetail.Data.TokenUsage != nil {
-				inTokens = int(runDetail.Data.TokenUsage.TotalInputTokens)
-			}
-			outTokens := 0
-			if runDetail.Data.TokenUsage != nil {
-				outTokens = int(runDetail.Data.TokenUsage.TotalOutputTokens)
-			}
-
-			// Count tool calls from messages
-			toolCallCount := 0
-			if msgs != nil {
-				for _, m := range msgs.Data {
-					if _, hasFC := m.Content["function_calls"]; hasFC {
-						toolCallCount++
-					}
-				}
-			}
-
-			stat := &db.AgentRunStat{
-				AgentName:     agentName,
-				RunID:         runID,
-				SessionID:     cs.SessionID,
-				DurationMs:    durMs,
-				StepCount:     runDetail.Data.StepCount,
-				ToolCallCount: toolCallCount,
-				InputTokens:   inTokens,
-				OutputTokens:  outTokens,
-				Status:        "success",
-			}
-			b.sqliteDB.RecordRunStat(stat)
 		}()
 	}
 

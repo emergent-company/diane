@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -13,7 +12,6 @@ import (
 
 	"github.com/Emergent-Comapny/diane/internal/agents"
 	"github.com/Emergent-Comapny/diane/internal/config"
-	"github.com/Emergent-Comapny/diane/internal/db"
 	"github.com/Emergent-Comapny/diane/internal/memory"
 	sdkagents "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agentdefinitions"
 	sdkagentrun "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agents"
@@ -26,13 +24,11 @@ func cmdAgent(args []string) {
 		fmt.Println("Commands:")
 		fmt.Println("  list            List agent definitions (built-in + MP)")
 		fmt.Println("  seed            Seed all built-in agents to Memory Platform")
-		fmt.Println("  seed-db         Seed all built-in agents to local SQLite database")
-		fmt.Println("  list-db         List agents from local SQLite database")
 		fmt.Println("  stats [name]    Show run stats for agents (from local DB)")
 		fmt.Println("  trace <runID>    Fetch full trace of an agent run (messages, tools, parent)")
 		fmt.Println("  runs [name] [--since <duration>]  List recent agent runs from Memory Platform")
 		fmt.Println("  define <name>   Create or update a user-defined agent  [master only]")
-		fmt.Println("  show <name>     Show agent detail (from local DB)")
+		fmt.Println("  show <name>     Show agent detail (from local config)")
 		fmt.Println("  route <name> <weight>  Set routing weight for A/B testing  [master only]")
 		fmt.Println("  tag <name> <tags>      Set tags for agent (comma-separated)  [master only]")
 		fmt.Println("  sync [name]     Sync one or all user agents to Memory Platform  [master only]")
@@ -40,8 +36,7 @@ func cmdAgent(args []string) {
 		fmt.Println("  delete <name>   Delete a user agent (local + MP)  [master only]")
 		fmt.Println("  prune [--force] Remove orphaned agents from MP (dry-run without --force)  [master only]")
 		fmt.Println("")
-		fmt.Println("Local SQLite database (~/.diane/cron.db) is the single source of truth.")
-		fmt.Println("Built-in agents are immutable and seeded from Go code on every startup.")
+		fmt.Println("Use 'diane agent sync' to push agents to Memory Platform.")
 		return
 	}
 
@@ -51,11 +46,6 @@ func cmdAgent(args []string) {
 	case "seed":
 		requireMaster("agent seed")
 		cmdAgentSeed()
-	case "seed-db":
-		requireMaster("agent seed-db")
-		cmdAgentSeedDB()
-	case "list-db":
-		cmdAgentListDB()
 	case "stats":
 		name := ""
 		if len(args) >= 2 {
@@ -917,43 +907,6 @@ func cmdAgentTrigger(name, prompt string) {
 				}
 			}
 
-			// Record run stats to local DB
-			func() {
-				localDB, err := db.New("")
-				if err != nil {
-					return
-				}
-				defer localDB.Close()
-
-				toolCallCount := 0
-				if toolCalls != nil {
-					toolCallCount = len(toolCalls.Data)
-				}
-
-				durMs := 0
-				if run.Data.DurationMs != nil {
-					durMs = *run.Data.DurationMs
-				}
-				inTokens := 0
-				outTokens := 0
-				if run.Data.TokenUsage != nil {
-					inTokens = int(run.Data.TokenUsage.TotalInputTokens)
-					outTokens = int(run.Data.TokenUsage.TotalOutputTokens)
-				}
-
-				if err := localDB.RecordRunStat(&db.AgentRunStat{
-					AgentName:     name,
-					RunID:         runID,
-					DurationMs:    durMs,
-					StepCount:     run.Data.StepCount,
-					ToolCallCount: toolCallCount,
-					InputTokens:   inTokens,
-					OutputTokens:  outTokens,
-					Status:        "success",
-				}); err != nil {
-					fmt.Fprintf(os.Stderr, "\n⚠️  Stats recording: %v\n", err)
-				}
-			}()
 			return
 		}
 		if run.Data.Status == "failed" || run.Data.Status == "error" {
@@ -1118,215 +1071,18 @@ func cmdAgentPrune(force bool) {
 	fmt.Printf("\n✅ Deleted %d/%d orphaned agents.\n", deleted, len(orphans))
 }
 
-// ============================================================================
-// Local SQLite Database Commands
-// ============================================================================
-
-// cmdAgentSeedDB seeds all built-in agents to the local SQLite database.
-func cmdAgentSeedDB() {
-	d, err := db.New("")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Database: %v\n", err)
-		return
-	}
-	defer d.Close()
-
-	if err := agents.SeedToDB(d); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Seed: %v\n", err)
-		return
-	}
-	fmt.Println("✅ Built-in agents seeded to local SQLite database")
-
-	// Show what was seeded
-	all, err := d.ListAgentDefinitions("", nil)
-	if err != nil {
-		return
-	}
-	for _, a := range all {
-		tools, _ := db.ToolsFromJSON(a.ToolsJSON)
-		tags, _ := db.TagsFromJSON(a.TagsJSON)
-		def := ""
-		if a.IsDefault {
-			def = " [default]"
-		}
-		fmt.Printf("  • %s%s — %s (%d tools, tags: %v)\n",
-			a.Name, def, a.Status, len(tools), tags)
-	}
-}
-
-// cmdAgentListDB lists agents from the local SQLite database.
-func cmdAgentListDB() {
-	d, err := db.New("")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Database: %v\n", err)
-		return
-	}
-	defer d.Close()
-
-	all, err := d.ListAgentDefinitions("", nil)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ List: %v\n", err)
-		return
-	}
-	if len(all) == 0 {
-		fmt.Println("No agents in local database. Run 'diane agent seed-db' first.")
-		return
-	}
-
-	fmt.Println("═══ Local Agent Definitions ═══")
-	for _, a := range all {
-		tools, _ := db.ToolsFromJSON(a.ToolsJSON)
-		tags, _ := db.TagsFromJSON(a.TagsJSON)
-		def := ""
-		if a.IsDefault {
-			def = " 👑 default"
-		}
-		exp := ""
-		if a.IsExperimental {
-			exp = " 🧪 experimental"
-		}
-		fmt.Printf("  %s%s%s\n", a.Name, def, exp)
-		fmt.Printf("    Source: %s | Status: %s | Weight: %.2f\n", a.Source, a.Status, a.RoutingWeight)
-		fmt.Printf("    Tools: %d | Flow: %s | Attempts: %d\n", len(tools), a.FlowType, a.MaxSteps)
-		if len(tags) > 0 {
-			fmt.Printf("    Tags: %v\n", tags)
-		}
-		if a.Description != "" {
-			fmt.Printf("    %s\n", a.Description)
-		}
-		fmt.Println()
-	}
-}
-
 // cmdAgentStats shows run statistics for agents from the local DB.
 func cmdAgentStats(name string) {
-	d, err := db.New("")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Database: %v\n", err)
-		return
-	}
-	defer d.Close()
-
-	if name != "" {
-		// Show individual agent stats
-		stats, err := d.GetAgentRunStats(name, 24)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "❌ Stats: %v\n", err)
-			return
-		}
-		a, _ := d.GetAgentDefinition(name)
-		if a != nil {
-			tags, _ := db.TagsFromJSON(a.TagsJSON)
-			fmt.Printf("═══ Stats for %s ═══\n", name)
-			fmt.Printf("  Status: %s | Tags: %v | Weight: %.2f\n\n", a.Status, tags, a.RoutingWeight)
-		}
-		if len(stats) == 0 {
-			fmt.Println("  No runs recorded in the last 24 hours.")
-			return
-		}
-		var totalDur, totalInput, totalOutput, success int
-		for _, s := range stats {
-			totalDur += s.DurationMs
-			totalInput += s.InputTokens
-			totalOutput += s.OutputTokens
-			if s.Status == "success" || s.Status == "completed" {
-				success++
-			}
-		}
-		n := len(stats)
-		fmt.Printf("  Runs: %d | Success: %d | Failures: %d\n", n, success, n-success)
-		fmt.Printf("  Avg duration: %dms | Avg input: %d | Avg output: %d\n",
-			totalDur/n, totalInput/n, totalOutput/n)
-	} else {
-		// Show summary for all agents
-		summaries, err := d.GetAgentStatsSummary(24)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "❌ Stats summary: %v\n", err)
-			return
-		}
-		if len(summaries) == 0 {
-			fmt.Println("No runs recorded in the last 24 hours.")
-			return
-		}
-		fmt.Println("═══ Agent Stats (last 24h) ═══")
-		for _, s := range summaries {
-			successRate := float64(0)
-			if s.TotalRuns > 0 {
-				successRate = float64(s.SuccessRuns) / float64(s.TotalRuns) * 100
-			}
-			fmt.Printf("  %s\n", s.AgentName)
-			fmt.Printf("    Runs: %d | Success: %.0f%% | Avg: %dms | Avg tokens: %d in / %d out\n",
-				s.TotalRuns, successRate, int(s.AvgDurationMs),
-				int(s.AvgInputTokens), int(s.AvgOutputTokens))
-		}
-	}
+	fmt.Println("Agent run statistics are no longer stored locally. Use 'diane agent runs <name>' to view run data from Memory Platform.")
 }
-
 // cmdAgentRoute sets the routing weight for an agent.
 func cmdAgentRoute(name, weightStr string) {
-	var weight float64
-	if _, err := fmt.Sscanf(weightStr, "%f", &weight); err != nil || weight < 0 || weight > 1 {
-		fmt.Fprintf(os.Stderr, "❌ Weight must be a float between 0.0 and 1.0\n")
-		return
-	}
-
-	d, err := db.New("")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Database: %v\n", err)
-		return
-	}
-	defer d.Close()
-
-	a, err := d.GetAgentDefinition(name)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Lookup: %v\n", err)
-		return
-	}
-	if a == nil {
-		fmt.Fprintf(os.Stderr, "❌ Agent '%s' not found\n", name)
-		return
-	}
-
-	a.RoutingWeight = weight
-	if err := d.UpsertAgentDefinition(a); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Update: %v\n", err)
-		return
-	}
-	fmt.Printf("✅ %s routing weight set to %.2f\n", name, weight)
+	fmt.Println("Agent routing is configured via Memory Platform. Use 'diane agent sync' to push routing configuration.")
 }
 
 // cmdAgentTag sets tags for an agent.
 func cmdAgentTag(name, tagsStr string) {
-	tagList := splitTrim(tagsStr)
-	tagsJSON, err := json.Marshal(tagList)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Marshal tags: %v\n", err)
-		return
-	}
-
-	d, err := db.New("")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Database: %v\n", err)
-		return
-	}
-	defer d.Close()
-
-	a, err := d.GetAgentDefinition(name)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Lookup: %v\n", err)
-		return
-	}
-	if a == nil {
-		fmt.Fprintf(os.Stderr, "❌ Agent '%s' not found\n", name)
-		return
-	}
-
-	a.TagsJSON = string(tagsJSON)
-	if err := d.UpsertAgentDefinition(a); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Update: %v\n", err)
-		return
-	}
-	fmt.Printf("✅ %s tags set to: %v\n", name, tagList)
+	fmt.Println("Agent tags are configured via Memory Platform. Use 'diane agent sync' to push tag configuration.")
 }
 
 // ============================================================================

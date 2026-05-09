@@ -8,10 +8,10 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
-	"github.com/Emergent-Comapny/diane/internal/db"
 	"github.com/Emergent-Comapny/diane/internal/mcpproxy"
 	"github.com/Emergent-Comapny/diane/mcp/tools/apple"
 	"github.com/Emergent-Comapny/diane/mcp/tools/finance"
@@ -43,6 +43,22 @@ type MCPServer struct {
 	weatherProvider        *weather.Provider
 	githubProvider         *githubbot.Provider
 	memoryProvider         *memorytools.Provider
+
+	// In-memory job store (replaces SQLite cron.db)
+	jobMu    sync.Mutex
+	jobs     []*Job
+	nextJobID int64
+}
+
+// Job represents a scheduled cron job.
+type Job struct {
+	ID        int64     `json:"id"`
+	Name      string    `json:"name"`
+	Command   string    `json:"command"`
+	Schedule  string    `json:"schedule"`
+	Enabled   bool      `json:"enabled"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type MCPRequest struct {
@@ -693,15 +709,6 @@ func (s *MCPServer) callTool(params json.RawMessage) MCPResponse {
 	}
 }
 
-func getDB() (*db.DB, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-	dbPath := filepath.Join(home, ".diane", "cron.db")
-	return db.New(dbPath)
-}
-
 // Helper to format tool response in MCP content format
 func mcpTextResponse(text string) MCPResponse {
 	return MCPResponse{
@@ -716,43 +723,29 @@ func mcpTextResponse(text string) MCPResponse {
 	}
 }
 
-// withDB opens the database and passes it to the callback.
-func withDB(f func(*db.DB) MCPResponse) MCPResponse {
-	database, err := getDB()
-	if err != nil {
-		return MCPResponse{Error: &MCPError{Code: -1, Message: err.Error()}}
-	}
-	defer database.Close()
-	return f(database)
-}
-
 func (s *MCPServer) jobList(args map[string]interface{}) MCPResponse {
-	return withDB(func(database *db.DB) MCPResponse {
+	s.jobMu.Lock()
+	defer s.jobMu.Unlock()
 
 	enabledOnly := false
 	if val, ok := args["enabled_only"].(bool); ok {
 		enabledOnly = val
 	}
 
-	jobs, err := database.ListJobs(enabledOnly)
-	if err != nil {
-		return MCPResponse{Error: &MCPError{Code: -1, Message: err.Error()}}
+	var filtered []*Job
+	for _, j := range s.jobs {
+		if enabledOnly && !j.Enabled {
+			continue
+		}
+		filtered = append(filtered, j)
 	}
 
-	// Format as JSON string for text response
-	jobsJSON, _ := json.MarshalIndent(jobs, "", "  ")
-
-	return MCPResponse{
-		Result: map[string]interface{}{
-			"content": []map[string]interface{}{
-				{
-					"type": "text",
-					"text": string(jobsJSON),
-				},
-			},
-		},
+	if filtered == nil {
+		filtered = []*Job{}
 	}
-	})
+
+	jobsJSON, _ := json.MarshalIndent(filtered, "", "  ")
+	return mcpTextResponse(string(jobsJSON))
 }
 
 func (s *MCPServer) jobAdd(args map[string]interface{}) MCPResponse {
@@ -764,17 +757,31 @@ func (s *MCPServer) jobAdd(args map[string]interface{}) MCPResponse {
 		return MCPResponse{Error: &MCPError{Code: -1, Message: "name, schedule, and command are required"}}
 	}
 
-	return withDB(func(database *db.DB) MCPResponse {
+	s.jobMu.Lock()
+	defer s.jobMu.Unlock()
 
-	job, err := database.CreateJob(name, command, schedule)
-	if err != nil {
-		return MCPResponse{Error: &MCPError{Code: -1, Message: err.Error()}}
+	for _, j := range s.jobs {
+		if j.Name == name {
+			return MCPResponse{Error: &MCPError{Code: -1, Message: fmt.Sprintf("job '%s' already exists", name)}}
+		}
 	}
+
+	now := time.Now()
+	s.nextJobID++
+	job := &Job{
+		ID:        s.nextJobID,
+		Name:      name,
+		Command:   command,
+		Schedule:  schedule,
+		Enabled:   true,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	s.jobs = append(s.jobs, job)
 
 	jobJSON, _ := json.MarshalIndent(job, "", "  ")
 	message := fmt.Sprintf("Job '%s' created successfully\n\n%s", name, string(jobJSON))
 	return mcpTextResponse(message)
-	})
 }
 
 func (s *MCPServer) jobEnable(args map[string]interface{}) MCPResponse {
@@ -783,20 +790,17 @@ func (s *MCPServer) jobEnable(args map[string]interface{}) MCPResponse {
 		return MCPResponse{Error: &MCPError{Code: -1, Message: "job identifier is required"}}
 	}
 
-	return withDB(func(database *db.DB) MCPResponse {
+	s.jobMu.Lock()
+	defer s.jobMu.Unlock()
 
-	job, err := database.GetJobByName(jobIdentifier)
-	if err != nil {
-		return MCPResponse{Error: &MCPError{Code: -1, Message: err.Error()}}
+	job := s.findJob(jobIdentifier)
+	if job == nil {
+		return MCPResponse{Error: &MCPError{Code: -1, Message: fmt.Sprintf("job '%s' not found", jobIdentifier)}}
 	}
 
-	enabled := true
-	if err := database.UpdateJob(job.ID, nil, nil, &enabled); err != nil {
-		return MCPResponse{Error: &MCPError{Code: -1, Message: err.Error()}}
-	}
-
+	job.Enabled = true
+	job.UpdatedAt = time.Now()
 	return mcpTextResponse(fmt.Sprintf("Job '%s' enabled", jobIdentifier))
-	})
 }
 
 func (s *MCPServer) jobDisable(args map[string]interface{}) MCPResponse {
@@ -805,20 +809,17 @@ func (s *MCPServer) jobDisable(args map[string]interface{}) MCPResponse {
 		return MCPResponse{Error: &MCPError{Code: -1, Message: "job identifier is required"}}
 	}
 
-	return withDB(func(database *db.DB) MCPResponse {
+	s.jobMu.Lock()
+	defer s.jobMu.Unlock()
 
-	job, err := database.GetJobByName(jobIdentifier)
-	if err != nil {
-		return MCPResponse{Error: &MCPError{Code: -1, Message: err.Error()}}
+	job := s.findJob(jobIdentifier)
+	if job == nil {
+		return MCPResponse{Error: &MCPError{Code: -1, Message: fmt.Sprintf("job '%s' not found", jobIdentifier)}}
 	}
 
-	enabled := false
-	if err := database.UpdateJob(job.ID, nil, nil, &enabled); err != nil {
-		return MCPResponse{Error: &MCPError{Code: -1, Message: err.Error()}}
-	}
-
+	job.Enabled = false
+	job.UpdatedAt = time.Now()
 	return mcpTextResponse(fmt.Sprintf("Job '%s' disabled", jobIdentifier))
-	})
 }
 
 func (s *MCPServer) jobDelete(args map[string]interface{}) MCPResponse {
@@ -827,101 +828,61 @@ func (s *MCPServer) jobDelete(args map[string]interface{}) MCPResponse {
 		return MCPResponse{Error: &MCPError{Code: -1, Message: "job identifier is required"}}
 	}
 
-	return withDB(func(database *db.DB) MCPResponse {
+	s.jobMu.Lock()
+	defer s.jobMu.Unlock()
 
-	job, err := database.GetJobByName(jobIdentifier)
-	if err != nil {
-		return MCPResponse{Error: &MCPError{Code: -1, Message: err.Error()}}
+	for i, j := range s.jobs {
+		if j.Name == jobIdentifier || fmt.Sprintf("%d", j.ID) == jobIdentifier {
+			s.jobs = append(s.jobs[:i], s.jobs[i+1:]...)
+			return mcpTextResponse(fmt.Sprintf("Job '%s' deleted", jobIdentifier))
+		}
 	}
-
-	if err := database.DeleteJob(job.ID); err != nil {
-		return MCPResponse{Error: &MCPError{Code: -1, Message: err.Error()}}
-	}
-
-	return mcpTextResponse(fmt.Sprintf("Job '%s' deleted", jobIdentifier))
-	})
+	return MCPResponse{Error: &MCPError{Code: -1, Message: fmt.Sprintf("job '%s' not found", jobIdentifier)}}
 }
 
 func (s *MCPServer) pauseAll() MCPResponse {
-	return withDB(func(database *db.DB) MCPResponse {
-
-	jobs, err := database.ListJobs(true)
-	if err != nil {
-		return MCPResponse{Error: &MCPError{Code: -1, Message: err.Error()}}
-	}
+	s.jobMu.Lock()
+	defer s.jobMu.Unlock()
 
 	count := 0
-	enabled := false
-	for _, job := range jobs {
-		if err := database.UpdateJob(job.ID, nil, nil, &enabled); err != nil {
-			return MCPResponse{Error: &MCPError{Code: -1, Message: err.Error()}}
-		}
-		count++
-	}
-
-	return mcpTextResponse(fmt.Sprintf("Paused %d jobs", count))
-	})
-}
-
-func (s *MCPServer) resumeAll() MCPResponse {
-	return withDB(func(database *db.DB) MCPResponse {
-
-	allJobs, err := database.ListJobs(false)
-	if err != nil {
-		return MCPResponse{Error: &MCPError{Code: -1, Message: err.Error()}}
-	}
-
-	count := 0
-	enabled := true
-	for _, job := range allJobs {
-		if !job.Enabled {
-			if err := database.UpdateJob(job.ID, nil, nil, &enabled); err != nil {
-				return MCPResponse{Error: &MCPError{Code: -1, Message: err.Error()}}
-			}
+	for _, j := range s.jobs {
+		if j.Enabled {
+			j.Enabled = false
+			j.UpdatedAt = time.Now()
 			count++
 		}
 	}
+	return mcpTextResponse(fmt.Sprintf("Paused %d jobs", count))
+}
 
+func (s *MCPServer) resumeAll() MCPResponse {
+	s.jobMu.Lock()
+	defer s.jobMu.Unlock()
+
+	count := 0
+	for _, j := range s.jobs {
+		if !j.Enabled {
+			j.Enabled = true
+			j.UpdatedAt = time.Now()
+			count++
+		}
+	}
 	return mcpTextResponse(fmt.Sprintf("Resumed %d jobs", count))
-	})
 }
 
 func (s *MCPServer) getLogs(args map[string]interface{}) MCPResponse {
-	return withDB(func(database *db.DB) MCPResponse {
+	// SQLite-backed job_executions log was never written to in production.
+	return mcpTextResponse("[]")
+}
 
-	limit := 10
-	if val, ok := args["limit"].(float64); ok {
-		limit = int(val)
-	}
-
-	var jobName string
-	if val, ok := args["job_name"].(string); ok {
-		jobName = val
-	}
-
-	// Get executions
-	var executions []*db.JobExecution
-	if jobName != "" {
-		job, jobErr := database.GetJobByName(jobName)
-		if jobErr != nil {
-			return MCPResponse{Error: &MCPError{Code: -1, Message: jobErr.Error()}}
-		}
-		var execErr error
-		executions, execErr = database.ListJobExecutions(&job.ID, limit, 0)
-		if execErr != nil {
-			return MCPResponse{Error: &MCPError{Code: -1, Message: execErr.Error()}}
-		}
-	} else {
-		var execErr error
-		executions, execErr = database.ListJobExecutions(nil, limit, 0)
-		if execErr != nil {
-			return MCPResponse{Error: &MCPError{Code: -1, Message: execErr.Error()}}
+// findJob looks up a job by name or ID string. Must be called with s.jobMu held.
+func (s *MCPServer) findJob(identifier string) *Job {
+	for _, j := range s.jobs {
+		if j.Name == identifier || fmt.Sprintf("%d", j.ID) == identifier {
+			return j
 		}
 	}
-
-	logsJSON, _ := json.MarshalIndent(executions, "", "  ")
-	return mcpTextResponse(string(logsJSON))
-	})
+	return nil
 }
 
 func (s *MCPServer) getStatus() MCPResponse {
