@@ -1,0 +1,15 @@
+# Diane — .dockerignore for test node image
+.git/
+.vscode/
+.idea/
+research/
+sandbox/
+server/swift/
+node_modules/
+vendor/
+*.md
+diane
+.diane/
+*.test
+coverage/
+*.out

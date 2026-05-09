@@ -1,0 +1,31 @@
+# Diane Test Node — Binary copy variant
+# Build local binary first:
+#   cd server/cmd/diane && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+#     go build -ldflags="-s -w -X main.Version=v1.38.50-test" -o /tmp/diane-test-binary .
+# Then:
+#   docker build -t diane-test-node -f docker/Dockerfile-local .
+
+FROM alpine:3.21
+
+RUN apk add --no-cache ca-certificates tzdata gettext-envsubst curl
+
+RUN addgroup -S diane && adduser -S diane -G diane
+
+COPY --chmod=755 docker/entrypoint.sh /entrypoint.sh
+COPY --chmod=644 docker/config.tmpl.yml /etc/diane/config.tmpl.yml
+COPY --chmod=755 diane /usr/local/bin/diane
+
+RUN mkdir -p /var/lib/diane && chown diane:diane /var/lib/diane
+
+USER diane
+
+EXPOSE 8890
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
+  CMD curl -sf http://localhost:8890/api/status > /dev/null 2>&1
+
+ENTRYPOINT ["/entrypoint.sh"]
+
+LABEL org.opencontainers.image.title="Diane Test Node"
+LABEL org.opencontainers.image.description="Diane slave node for integration testing in CI"
+LABEL org.opencontainers.image.version="1.0.0"

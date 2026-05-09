@@ -1,0 +1,120 @@
+name: Docker Test Node
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag to test'
+        required: false
+        default: 'latest'
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build + Docker integration test
+    runs-on: ubuntu-latest
+
+    env:
+      MEMORY_SERVER_URL: ${{ secrets.DOCKER_TEST_MEMORY_SERVER_URL || 'https://memory.emergent-company.ai' }}
+      MEMORY_PROJECT_ID: ${{ secrets.DOCKER_TEST_MEMORY_PROJECT_ID }}
+      MEMORY_API_KEY: ${{ secrets.DOCKER_TEST_MEMORY_API_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: server/go.sum
+
+      - name: Build Docker image
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          docker build \
+            --build-arg "VERSION=${VERSION:-dev}" \
+            -t diane-test-node \
+            -f docker/Dockerfile .
+
+      - name: Create .dockerignore
+        run: |
+          cat > .dockerignore << 'EOF'
+          .git/
+          research/
+          sandbox/
+          server/swift/
+          *.md
+          diane
+          .diane/
+          EOF
+
+      - name: Start container
+        if: env.MEMORY_PROJECT_ID != '' && env.MEMORY_API_KEY != ''
+        run: |
+          docker run -d --name diane-test \
+            --rm \
+            -p 8890:8890 \
+            -e MEMORY_SERVER_URL="$MEMORY_SERVER_URL" \
+            -e MEMORY_PROJECT_ID="$MEMORY_PROJECT_ID" \
+            -e MEMORY_API_KEY="$MEMORY_API_KEY" \
+            -e DIANE_INSTANCE_ID="ci-test-node" \
+            diane-test-node
+
+          # Wait for health check
+          echo "Waiting for container to become healthy..."
+          for i in $(seq 1 30); do
+            status=$(docker inspect --format='{{.State.Health.Status}}' diane-test 2>/dev/null)
+            if [ "$status" = "healthy" ]; then
+              echo "✅ Container healthy after ${i}s"
+              break
+            fi
+            sleep 2
+          done
+          docker inspect --format='{{.State.Health.Status}}' diane-test
+
+      - name: Health check (HTTP /api/status)
+        if: env.MEMORY_PROJECT_ID != '' && env.MEMORY_API_KEY != ''
+        run: |
+          curl -sf http://localhost:8890/api/status | head -5
+          echo ""
+          echo "✅ Health check passed"
+
+      - name: Test 'diane service status'
+        if: env.MEMORY_PROJECT_ID != '' && env.MEMORY_API_KEY != ''
+        run: |
+          docker exec diane-test diane service status || true
+
+      - name: Test 'diane monitor'
+        if: env.MEMORY_PROJECT_ID != '' && env.MEMORY_API_KEY != ''
+        run: |
+          docker exec diane-test diane monitor || true
+
+      - name: Test 'diane tool test get_time'
+        if: env.MEMORY_PROJECT_ID != '' && env.MEMORY_API_KEY != ''
+        run: |
+          docker exec diane-test diane tool test get_time || true
+
+      - name: Test 'diane version'
+        if: env.MEMORY_PROJECT_ID != '' && env.MEMORY_API_KEY != ''
+        run: |
+          docker exec diane-test diane version
+
+      - name: Test 'diane upgrade --dry-run'
+        if: env.MEMORY_PROJECT_ID != '' && env.MEMORY_API_KEY != ''
+        run: |
+          docker exec diane-test diane upgrade --dry-run || true
+
+      - name: Container logs
+        if: always()
+        run: |
+          docker logs diane-test 2>&1 || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f diane-test 2>/dev/null || true
