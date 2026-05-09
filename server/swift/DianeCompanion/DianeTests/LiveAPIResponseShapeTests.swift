@@ -10,6 +10,13 @@ final class LiveAPIResponseShapeTests: XCTestCase {
 
     var client: DianeAPIClient!
 
+    /// ISO8601 formatter that handles fractional seconds (macOS 13+).
+    private let isoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
     override func setUp() async throws {
         client = DianeAPIClient(baseURL: "http://127.0.0.1:8890")
     }
@@ -48,13 +55,13 @@ final class LiveAPIResponseShapeTests: XCTestCase {
             if let tokens = s.totalTokens {
                 XCTAssertGreaterThanOrEqual(tokens, 0, "totalTokens must be >= 0")
             }
-            // Timestamps — must be valid ISO8601
+            // Timestamps — must be valid ISO8601 (with optional fractional seconds)
             if let createdAt = s.createdAt {
-                XCTAssertNotNil(ISO8601DateFormatter().date(from: createdAt),
+                XCTAssertNotNil(isoFormatter.date(from: createdAt),
                                 "createdAt must be ISO8601: \(createdAt)")
             }
             if let updatedAt = s.updatedAt {
-                XCTAssertNotNil(ISO8601DateFormatter().date(from: updatedAt),
+                XCTAssertNotNil(isoFormatter.date(from: updatedAt),
                                 "updatedAt must be ISO8601: \(updatedAt)")
             }
         }
@@ -91,7 +98,7 @@ final class LiveAPIResponseShapeTests: XCTestCase {
 
             // Created at — if present, must be ISO8601
             if let createdAt = m.createdAt {
-                XCTAssertNotNil(ISO8601DateFormatter().date(from: createdAt),
+                XCTAssertNotNil(isoFormatter.date(from: createdAt),
                                 "createdAt must be ISO8601: \(createdAt)")
             }
 
@@ -125,7 +132,7 @@ final class LiveAPIResponseShapeTests: XCTestCase {
 
             // Timestamps — if present, must be ISO8601
             if let createdAt = a.createdAt {
-                XCTAssertNotNil(ISO8601DateFormatter().date(from: createdAt),
+                XCTAssertNotNil(isoFormatter.date(from: createdAt),
                                 "createdAt must be ISO8601: \(createdAt)")
             }
         }
