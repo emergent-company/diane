@@ -789,7 +789,12 @@ func (h *apiHandlers) handleDeleteAgent(w http.ResponseWriter, r *http.Request, 
 			jsonError(w, http.StatusInternalServerError, "build merged agents: "+buildErr.Error())
 			return
 		}
-		if err := agents.SeedAgentList(ctx, bridge.Client(), builtIns); err != nil {
+		allBuiltIns := agents.BuiltInAgents()
+		allNames := make([]string, len(allBuiltIns))
+		for i, a := range allBuiltIns {
+			allNames[i] = a.Name
+		}
+		if err := agents.SeedAgentList(ctx, bridge.Client(), builtIns, allNames); err != nil {
 			jsonError(w, http.StatusInternalServerError, "re-seed: "+err.Error())
 			return
 		}

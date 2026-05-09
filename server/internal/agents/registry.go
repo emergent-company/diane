@@ -11,6 +11,7 @@ package agents
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/Emergent-Comapny/diane/internal/config"
@@ -903,7 +904,11 @@ func SeedBuiltInAgents(ctx context.Context, client *sdk.Client) error {
 // SeedAgentList seeds a list of BuiltInAgent definitions to Memory Platform.
 // Unlike SeedBuiltInAgents, this accepts a custom agent list (after overrides
 // and tool pattern merges have been applied).
-func SeedAgentList(ctx context.Context, client *sdk.Client, agents []BuiltInAgent) error {
+// SeedAgentList creates or updates agent definitions on Memory Platform.
+// The `agents` parameter is the filtered list of agents to seed (disabled agents excluded).
+// The `allNames` parameter lists all known built-in agent names — any existing MP definition
+// with a name in allNames but not in agents will be deleted (handles disabled agents).
+func SeedAgentList(ctx context.Context, client *sdk.Client, agents []BuiltInAgent, allNames []string) error {
 	// Fetch existing agent definitions from MP
 	resp, err := client.AgentDefinitions.List(ctx)
 	if err != nil {
@@ -912,13 +917,19 @@ func SeedAgentList(ctx context.Context, client *sdk.Client, agents []BuiltInAgen
 
 	// Index existing by name
 	existing := make(map[string]string) // name → ID
+	seen := make(map[string]bool)       // names present in filtered agents list
 	if resp != nil {
+		log.Printf("[seed] %d existing agent definitions on MP", len(resp.Data))
 		for _, d := range resp.Data {
 			existing[d.Name] = d.ID
+			log.Printf("[seed]   existing: %s → %s", d.Name, d.ID)
 		}
+	} else {
+		log.Printf("[seed] No existing agent definitions on MP (nil response)")
 	}
 
 	for _, ba := range agents {
+		seen[ba.Name] = true
 		req := toCreateRequest(ba)
 		defID, exists := existing[ba.Name]
 
@@ -951,6 +962,26 @@ func SeedAgentList(ctx context.Context, client *sdk.Client, agents []BuiltInAgen
 				}
 			}
 		}
+	}
+
+	// Delete agent definitions that are managed (in allNames) but not in the filtered set
+	// This handles disabled built-in agents — their MP definitions are removed.
+	log.Printf("[seed] Checking for agents to delete: %d allNames, %d seeded, %d existing", len(allNames), len(agents), len(existing))
+	for _, name := range allNames {
+		if seen[name] {
+			log.Printf("[seed]   %s: in seeded list, keeping", name)
+			continue
+		}
+		defID, exists := existing[name]
+		if !exists {
+			log.Printf("[seed]   %s: not in existing, skipping", name)
+			continue
+		}
+		log.Printf("[seed] Deleting disabled built-in agent %q (id=%s)", name, defID)
+		if err := client.AgentDefinitions.Delete(ctx, defID); err != nil {
+			return fmt.Errorf("delete disabled agent %s: %w", name, err)
+		}
+		log.Printf("[seed] Deleted disabled built-in agent %q", name)
 	}
 
 	return nil

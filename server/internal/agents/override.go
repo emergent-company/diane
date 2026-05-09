@@ -83,6 +83,7 @@ func ReadAgentOverrideConfigs(ctx context.Context, graphClient *graph.Client) (m
 			Timeout:          propInt(obj.Properties, "timeout"),
 			Visibility:       propString(obj.Properties, "visibility"),
 			SandboxEnabled:   propBoolPtr(obj.Properties, "sandbox_enabled"),
+			Disabled:         propBool(obj.Properties, "disabled"),
 		}
 
 		if !oc.HasOverrides() {
@@ -226,6 +227,21 @@ func propBoolPtr(props map[string]any, key string) *bool {
 		return nil
 	}
 	return &b
+}
+
+func propBool(props map[string]any, key string) bool {
+	if props == nil {
+		return false
+	}
+	v, ok := props[key]
+	if !ok {
+		return false
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return false
+	}
+	return b
 }
 
 // FilterDisabled removes agents from the list that have a disabled override

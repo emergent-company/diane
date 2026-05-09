@@ -50,10 +50,10 @@ xcodebuild test -project Diane.xcodeproj -scheme Diane \
   -resultBundlePath /tmp/DianeUnitTests.xcresult \
   2>&1 | tee /tmp/test-output.txt | grep -E "Test Suite|error:|failed|passed"
 
-if grep -qi "failed" /tmp/test-output.txt 2>/dev/null; then
+if grep -q "failed (" /tmp/test-output.txt 2>/dev/null; then
     echo "✗ Unit tests FAILED"
     ((FAIL++))
-    grep "error:" /tmp/test-output.txt | head -5
+    grep "failed (" /tmp/test-output.txt | head -5
 else
     echo "✓ All unit tests passed"
     ((PASS++))

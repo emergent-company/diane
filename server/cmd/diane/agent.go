@@ -519,7 +519,12 @@ func doAgentSync(name string, cfg *config.Config, pc *config.ProjectConfig) {
 			log.Printf("[agent-sync] BuildMergedAgents failed (non-fatal): %v", buildErr)
 			builtIns = agents.BuiltInAgents()
 		}
-		if err := agents.SeedAgentList(seedCtx, seedBridge.Client(), builtIns); err != nil {
+		allBuiltIns := agents.BuiltInAgents()
+		allNames := make([]string, len(allBuiltIns))
+		for i, a := range allBuiltIns {
+			allNames[i] = a.Name
+		}
+		if err := agents.SeedAgentList(seedCtx, seedBridge.Client(), builtIns, allNames); err != nil {
 			fmt.Printf("⚠️  %v\n", err)
 		} else {
 			fmt.Println("✅")
@@ -646,6 +651,11 @@ func cmdAgentSeed() {
 
 	// Build merged agents: built-in → overrides → tool patterns
 	builtIns := agents.BuiltInAgents()
+	allBuiltIns := builtIns
+	allNames := make([]string, len(allBuiltIns))
+	for i, a := range allBuiltIns {
+		allNames[i] = a.Name
+	}
 	if len(overrides) > 0 {
 		builtIns = agents.ApplyOverrides(builtIns, overrides)
 	}
@@ -660,7 +670,7 @@ func cmdAgentSeed() {
 	}
 	fmt.Println()
 
-	if err := agents.SeedAgentList(ctx, bridge.Client(), builtIns); err != nil {
+	if err := agents.SeedAgentList(ctx, bridge.Client(), builtIns, allNames); err != nil {
 		fmt.Printf("❌ Seeding failed: %v\n", err)
 		return
 	}
@@ -984,7 +994,12 @@ func cmdAgentDelete(name string) {
 			fmt.Printf("⚠️  BuildMergedAgents failed (falling back): %v\n", buildErr)
 			builtIns = agents.BuiltInAgents()
 		}
-		if err := agents.SeedAgentList(ctx, bridge.Client(), builtIns); err != nil {
+		allBuiltIns := agents.BuiltInAgents()
+		allNames := make([]string, len(allBuiltIns))
+		for i, a := range allBuiltIns {
+			allNames[i] = a.Name
+		}
+		if err := agents.SeedAgentList(ctx, bridge.Client(), builtIns, allNames); err != nil {
 			fmt.Printf("❌ Re-seed failed: %v\n", err)
 			return
 		}
