@@ -1,0 +1,8 @@
+[diane-test]
+diane-test ansible_host=diane-test ansible_user=root
+
+[master]
+diane-test
+
+[slave]
+diane-test

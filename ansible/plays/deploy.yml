@@ -1,0 +1,71 @@
+---
+# Deploy a newly-built diane binary into containers.
+#
+# Build first:
+#   cd server && GOOS=linux GOARCH=amd64 go build \
+#     -o /tmp/diane-linux-amd64 \
+#     -ldflags "-X main.Version=v$(git describe --tags --abbrev=0)-dev" \
+#     ./cmd/diane/
+#
+# Usage:
+#   ansible-playbook plays/deploy.yml
+#   ansible-playbook plays/deploy.yml -e target=master
+#   ansible-playbook plays/deploy.yml -e binary=/tmp/diane-linux-amd64
+#
+- name: Deploy diane binary to containers
+  hosts: all
+  gather_facts: no
+  vars:
+    binary: "{{ local_binary | default('/tmp/diane-linux-amd64') }}"
+    master_container: diane-test-master
+    slave_container: diane-test-slave
+    container_binary: /usr/local/bin/diane
+    containers:
+      master: "{{ master_container }}"
+      slave: "{{ slave_container }}"
+    deploy_targets: "{{ [containers[target]] if target is defined else containers.values() | list }}"
+
+  tasks:
+    - name: Copy binary to host
+      copy:
+        src: "{{ binary }}"
+        dest: /tmp/diane-new
+        mode: "0755"
+
+    - name: Inject into container(s) and restart
+      shell: |
+        docker cp /tmp/diane-new {{ item }}:{{ container_binary }} &&
+        docker restart {{ item }}
+      loop: "{{ deploy_targets }}"
+      register: restarts
+
+    - name: Wait for health
+      shell: |
+        for i in $(seq 1 10); do
+          status=$(docker inspect {{ item }} 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d[0].get('State',{}).get('Status','unknown'))" 2>/dev/null)
+          if [ "$status" = "running" ]; then
+            echo "healthy"
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "timeout"
+        exit 1
+      loop: "{{ deploy_targets }}"
+      loop_control:
+        label: "{{ item }}"
+      register: health_results
+
+    - name: Verify agent watch (master only)
+      shell: "docker logs {{ master_container }} --tail 10 2>&1"
+      register: watch_log
+      when: "target is defined and target == 'master'"
+      changed_when: false
+      failed_when: watch_log.stdout is not search("agent-watch.*Connected to SSE")
+
+    - name: Summary
+      debug:
+        msg: >-
+          Deployed {{ binary | basename }}
+          → {{ deploy_targets | join(', ') }}
+          {% if restarts.results is defined %}({{ deploy_targets | length }} container(s)){% endif %}
