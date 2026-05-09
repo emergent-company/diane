@@ -123,18 +123,33 @@ func cmdServiceStop(instance, pidFile string) {
 }
 
 func cmdServiceStatus(instance, pidFile string) {
+	// First check the dedicated instance PID file
 	pid, err := readPID(pidFile)
-	if err != nil {
-		fmt.Printf("❌ %s is not running\n", instance)
+	home, _ := os.UserHomeDir()
+
+	if err == nil {
+		if isRunning(pid) {
+			fmt.Printf("✅ %s is running (PID %d)\n", instance, pid)
+			return
+		}
+		// Stale PID — remove it
+		os.Remove(pidFile)
+	}
+
+	// Fallback: check the serve PID file (diane serve writes ~/.diane/serve.pid)
+	servePidFile := filepath.Join(home, ".diane", "serve.pid")
+	if servePid, err := readPID(servePidFile); err == nil && isRunning(servePid) {
+		fmt.Printf("✅ %s is running (via diane serve, PID %d)\n", instance, servePid)
 		return
 	}
 
-	if isRunning(pid) {
-		fmt.Printf("✅ %s is running (PID %d)\n", instance, pid)
-	} else {
-		fmt.Printf("❌ %s is not running (stale PID %d)\n", instance, pid)
-		os.Remove(pidFile)
+	// Last resort: check if this very process is diane serve (container mode: PID 1)
+	if os.Getpid() == 1 && filepath.Base(os.Args[0]) == "diane" {
+		fmt.Printf("✅ %s is running (PID 1, container mode)\n", instance)
+		return
 	}
+
+	fmt.Printf("❌ %s is not running\n", instance)
 }
 
 // readPID reads a PID from a file.

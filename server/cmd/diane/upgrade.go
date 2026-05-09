@@ -42,6 +42,7 @@ func cmdUpgrade(args []string) {
 	checkOnly := false
 	jsonOutput := false
 	autoMode := false
+	dryRun := false
 
 	for _, a := range args {
 		switch a {
@@ -51,6 +52,8 @@ func cmdUpgrade(args []string) {
 			jsonOutput = true
 		case "--auto":
 			autoMode = true
+		case "--dry-run":
+			dryRun = true
 		}
 	}
 
@@ -117,6 +120,25 @@ func cmdUpgrade(args []string) {
 			fmt.Println("Update available!")
 		} else {
 			fmt.Println("Up to date.")
+		}
+		return
+	}
+
+	// --dry-run mode: show what would happen without making changes
+	if dryRun {
+		fmt.Printf("📦 Current version: v%s\n", currentVer)
+		fmt.Printf("📦 Latest version:  v%s\n", latestVer)
+		if needsBinaryUpdate {
+			goos := runtime.GOOS
+			goarch := runtime.GOARCH
+			if goarch == "aarch64" {
+				goarch = "arm64"
+			}
+			assetName := fmt.Sprintf("diane-%s-%s.tar.gz", goos, goarch)
+			fmt.Printf("📦 Would download:  %s\n", assetName)
+			fmt.Printf("📦 Would install to: %s\n", symlinkPath)
+		} else {
+			fmt.Println("✅ CLI binary already up to date!")
 		}
 		return
 	}
