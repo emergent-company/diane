@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -118,7 +119,17 @@ func cmdServe() {
 		}()
 	}
 
-// ── Update node version in graph ──
+	// ── Start agent config watch (master only) ──
+	// Watches for AgentOverrideConfig / AgentToolConfig entity changes in the graph
+	// via SSE and auto-re-seeds built-in agents when configs change.
+	if isMaster {
+		go func() {
+			log.Printf("[SERVE] Starting agent config watch (SSE)...")
+			agentToolConfigWatch(context.Background(), pc.ServerURL, pc.Token, pc.ProjectID, pc.OrgID)
+		}()
+	}
+
+	// ── Update node version in graph ──
 	// Run regardless of relay/bot so the companion shows the real version even for
 	// master-only nodes or nodes that haven't connected to relay yet.
 	if hasInstance {

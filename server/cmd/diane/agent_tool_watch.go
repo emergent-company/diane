@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -15,6 +14,8 @@ import (
 
 	"github.com/Emergent-Comapny/diane/internal/agents"
 	"github.com/Emergent-Comapny/diane/internal/memory"
+	"github.com/emergent-company/emergent.memory/apps/server/pkg/sdk"
+	"github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/graph"
 )
 
 // agentToolConfigWatch connects to the MP SSE stream and watches for
@@ -145,7 +146,7 @@ func sseSubscribe(ctx context.Context, serverURL, apiKey, projectID string, gc *
 			case "heartbeat":
 				// no-op, connection is alive
 			case "connected":
-				log.Printf("[agent-watch] SSE connected: %s", truncateStr(data, 80))
+				log.Printf("[agent-watch] SSE connected: %s", data[:min(len(data), 80)])
 			}
 		}
 	}
@@ -178,15 +179,22 @@ func handleEntityEvent(ctx context.Context, gc *graphClientWrapper, evt sseEntit
 	}
 
 	// Quick type check via GetObject
-	obj, err := gc.GetObject(ctx, evt.ID)
+	objRaw, err := gc.GetObject(ctx, evt.ID)
 	if err != nil {
-		// Object not found (deleted or error) — recheck all to be safe
-		log.Printf("[agent-watch] Could not fetch entity %s (may be deleted): %v", truncateStr(evt.ID, 12), err)
-	} else if !isWatchedConfigType(obj.Type) {
-		return // not an agent config change, skip
+		// Object not found (deleted or error) — re-seed to be safe
+		log.Printf("[agent-watch] Could not fetch entity %s (may be deleted): %v", evt.ID[:min(len(evt.ID), 12)], err)
+	} else if obj, ok := objRaw.(*graph.GraphObject); ok {
+		if obj.Type == "" {
+			log.Printf("[agent-watch] Could not determine type of entity %s — re-seeding to be safe", evt.ID[:min(len(evt.ID), 12)])
+		} else if !isWatchedConfigType(obj.Type) {
+			log.Printf("[agent-watch] Entity %s changed (type=%s) — not an agent config, skipping", evt.ID[:min(len(evt.ID), 12)], obj.Type)
+			return // not an agent config change, skip
+		} else {
+			log.Printf("[agent-watch] Agent config entity changed (type=%s) — re-reading configs", obj.Type)
+		}
+	} else {
+		log.Printf("[agent-watch] Unexpected entity type %T for %s — re-seeding to be safe", objRaw, evt.ID[:min(len(evt.ID), 12)])
 	}
-
-	log.Printf("[agent-watch] Agent config entity changed (%s, type=%s) — re-reading configs", evt.Entity, obj.Type)
 
 	hash := pollAndSeed(ctx, gc, memCfg, *lastHash)
 	if hash != "" {
@@ -209,6 +217,8 @@ func isWatchedConfigType(objType string) bool {
 // the graph, computes a combined hash, and seeds if the hash differs
 // from lastHash. Returns the new hash, or empty string if unchanged.
 func pollAndSeed(ctx context.Context, gc *graphClientWrapper, memCfg memory.Config, lastHash string) string {
+	start := time.Now()
+
 	// Read both config types
 	toolConfigs, err := gc.ListObjects(ctx, "AgentToolConfig", 100)
 	if err != nil {
@@ -245,7 +255,7 @@ func pollAndSeed(ctx context.Context, gc *graphClientWrapper, memCfg memory.Conf
 		return lastHash // keep old hash so we retry
 	}
 
-	log.Printf("[agent-watch] Built-in agents re-seeded successfully")
+	log.Printf("[agent-watch] Built-in agents re-seeded successfully in %v", time.Since(start))
 	return hash
 }
 
@@ -265,8 +275,15 @@ func seedBuiltInAgentsFromGraph(ctx context.Context, memCfg memory.Config) error
 		return fmt.Errorf("build merged agents: %w", err)
 	}
 
+	// Get full built-in name list for deletion of disabled agents
+	allBuiltIns := agents.BuiltInAgents()
+	allNames := make([]string, len(allBuiltIns))
+	for i, a := range allBuiltIns {
+		allNames[i] = a.Name
+	}
+
 	// Seed
-	if err := agents.SeedAgentList(ctx, bridge.Client(), builtIns); err != nil {
+	if err := agents.SeedAgentList(ctx, bridge.Client(), builtIns, allNames); err != nil {
 		return fmt.Errorf("seed: %w", err)
 	}
 
@@ -278,58 +295,27 @@ func seedBuiltInAgentsFromGraph(ctx context.Context, memCfg memory.Config) error
 	return nil
 }
 
-// graphClientWrapper wraps a raw HTTP client for graph API calls,
-// avoiding the need for a full memory.Bridge just for simple queries.
+// graphClientWrapper wraps the SDK graph client with a lightweight wrapper
+// for polling and object lookups used by the agent config watch.
 type graphClientWrapper struct {
-	serverURL string
-	apiKey    string
-	projectID string
-	http      *http.Client
+	gc *graph.Client
 }
 
 func newGraphClient(serverURL, apiKey, projectID string) (*graphClientWrapper, error) {
-	return &graphClientWrapper{
-		serverURL: serverURL,
-		apiKey:    apiKey,
-		projectID: projectID,
-		http:      http.DefaultClient,
-	}, nil
+	client, err := sdk.New(sdk.Config{
+		ServerURL: serverURL,
+		Auth:      sdk.AuthConfig{Mode: "apikey", APIKey: apiKey},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create SDK client: %w", err)
+	}
+	client.Graph.SetContext("", projectID)
+	return &graphClientWrapper{gc: client.Graph}, nil
 }
 
 // GetObject fetches a single graph object by ID.
-func (c *graphClientWrapper) GetObject(ctx context.Context, id string) (*struct {
-	Type       string         `json:"type"`
-	Properties map[string]any `json:"properties"`
-}, error) {
-	url := fmt.Sprintf("%s/api/graph/objects/%s", c.serverURL, id)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("X-Project-ID", c.projectID)
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == 404 {
-		return nil, fmt.Errorf("not found")
-	}
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("API error: %d", resp.StatusCode)
-	}
-
-	var obj struct {
-		Type       string         `json:"type"`
-		Properties map[string]any `json:"properties"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&obj); err != nil {
-		return nil, err
-	}
-	return &obj, nil
+func (c *graphClientWrapper) GetObject(ctx context.Context, id string) (any, error) {
+	return c.gc.GetObject(ctx, id)
 }
 
 // SearchObjectsResponse mirrors the SDK response for list queries.
@@ -345,54 +331,17 @@ type SearchObjectsResponse struct {
 }
 
 // ListObjects queries graph objects by type.
-func (c *graphClientWrapper) ListObjects(ctx context.Context, objType string, limit int) (*SearchObjectsResponse, error) {
-	url := fmt.Sprintf("%s/api/graph/objects/search?type=%s&limit=%d", c.serverURL, objType, limit)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("X-Project-ID", c.projectID)
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("API error: %d", resp.StatusCode)
-	}
-
-	var result SearchObjectsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-	return &result, nil
+func (c *graphClientWrapper) ListObjects(ctx context.Context, objType string, limit int) (*graph.SearchObjectsResponse, error) {
+	return c.gc.ListObjects(ctx, &graph.ListObjectsOptions{
+		Type:  objType,
+		Limit: limit,
+	})
 }
 
 // UpdateObject updates a graph object's properties.
 func (c *graphClientWrapper) UpdateObject(ctx context.Context, id string, properties map[string]any) error {
-	body := map[string]any{"properties": properties}
-	data, _ := json.Marshal(body)
-	url := fmt.Sprintf("%s/api/graph/objects/%s", c.serverURL, id)
-	req, err := http.NewRequestWithContext(ctx, "PATCH", url, bytes.NewReader(data))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("X-Project-ID", c.projectID)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("API error: %d", resp.StatusCode)
-	}
-	return nil
+	_, err := c.gc.UpdateObject(ctx, id, &graph.UpdateObjectRequest{Properties: properties})
+	return err
 }
 
 // toStringSlice converts []interface{} to []string for hash computation.
