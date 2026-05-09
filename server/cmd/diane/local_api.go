@@ -430,7 +430,11 @@ func (h *apiHandlers) handleAgentSubRoutes(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// /api/agents/{name} — single agent detail (GET only)
+	// /api/agents/{name} — single agent detail or delete
+	if r.Method == http.MethodDelete {
+		h.handleDeleteAgent(w, r, first)
+		return
+	}
 	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -732,6 +736,80 @@ func (h *apiHandlers) handleDeleteAgentOverride(w http.ResponseWriter, r *http.R
 
 	// No override found — nothing to delete, still success
 	writeJSON(w, map[string]any{"ok": true, "note": "no override to delete"})
+}
+
+// handleDeleteAgent handles DELETE /api/agents/{name}.
+// Built-in agents → disable via graph override + re-seed.
+// User-defined agents → delete from MP API + local config.
+func (h *apiHandlers) handleDeleteAgent(w http.ResponseWriter, r *http.Request, agentName string) {
+	// Check if built-in
+	isBuiltIn := false
+	for _, ba := range agents.BuiltInAgents() {
+		if ba.Name == agentName {
+			isBuiltIn = true
+			break
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "bridge: "+err.Error())
+		return
+	}
+	defer bridge.Close()
+
+	if isBuiltIn {
+		// Create/update override with disabled=true
+		if err := agents.UpsertDisableOverride(ctx, bridge.Client().Graph, agentName); err != nil {
+			jsonError(w, http.StatusInternalServerError, "disable override: "+err.Error())
+			return
+		}
+
+		// Re-seed (skip disabled agents)
+		builtIns, buildErr := agents.BuildMergedAgents(ctx, bridge.Client().Graph)
+		if buildErr != nil {
+			jsonError(w, http.StatusInternalServerError, "build merged agents: "+buildErr.Error())
+			return
+		}
+		if err := agents.SeedAgentList(ctx, bridge.Client(), builtIns); err != nil {
+			jsonError(w, http.StatusInternalServerError, "re-seed: "+err.Error())
+			return
+		}
+
+		writeJSON(w, map[string]any{"status": "disabled"})
+		return
+	}
+
+	// User-defined: delete from MP
+	defs, err := bridge.ListAgentDefs(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "list defs: "+err.Error())
+		return
+	}
+	for _, def := range defs.Data {
+		if def.Name == agentName {
+			if delErr := bridge.DeleteAgentDef(ctx, def.ID); delErr != nil {
+				jsonError(w, http.StatusInternalServerError, "delete: "+delErr.Error())
+				return
+			}
+			break
+		}
+	}
+
+	// Delete from local config if present
+	pc := h.pc
+	if pc != nil && pc.Agents != nil && pc.Agents[agentName] != nil {
+		delete(pc.Agents, agentName)
+		cfg, loadErr := config.Load()
+		if loadErr == nil {
+			_ = cfg.Save()
+		}
+	}
+
+	writeJSON(w, map[string]any{"status": "deleted"})
 }
 
 // buildOverrideFromProperties reads an AgentOverrideConfig from graph properties.
