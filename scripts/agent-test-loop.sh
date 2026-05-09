@@ -46,6 +46,7 @@ xcodegen generate 2>&1 | tail -1
 xcodebuild test -project Diane.xcodeproj -scheme Diane \
   -destination 'platform=macOS,arch=arm64' \
   -only-testing:DianeTests \
+  -skip-testing:DianeUITests \
   -resultBundlePath /tmp/DianeUnitTests.xcresult \
   2>&1 | tee /tmp/test-output.txt | grep -E "Test Suite|error:|FAILED|passed" | head -20
 
