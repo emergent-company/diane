@@ -1,0 +1,142 @@
+---
+# Build, deploy, and run integration tests.
+#
+# Builds the latest binary from local source, deploys to both containers
+# (master + slave), updates the host CLI, and runs the full test suite.
+#
+# Usage:
+#   ansible-playbook plays/test.yml
+#   ansible-playbook plays/test.yml -e target=master    # only test master
+#   ansible-playbook plays/test.yml -e skip_build=true   # use existing binary
+#   ansible-playbook plays/test.yml -e skip_deploy=true  # skip binary push
+#
+- name: Build, deploy, and run integration tests
+  hosts: all
+  gather_facts: no
+  vars:
+    # Paths
+    diane_source_dir: /Users/mcj/src/diane/server
+    local_binary: /tmp/diane-linux-amd64
+    host_binary: /tmp/diane-new
+    container_binary: /usr/local/bin/diane
+    host_cli_path: /usr/local/bin/diane
+
+    # Docker containers
+    master_container: diane-test-master
+    slave_container: diane-test-slave
+
+    # Test script
+    test_script: /opt/diane/tests/run-tests.sh
+
+    # Options
+    skip_build: false
+    skip_deploy: false
+    target: ""  # empty = both, "master" or "slave" to target specific
+
+    containers:
+      master: "{{ master_container }}"
+      slave: "{{ slave_container }}"
+    deploy_targets: "{{ [containers[target]] if target else [master_container, slave_container] }}"
+
+  tasks:
+    # ── Step 1: Build ──
+    - name: Build Linux amd64 binary (local cross-compile)
+      shell: |
+        GOOS=linux GOARCH=amd64 \
+        go build \
+          -ldflags='-s -w' \
+          -o '{{ local_binary }}' \
+          ./cmd/diane/
+      args:
+        chdir: "{{ diane_source_dir }}"
+      delegate_to: localhost
+      changed_when: true
+      when: not skip_build | bool
+      register: build_result
+      failed_when: build_result.rc != 0
+
+    - name: Verify binary architecture
+      shell: "file '{{ local_binary }}'"
+      delegate_to: localhost
+      register: file_info
+      changed_when: false
+      failed_when: "'ELF 64-bit LSB executable' not in file_info.stdout"
+      when: not skip_build | bool
+
+    - name: Show build info
+      debug:
+        msg: "✅ Built ELF linux/amd64 → {{ local_binary }} ({{ (lookup('file', local_binary) | length / 1000000) | round(1) }} MB)"
+      when: not skip_build | bool
+
+    # ── Step 2: Deploy to containers ──
+    - name: Copy binary to host
+      copy:
+        src: "{{ local_binary }}"
+        dest: "{{ host_binary }}"
+        mode: "0755"
+      when: not skip_deploy | bool
+
+    - name: Inject into container(s) and restart
+      shell: |
+        docker cp {{ host_binary }} {{ item }}:{{ container_binary }} &&
+        docker restart {{ item }}
+      loop: "{{ deploy_targets }}"
+      loop_control:
+        label: "{{ item }}"
+      register: container_restarts
+      when: not skip_deploy | bool
+
+    - name: Update host CLI binary
+      shell: |
+        cp {{ host_binary }} {{ host_cli_path }}
+      when: not skip_deploy | bool
+      register: cli_update
+
+    - name: Wait for container health
+      shell: |
+        for i in $(seq 1 15); do
+          status=$(docker inspect {{ item }} 2>/dev/null |
+            python3 -c "import json,sys; d=json.load(sys.stdin); print(d[0].get('State',{}).get('Status','unknown'))" 2>/dev/null)
+          if [ "$status" = "running" ]; then
+            echo "healthy (attempt $i)"
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "timeout"
+        exit 1
+      loop: "{{ deploy_targets }}"
+      loop_control:
+        label: "{{ item }}"
+      register: health_results
+      when: not skip_deploy | bool
+
+    - name: Verify agent watch (master only)
+      shell: "docker logs {{ master_container }} --tail 10 2>&1"
+      register: watch_log
+      when: not skip_deploy | bool and (target == 'master' or target == '')
+      changed_when: false
+      failed_when: watch_log.stdout is not search("agent-watch.*Connected to SSE")
+
+    # ── Step 3: Run tests ──
+    - name: Run integration tests
+      command: "bash {{ test_script }}"
+      register: test_result
+      changed_when: false
+      failed_when: >
+        test_result.stdout is not search("passed, 0 failed")
+        or test_result.rc != 0
+
+    - name: Show test results
+      debug:
+        msg: "{{ test_result.stdout[-2000:] }}"
+
+    - name: Summary
+      debug:
+        msg:
+          - "──────────────────────────────"
+          - "Build:    {% if not skip_build %}✅{% else %}⏭️{% endif %}"
+          - "Deploy:   {% if not skip_deploy %}✅ {% if cli_update.changed %}host CLI updated{% endif %}{% else %}⏭️{% endif %}"
+          - "Containers: {{ deploy_targets | join(', ') }}"
+          - "Tests:    {{ test_result.stdout_lines | select('search', 'Results:') | first | default('unknown') }}"
+          - "──────────────────────────────"

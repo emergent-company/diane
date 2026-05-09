@@ -2,6 +2,9 @@
 # Deploy a newly-built diane binary into containers.
 #
 # Build first:
+#   ansible-playbook plays/build.yml
+#
+# Or manually:
 #   cd server && GOOS=linux GOARCH=amd64 go build \
 #     -o /tmp/diane-linux-amd64 \
 #     -ldflags "-X main.Version=v$(git describe --tags --abbrev=0)-dev" \
@@ -23,7 +26,7 @@
     containers:
       master: "{{ master_container }}"
       slave: "{{ slave_container }}"
-    deploy_targets: "{{ [containers[target]] if target is defined else containers.values() | list }}"
+    deploy_targets: "{{ [containers[target]] if target is defined else [master_container, slave_container] }}"
 
   tasks:
     - name: Copy binary to host
@@ -38,6 +41,13 @@
         docker restart {{ item }}
       loop: "{{ deploy_targets }}"
       register: restarts
+
+    - name: Update host CLI binary
+      copy:
+        src: /tmp/diane-new
+        dest: /usr/local/bin/diane
+        mode: "0755"
+      register: cli_update
 
     - name: Wait for health
       shell: |

@@ -1,0 +1,47 @@
+---
+# Build a Linux amd64 diane binary (cross-compile on macOS control node).
+#
+# Builds from /Users/mcj/src/diane/server, outputs to /tmp/diane-linux-amd64.
+# This binary can then be deployed with plays/deploy.yml or plays/test.yml
+#
+# Usage:
+#   ansible-playbook plays/build.yml
+#   ansible-playbook plays/build.yml -e version=v1.40.0  # embed version string
+#   ansible-playbook plays/build.yml -e output=/tmp/diane-custom
+#
+- name: Build Linux amd64 diane binary
+  hosts: all
+  gather_facts: no
+  vars:
+    source_dir: /Users/mcj/src/diane/server
+    output: /tmp/diane-linux-amd64
+    ldflags: "-s -w"
+    version: ""
+
+  tasks:
+    - name: Cross-compile Go binary
+      shell: |
+        GOOS=linux GOARCH=amd64 \
+        go build \
+          -ldflags='{{ ldflags }}{% if version %} -X main.Version=v{{ version }}{% endif %}' \
+          -o '{{ output }}' \
+          ./cmd/diane/
+      args:
+        chdir: "{{ source_dir }}"
+      delegate_to: localhost
+      register: build_result
+      changed_when: true
+      failed_when: build_result.rc != 0
+
+    - name: Verify binary architecture
+      shell: "file '{{ output }}'"
+      delegate_to: localhost
+      register: file_info
+      changed_when: false
+      failed_when: "'ELF 64-bit LSB executable' not in file_info.stdout"
+
+    - name: Binary info
+      debug:
+        msg: >-
+          ✅ {{ output }}
+          ({{ (lookup('file', output) | length / 1000000) | round(1) }} MB)
