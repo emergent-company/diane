@@ -17,6 +17,17 @@ final class LiveAPIResponseShapeTests: XCTestCase {
         return f
     }()
 
+    /// ISO8601 formatter for dates without fractional seconds.
+    private let isoFormatterBasic: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    private func validateISO8601(_ dateStr: String) -> Bool {
+        isoFormatter.date(from: dateStr) != nil || isoFormatterBasic.date(from: dateStr) != nil
+    }
+
     override func setUp() async throws {
         client = DianeAPIClient(baseURL: "http://127.0.0.1:8890")
     }
@@ -57,12 +68,12 @@ final class LiveAPIResponseShapeTests: XCTestCase {
             }
             // Timestamps — must be valid ISO8601 (with optional fractional seconds)
             if let createdAt = s.createdAt {
-                XCTAssertNotNil(isoFormatter.date(from: createdAt),
-                                "createdAt must be ISO8601: \(createdAt)")
+                XCTAssertTrue(validateISO8601(createdAt),
+                              "createdAt must be ISO8601: \(createdAt)")
             }
             if let updatedAt = s.updatedAt {
-                XCTAssertNotNil(isoFormatter.date(from: updatedAt),
-                                "updatedAt must be ISO8601: \(updatedAt)")
+                XCTAssertTrue(validateISO8601(updatedAt),
+                              "updatedAt must be ISO8601: \(updatedAt)")
             }
         }
     }
@@ -98,8 +109,8 @@ final class LiveAPIResponseShapeTests: XCTestCase {
 
             // Created at — if present, must be ISO8601
             if let createdAt = m.createdAt {
-                XCTAssertNotNil(isoFormatter.date(from: createdAt),
-                                "createdAt must be ISO8601: \(createdAt)")
+                XCTAssertTrue(validateISO8601(createdAt),
+                              "createdAt must be ISO8601: \(createdAt)")
             }
 
             // Tool calls — if present, validate shape
@@ -132,8 +143,8 @@ final class LiveAPIResponseShapeTests: XCTestCase {
 
             // Timestamps — if present, must be ISO8601
             if let createdAt = a.createdAt {
-                XCTAssertNotNil(isoFormatter.date(from: createdAt),
-                                "createdAt must be ISO8601: \(createdAt)")
+                XCTAssertTrue(validateISO8601(createdAt),
+                              "createdAt must be ISO8601: \(createdAt)")
             }
         }
     }
