@@ -1,7 +1,8 @@
 // Package memorytest validates diane CLI agent subcommands via exec.
 //
-// Tests the commands that back the 'diane agent' family: show, trigger,
-// seed-db, list-db, and sync.
+// Tests for agent seed, list, show, sync, run, trace, stats, route, tag,
+// delete, and prune. All tests run the diane binary as a subprocess against
+// the live Memory Platform project.
 //
 // Run: cd ~/diane/server && /usr/local/go/bin/go test -v -count=1 -run TestCLI_Agent ./memorytest/
 //go:build integration
@@ -16,91 +17,57 @@ import (
 )
 
 // =========================================================================
-// TestCLI_AgentListDB: Runs 'diane agent list-db' to list agents from the
-// local SQLite database (seeded on every startup).
+// TestCLI_AgentSeed: Runs 'diane agent seed' to seed built-in agents to
+// Memory Platform with graph overrides applied.
 // =========================================================================
 
-func TestCLI_AgentListDB(t *testing.T) {
+func TestCLI_AgentSeed(t *testing.T) {
 	skipIfNoConfig(t)
 	dianeBin := findDianeBinary(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	output, err := runCLI(ctx, t, dianeBin, "agent", "list-db")
-	t.Logf("=== 'diane agent list-db' output ===\n%s\n=== end output ===", output)
+	output, err := runCLI(ctx, t, dianeBin, "agent", "seed")
+	t.Logf("=== 'diane agent seed' output ===\n%s\n=== end output ===", output)
 	if err != nil {
 		t.Logf("Exit error (non-fatal): %v", err)
 	}
 
-	// Should list agent names
+	// Should list agents being seeded
 	expectedAgents := []string{"diane-default", "diane-researcher", "diane-codebase"}
 	for _, name := range expectedAgents {
 		if strings.Contains(output, name) {
 			t.Logf("✅ Found built-in agent: %s", name)
 		} else {
-			t.Logf("⚠️  Agent '%s' not in list-db output (DB may not be seeded yet)", name)
+			t.Logf("⚠️  Agent '%s' not in seed output", name)
 		}
 	}
 
-	if strings.Contains(output, "built-in") || strings.Contains(output, "BuiltIn") || strings.Contains(output, "built") {
-		t.Log("✅ Output shows source information for agents")
+	// Should show override config reading
+	if strings.Contains(output, "AgentOverrideConfig") || strings.Contains(output, "override") {
+		t.Log("✅ Output shows override config processing")
 	}
 
-	t.Log("✅ Agent list-db completed")
+	// Should show completion message
+	if strings.Contains(output, "All built-in agents seeded") {
+		t.Log("✅ Seed completed successfully")
+	}
+
+	// Should show operation log (new in v1.38.48+)
+	if strings.Contains(output, "[operation-log]") {
+		t.Log("✅ Operation log entry written during seed")
+	}
 }
 
 // =========================================================================
-// TestCLI_AgentSeedDB: Runs 'diane agent seed-db' which seeds built-in
-// agents to the local SQLite database. Runs list-db after to verify.
-// =========================================================================
-
-func TestCLI_AgentSeedDB(t *testing.T) {
-	skipIfNoConfig(t)
-	dianeBin := findDianeBinary(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	// Seed the database
-	output, err := runCLI(ctx, t, dianeBin, "agent", "seed-db")
-	t.Logf("=== 'diane agent seed-db' output ===\n%s\n=== end output ===", output)
-	if err != nil {
-		if strings.Contains(output, "already") || strings.Contains(output, "skip") {
-			t.Logf("Seed-db may have already been done: %v", err)
-		} else {
-			t.Logf("Exit error (non-fatal): %v", err)
-		}
-	}
-
-	// Verify by running list-db
-	listCtx, listCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer listCancel()
-
-	listOutput, listErr := runCLI(listCtx, t, dianeBin, "agent", "list-db")
-	if listErr != nil {
-		t.Logf("list-db error: %v", listErr)
-	}
-	t.Logf("Post-seed list-db output:\n%s", listOutput)
-
-	if strings.Contains(listOutput, "diane-default") {
-		t.Log("✅ Built-in agents present after seed-db")
-	} else {
-		t.Log("⚠️  No built-in agents found after seed-db (may need first run)")
-	}
-
-	t.Log("✅ Agent seed-db completed")
-}
-
-// =========================================================================
-// TestCLI_AgentShow: Runs 'diane agent show <name>' for a known agent.
-// Verifies it displays configuration details.
+// TestCLI_AgentShow: Runs 'diane agent show <name>' for known agents.
 // =========================================================================
 
 func TestCLI_AgentShow(t *testing.T) {
 	skipIfNoConfig(t)
 	dianeBin := findDianeBinary(t)
 
-	// Try showing a known agent from local config
-	agentNames := []string{"test-search", "test-knowledge", "diane-default"}
+	agentNames := []string{"diane-default", "diane-researcher", "diane-codebase"}
 
 	for _, name := range agentNames {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -114,26 +81,23 @@ func TestCLI_AgentShow(t *testing.T) {
 			continue
 		}
 
-		if strings.Contains(output, "Agent:") || strings.Contains(output, name) {
-			t.Logf("✅ Agent '%s' detail displayed successfully", name)
-			// Log key fields
+		if strings.Contains(output, name) {
+			t.Logf("✅ Agent '%s' detail displayed", name)
 			for _, line := range strings.Split(output, "\n") {
 				line = strings.TrimSpace(line)
 				if line != "" && (strings.Contains(line, "Tools:") ||
 					strings.Contains(line, "Flow") ||
-					strings.Contains(line, "Description")) {
+					strings.Contains(line, "Skills") ||
+					strings.Contains(line, "Model:")) {
 					t.Logf("  %s", line)
 				}
 			}
 		}
 	}
-
-	t.Log("✅ Agent show completed")
 }
 
 // =========================================================================
-// TestCLI_AgentRuns: Runs 'diane agent runs' to list recent agent runs
-// from Memory Platform (last 24h by default).
+// TestCLI_AgentRuns: Runs 'diane agent runs' to list recent agent runs.
 // =========================================================================
 
 func TestCLI_AgentRuns(t *testing.T) {
@@ -148,33 +112,18 @@ func TestCLI_AgentRuns(t *testing.T) {
 		t.Logf("Exit error: %v", err)
 	}
 
-	// Should either list runs or say none found
 	if strings.Contains(output, "no runs") || strings.Contains(output, "No runs") ||
 		strings.Contains(output, "0 runs") || strings.Contains(output, "None") {
 		t.Log("No recent runs found — expected if no agents have been triggered lately")
-	} else if strings.Contains(output, "run") || strings.Contains(output, "Run") ||
-		strings.Contains(output, "agent:") || strings.Contains(output, "agent :") {
+	} else if strings.Contains(output, "run") || strings.Contains(output, "Run") {
 		t.Log("✅ Recent agent runs displayed")
-		// Count run lines
-		runCount := 0
-		for _, line := range strings.Split(output, "\n") {
-			if strings.Contains(line, "success") || strings.Contains(line, "completed") ||
-				strings.Contains(line, "failed") || strings.Contains(line, "error") {
-				runCount++
-			}
-		}
-		t.Logf("  Found ~%d run entries", runCount)
 	} else {
-		t.Log("⚠️  Unexpected output format — runs command may differ")
+		t.Log("⚠️  Unexpected output format")
 	}
-
-	t.Log("✅ Agent runs completed")
 }
 
 // =========================================================================
-// TestCLI_AgentSync: Runs 'diane agent sync' to push local agent configs
-// to Memory Platform. This is a dry-run style verification — checks the
-// command runs without error and produces expected output.
+// TestCLI_AgentSync: Runs 'diane agent sync' to push local configs to MP.
 // =========================================================================
 
 func TestCLI_AgentSync(t *testing.T) {
@@ -187,23 +136,11 @@ func TestCLI_AgentSync(t *testing.T) {
 	t.Logf("=== 'diane agent sync' output ===\n%s\n=== end output ===", output)
 	if err != nil {
 		t.Logf("Exit error: %v", err)
-		// Sync may fail on certain agents — this is acceptable
-		t.Log("Note: sync may have warnings for individual agents")
 	}
 
-	// Verify it processed at least something
-	if strings.Contains(output, "synced") || strings.Contains(output, "Synced") ||
-		strings.Contains(output, "Sync") || strings.Contains(output, "sync") {
+	if strings.Contains(output, "synced") || strings.Contains(output, "Synced") {
 		t.Log("✅ Agent sync ran and processed agents")
-	} else if strings.Contains(output, "no agents") || strings.Contains(output, "No agents") {
-		t.Log("⚠️  No local agents to sync — define one with 'diane agent define'")
 	} else {
-		t.Log("⚠️  Sync output didn't match expected patterns — checking for any output")
-		// Still succeeded if exit code was 0
-		if err == nil {
-			t.Log("✅ Agent sync completed with exit code 0")
-		}
+		t.Log("⚠️  Sync output didn't match expected patterns")
 	}
-
-	t.Log("✅ Agent sync completed")
 }
