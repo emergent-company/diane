@@ -680,6 +680,11 @@ func (h *apiHandlers) handleSaveAgentOverride(w http.ResponseWriter, r *http.Req
 				return
 			}
 			writeJSON(w, map[string]any{"ok": true, "action": "updated"})
+
+			// Log the operation
+			if logErr := agents.WriteAgentOp(ctx, gc, "override.update", agentName, "local-api", "success", "Agent override config updated"); logErr != nil {
+				log.Printf("[operation-log] Failed to write override.update for %s: %v", agentName, logErr)
+			}
 			return
 		}
 	}
@@ -695,6 +700,11 @@ func (h *apiHandlers) handleSaveAgentOverride(w http.ResponseWriter, r *http.Req
 	}
 
 	writeJSON(w, map[string]any{"ok": true, "action": "created"})
+
+	// Log the operation
+	if logErr := agents.WriteAgentOp(ctx, gc, "override.create", agentName, "local-api", "success", "Agent override config created"); logErr != nil {
+		log.Printf("[operation-log] Failed to write override.create for %s: %v", agentName, logErr)
+	}
 }
 
 // handleDeleteAgentOverride removes the override config for a built-in agent.
@@ -730,6 +740,11 @@ func (h *apiHandlers) handleDeleteAgentOverride(w http.ResponseWriter, r *http.R
 				return
 			}
 			writeJSON(w, map[string]any{"ok": true})
+
+			// Log the operation
+			if logErr := agents.WriteAgentOp(ctx, gc, "override.delete", agentName, "local-api", "success", "Agent override config deleted (restored to defaults)"); logErr != nil {
+				log.Printf("[operation-log] Failed to write override.delete for %s: %v", agentName, logErr)
+			}
 			return
 		}
 	}
@@ -780,6 +795,11 @@ func (h *apiHandlers) handleDeleteAgent(w http.ResponseWriter, r *http.Request, 
 		}
 
 		writeJSON(w, map[string]any{"status": "disabled"})
+
+		// Log the operation
+		if logErr := agents.WriteAgentOp(ctx, bridge.Client().Graph, "agent.delete", agentName, "local-api", "success", "Built-in agent disabled via graph override"); logErr != nil {
+			log.Printf("[operation-log] Failed to write agent.delete for %s: %v", agentName, logErr)
+		}
 		return
 	}
 
@@ -810,6 +830,11 @@ func (h *apiHandlers) handleDeleteAgent(w http.ResponseWriter, r *http.Request, 
 	}
 
 	writeJSON(w, map[string]any{"status": "deleted"})
+
+	// Log the operation
+	if logErr := agents.WriteAgentOp(ctx, bridge.Client().Graph, "agent.delete", agentName, "local-api", "success", "User-defined agent deleted from config and MP"); logErr != nil {
+		log.Printf("[operation-log] Failed to write agent.delete for %s: %v", agentName, logErr)
+	}
 }
 
 // buildOverrideFromProperties reads an AgentOverrideConfig from graph properties.

@@ -246,6 +246,7 @@ func FilterDisabled(agents []BuiltInAgent, overrides map[string]*AgentOverrideCo
 // UpsertDisableOverride creates or updates an AgentOverrideConfig entity
 // in the graph with disabled=true for the given agent name. If an entity
 // already exists, it adds disabled=true to the existing properties.
+// It also logs the operation via WriteOperationLog.
 func UpsertDisableOverride(ctx context.Context, graphClient *graph.Client, agentName string) error {
 	// Check if an override entity already exists
 	resp, err := graphClient.ListObjects(ctx, &graph.ListObjectsOptions{

@@ -666,6 +666,12 @@ func cmdAgentSeed() {
 	}
 
 	fmt.Println("✅ All built-in agents seeded to Memory Platform")
+
+	// Log the seed operation
+	count := len(builtIns)
+	if logErr := agents.WriteAgentOp(ctx, bridge.Client().Graph, "agent.seed", fmt.Sprintf("%d built-in agents", count), "cli", "success", fmt.Sprintf("Seeded %d built-in agents with override configs", count)); logErr != nil {
+		log.Printf("[operation-log] Failed to write agent.seed: %v", logErr)
+	}
 }
 
 func syncOneAgent(ctx context.Context, bridge *memory.Bridge, name string, ac *config.AgentConfig) error {
@@ -966,6 +972,11 @@ func cmdAgentDelete(name string) {
 		}
 		fmt.Println("✅ Disable override created in graph")
 
+		// Log the operation
+		if logErr := agents.WriteAgentOp(ctx, bridge.Client().Graph, "agent.delete", name, "cli", "success", "Built-in agent disabled via graph override"); logErr != nil {
+			log.Printf("[operation-log] Failed to write agent.delete for %s: %v", name, logErr)
+		}
+
 		// Build and seed merged agents (will skip this agent)
 		fmt.Print("📦 Re-seeding agents... ")
 		builtIns, buildErr := agents.BuildMergedAgents(ctx, bridge.Client().Graph)
@@ -1022,6 +1033,16 @@ func cmdAgentDelete(name string) {
 		os.Exit(1)
 	}
 	fmt.Printf("✅ Agent '%s' deleted from local config\n", name)
+
+	// Log the operation
+	ctx2 := context.Background()
+	bridge2, err2 := newBridge(pc)
+	if err2 == nil {
+		if logErr := agents.WriteAgentOp(ctx2, bridge2.Client().Graph, "agent.delete", name, "cli", "success", "User-defined agent deleted from config and MP"); logErr != nil {
+			log.Printf("[operation-log] Failed to write agent.delete for %s: %v", name, logErr)
+		}
+		bridge2.Close()
+	}
 }
 
 // cmdAgentPrune removes orphaned agent definitions from Memory Platform.

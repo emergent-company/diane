@@ -80,6 +80,43 @@
     "enabled": true
   },
   {
+    "type_name": "OperationLog",
+    "description": "Audit log entry for system operations — agent CRUD, MCP management, tool config changes. Written by all Diane nodes for observability and debugging.",
+    "namespace": "system",
+    "json_schema": {
+      "label": "Operation Log",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "description": "Operation name: agent.delete, agent.seed, agent.override, agent.create, agent.update, mcp.add, mcp.remove, mcp.update, tool.config, override.create, override.update"
+        },
+        "target": {
+          "type": "string",
+          "description": "What was acted on (agent name, MCP server name, entity ID)"
+        },
+        "actor": {
+          "type": "string",
+          "description": "Who performed the operation: cli, local-api, watch, user:{name}"
+        },
+        "status": {
+          "type": "string",
+          "description": "Result: success, failure, partial"
+        },
+        "detail": {
+          "type": "string",
+          "description": "Human-readable description of what happened"
+        },
+        "node": {
+          "type": "string",
+          "description": "Diane instance hostname that performed the operation"
+        }
+      },
+      "description": "Audit log written by all Diane nodes for cross-instance observability"
+    },
+    "enabled": true
+  },
+  {
     "type_name": "DiscordChannelMap",
     "description": "Maps a Discord channel/thread to a Memory Platform session ID, persisted in the system namespace for cross-instance durability",
     "namespace": "system",

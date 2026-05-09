@@ -270,6 +270,11 @@ func seedBuiltInAgentsFromGraph(ctx context.Context, memCfg memory.Config) error
 		return fmt.Errorf("seed: %w", err)
 	}
 
+	// Log the seed operation
+	if logErr := agents.WriteAgentOp(ctx, bridge.Client().Graph, "agent.seed", fmt.Sprintf("%d built-in agents", len(builtIns)), "watch", "success", fmt.Sprintf("Auto-seeded %d built-in agents from graph config change", len(builtIns))); logErr != nil {
+		log.Printf("[operation-log] Failed to write agent.seed: %v", logErr)
+	}
+
 	return nil
 }
 
