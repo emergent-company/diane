@@ -1,0 +1,23 @@
+---
+# Diane integration test host — Waliły homelab (Picoblocks AS)
+ansible_user: root
+ansible_ssh_common_args: -o StrictHostKeyChecking=no -o ConnectTimeout=10
+
+# Memory Platform
+memory_server_url: https://memory.emergent-company.ai
+memory_project_id: e56b176b-a781-4670-8450-62a950650fb8
+memory_api_key: "{{ vault_memory_api_key }}"
+
+# Diane config on host
+diane_config_path: /root/.config/diane-test.yml
+
+# Docker containers
+master_container: diane-test-master
+slave_container: diane-test-slave
+
+# Binary source (local) — built with `go build`
+local_binary: /tmp/diane-linux-amd64
+container_binary: /usr/local/bin/diane
+
+# Test script
+test_script: /opt/diane/tests/run-tests.sh

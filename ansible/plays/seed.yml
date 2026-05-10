@@ -1,0 +1,25 @@
+---
+# Force re-seed built-in agents.
+#
+# Usage:
+#   ansible-playbook plays/seed.yml
+#   ansible-playbook plays/seed.yml -e dry_run=true
+#
+- name: Re-seed built-in agents
+  hosts: all
+  gather_facts: no
+  vars:
+    dry_run: false
+    master_container: diane-test-master
+
+  tasks:
+    - name: Re-seed (master container)
+      command: >
+        docker exec {{ master_container }}
+        diane agent seed {% if dry_run %}--dry-run{% endif %}
+      register: seed_result
+      changed_when: seed_result.stdout is search("Seeding")
+
+    - name: Show result
+      debug:
+        msg: "{{ seed_result.stdout }}"

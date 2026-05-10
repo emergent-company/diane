@@ -1,0 +1,3 @@
+# Ansible secrets
+host_vars/diane-test.secret.yml
+.vault_password

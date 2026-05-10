@@ -1,0 +1,71 @@
+---
+# Health check — verify all services are running.
+#
+# Usage:
+#   ansible-playbook plays/health.yml
+#
+- name: Check diane-test health
+  hosts: all
+  gather_facts: no
+  vars:
+    master_container: diane-test-master
+    slave_container: diane-test-slave
+
+  tasks:
+    - name: Master container healthy
+      shell: |
+        docker inspect {{ master_container }} 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d[0].get('State',{}).get('Status','unknown'))"
+      register: master_state
+      changed_when: false
+      failed_when: master_state.stdout != "running"
+
+    - name: Slave container healthy
+      shell: |
+        docker inspect {{ slave_container }} 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d[0].get('State',{}).get('Status','unknown'))"
+      register: slave_state
+      changed_when: false
+      failed_when: slave_state.stdout != "running"
+
+    - name: Master HTTP health
+      command: "docker exec {{ master_container }} curl -s http://localhost:8890/api/status"
+      register: master_status
+      changed_when: false
+      failed_when: master_status.stdout is not search('"ok":true')
+
+    - name: Slave HTTP health
+      command: "docker exec {{ slave_container }} curl -s http://localhost:8891/api/status"
+      register: slave_status
+      changed_when: false
+      failed_when: slave_status.stdout is not search('"ok":true')
+
+    - name: Doctor checks (master)
+      command: "docker exec {{ master_container }} diane doctor"
+      register: doctor
+      changed_when: false
+      failed_when: >
+        doctor.stdout is not search("Config file")
+        or doctor.stdout is not search("SDK initialized")
+        or doctor.stdout is not search("Mode:.*master")
+        or doctor.stdout is not search("deepseek.*deepseek-chat")
+
+    - name: Agent list (MP synced)
+      command: "docker exec {{ master_container }} diane agent list"
+      register: agents
+      changed_when: false
+      failed_when: agents.stdout is not search("diane-default")
+
+    - name: Agent watch SSE
+      shell: "docker logs {{ master_container }} --tail 1 2>&1"
+      register: watch_log
+      changed_when: false
+      failed_when: watch_log.stdout is not search("agent-watch")
+
+    - name: Summary
+      debug:
+        msg:
+          - "✅ Master:   {{ master_state.stdout }}"
+          - "✅ Slave:    {{ slave_state.stdout }}"
+          - "✅ HTTP:     master={{ (master_status.stdout | from_json).ok }} slave={{ (slave_status.stdout | from_json).ok }}"
+          - "✅ Doctor:   pass"
+          - "✅ Agents:   {{ agents.stdout_lines | select('search', 'diane-') | list | length }} built-in"
+          - "✅ SSE:      connected"

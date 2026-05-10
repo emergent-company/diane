@@ -53,7 +53,9 @@ type ProjectConfig struct {
 	// Bot behavior
 	SystemPrompt string `yaml:"system_prompt,omitempty"`
 
-	// Agent Definitions (synced to Memory Platform as AgentDefinitions)
+	// Agent Definitions — DEPRECATED. No longer written by CLI commands.
+	// Agents are now managed directly on Memory Platform as the single source of truth.
+	// This field is kept for backward-compatible YAML parsing of existing configs.
 	Agents map[string]*AgentConfig `yaml:"agents,omitempty"`
 
 	// Auto-upgrade settings

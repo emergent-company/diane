@@ -144,32 +144,9 @@ func cmdAgentList() {
 		return
 	}
 
-	fmt.Println("═══ Agent Definitions ═══")
+	fmt.Println("═══ Agent Definitions (Memory Platform) ═══")
 	fmt.Println()
 
-	// Local agents
-	fmt.Println("📋 Local config:")
-	if len(pc.Agents) == 0 {
-		fmt.Println("   No agents configured")
-	} else {
-		for name, a := range pc.Agents {
-			toolCount := len(a.Tools)
-			skillCount := len(a.Skills)
-			fmt.Printf("   %s\n", name)
-			if a.Description != "" {
-				fmt.Printf("       %s\n", a.Description)
-			}
-			fmt.Printf("       Tools: %d | Skills: %d | Flow: %s\n", toolCount, skillCount, orDefault(a.FlowType, ""))
-			if a.Sandbox != nil && a.Sandbox.Enabled {
-				fmt.Printf("       Sandbox: %s\n", orDefault(a.Sandbox.BaseImage, "default"))
-			}
-		}
-	}
-
-	fmt.Println()
-
-	// Remote agents
-	fmt.Println("🌐 Memory Platform (synced):")
 	bridge, err := newBridge(pc)
 	if err != nil {
 		fmt.Printf("   ⚠️  Cannot connect: %v\n", err)
@@ -183,19 +160,19 @@ func cmdAgentList() {
 		return
 	}
 	if remoteAgents == nil || len(remoteAgents.Data) == 0 {
-		fmt.Println("   No agents synced yet")
-		fmt.Println("   Run 'diane agent sync' to push local agents")
+		fmt.Println("   No agents found.")
+		fmt.Println("   Run 'diane agent seed' to deploy built-in agents.")
 	} else {
 		for _, a := range remoteAgents.Data {
 			def := ""
 			if a.IsDefault {
 				def = " [default]"
 			}
-			fmt.Printf("   %s — %s%s\n", a.Name, a.FlowType, def)
-			if a.Description != nil {
+			fmt.Printf("   %s%s\n", a.Name, def)
+			if a.Description != nil && *a.Description != "" {
 				fmt.Printf("       %s\n", *a.Description)
 			}
-			fmt.Printf("       Tools: %d | Visibility: %s\n", a.ToolCount, a.Visibility)
+			fmt.Printf("       Tools: %d | Flow: %s | Visibility: %s\n", a.ToolCount, orDefault(a.FlowType, "standard"), a.Visibility)
 		}
 	}
 }
@@ -208,25 +185,8 @@ func cmdAgentDefine(name string) {
 		os.Exit(1)
 	}
 
-	if pc.Agents == nil {
-		pc.Agents = make(map[string]*config.AgentConfig)
-	}
-
-	existing := pc.Agents[name]
-	if existing != nil {
-		fmt.Printf("Agent '%s' already exists. Edit it? [y/N]: ", name)
-		answer := readLine(bufio.NewReader(os.Stdin))
-		if strings.ToLower(answer) != "y" && strings.ToLower(answer) != "yes" {
-			fmt.Println("Aborted.")
-			return
-		}
-	}
-
 	reader := bufio.NewReader(os.Stdin)
 	ac := &config.AgentConfig{}
-	if existing != nil {
-		ac = existing
-	}
 
 	fmt.Printf("=== Define Agent: %s ===\n", name)
 	fmt.Println()
@@ -434,108 +394,31 @@ func cmdAgentDefine(name string) {
 		}
 	}
 
-	pc.Agents[name] = ac
-	if err := cfg.Save(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to save config: %v\n", err)
+	// Create/update directly on Memory Platform (single source of truth)
+	bridge, err := newBridge(pc)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Connection failed: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("\n✅ Agent '%s' saved to %s\n", name, config.Path())
+	defer bridge.Close()
 
-	// Offer sync
-	fmt.Print("\nSync to Memory Platform now? [Y/n]: ")
-	if yn := readLine(reader); yn == "" || strings.ToLower(yn) == "y" || strings.ToLower(yn) == "yes" {
-		doAgentSync(name, cfg, pc)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := syncOneAgent(ctx, bridge, name, ac); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to sync agent to Memory Platform: %v\n", err)
+		os.Exit(1)
 	}
+	fmt.Printf("\n✅ Agent '%s' created on Memory Platform\n", name)
 }
 
 func cmdAgentShow(name string) {
-	cfg := mustConfig()
-	pc := cfg.Active()
-	if pc == nil || pc.Agents == nil || pc.Agents[name] == nil {
-		fmt.Printf("Agent '%s' not found in local config.\n", name)
-		return
-	}
-
-	ac := pc.Agents[name]
-	fmt.Printf("═══ Agent: %s ═══\n", name)
-	fmt.Printf("  Description:     %s\n", ac.Description)
-	if ac.SystemPrompt != "" {
-		fmt.Printf("  System prompt:   %d chars\n", len(ac.SystemPrompt))
-	}
-	fmt.Printf("  Flow type:       %s\n", orDefault(ac.FlowType, "standard"))
-	fmt.Printf("  Visibility:      %s\n", orDefault(ac.Visibility, "project"))
-	fmt.Printf("  Dispatch mode:   %s\n", orDefault(ac.DispatchMode, "auto"))
-	fmt.Printf("  Max steps:       %d\n", orDefaultInt(ac.MaxSteps, 50))
-	fmt.Printf("  Timeout:         %ds\n", orDefaultInt(ac.DefaultTimeout, 300))
-	if ac.Model != nil {
-		fmt.Printf("  Model provider:  %s\n", ac.Model.Provider)
-		fmt.Printf("  Model name:      %s\n", orDefault(ac.Model.Name, "(auto)"))
-	}
-	if len(ac.Tools) > 0 {
-		fmt.Printf("  Tools:           %s\n", strings.Join(ac.Tools, ", "))
-	}
-	if len(ac.Skills) > 0 {
-		fmt.Printf("  Skills:          %s\n", strings.Join(ac.Skills, ", "))
-	}
-	if ac.Sandbox != nil && ac.Sandbox.Enabled {
-		fmt.Printf("  Sandbox:         %s\n", orDefault(ac.Sandbox.BaseImage, "default"))
-		fmt.Printf("  Pull policy:     %s\n", orDefault(ac.Sandbox.PullPolicy, "missing"))
-		if len(ac.Sandbox.Env) > 0 {
-			fmt.Printf("  Env vars:        %d\n", len(ac.Sandbox.Env))
-		}
-	}
-	if ac.ACP != nil {
-		fmt.Printf("  ACP:             %s\n", orDefault(ac.ACP.DisplayName, name))
-		fmt.Printf("    Capabilities:  %s\n", strings.Join(ac.ACP.Capabilities, ", "))
-	}
-
-	fmt.Println()
-	fmt.Println("Run 'diane agent sync' to push this agent to Memory Platform.")
-}
-
-func cmdAgentSync(name string) {
 	cfg := mustConfig()
 	pc := cfg.Active()
 	if pc == nil {
 		fmt.Fprintf(os.Stderr, "No project configured.\n")
 		os.Exit(1)
 	}
-
-	doAgentSync(name, cfg, pc)
-}
-
-func doAgentSync(name string, cfg *config.Config, pc *config.ProjectConfig) {
-	// First seed built-in agents with graph configs (overrides + tool configs)
-	// This ensures immutable agents are up to date with any graph config changes.
-	seedCtx, seedCancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer seedCancel()
-	seedBridge, err := newBridge(pc)
-	if err == nil {
-		fmt.Print("📦 Seeding built-in agents... ")
-
-		builtIns, buildErr := agents.BuildMergedAgents(seedCtx, seedBridge.Client().Graph)
-		if buildErr != nil {
-			// Fall back to raw built-in agents if graph read fails
-			log.Printf("[agent-sync] BuildMergedAgents failed (non-fatal): %v", buildErr)
-			builtIns = agents.BuiltInAgents()
-		}
-		allBuiltIns := agents.BuiltInAgents()
-		allNames := make([]string, len(allBuiltIns))
-		for i, a := range allBuiltIns {
-			allNames[i] = a.Name
-		}
-		if err := agents.SeedAgentList(seedCtx, seedBridge.Client(), builtIns, allNames); err != nil {
-			fmt.Printf("⚠️  %v\n", err)
-		} else {
-			fmt.Println("✅")
-		}
-		seedBridge.Close()
-	}
-	seedCancel()
-
-	// Then sync user-defined agents
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 
 	bridge, err := newBridge(pc)
 	if err != nil {
@@ -544,39 +427,58 @@ func doAgentSync(name string, cfg *config.Config, pc *config.ProjectConfig) {
 	}
 	defer bridge.Close()
 
-	if name != "" {
-		// Sync single agent
-		ac := pc.Agents[name]
-		if ac == nil {
-			fmt.Printf("Agent '%s' not found in local config.\n", name)
-			fmt.Println("Use 'diane agent define' to create it first.")
-			return
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	remoteAgents, err := bridge.ListAgentDefs(ctx)
+	if err != nil {
+		fmt.Printf("❌ Failed to fetch agent definitions: %v\n", err)
+		return
+	}
+
+	var found *sdkagents.AgentDefinitionSummary
+	if remoteAgents != nil {
+		for _, a := range remoteAgents.Data {
+			if a.Name == name {
+				found = &a
+				break
+			}
 		}
-		syncOneAgent(ctx, bridge, name, ac)
+	}
+
+	if found == nil {
+		fmt.Printf("Agent '%s' not found on Memory Platform.\n", name)
+		fmt.Println("Use 'diane agent seed' to deploy built-in agents, or 'diane agent define' to create a new one.")
 		return
 	}
 
-	// Sync all agents
-	if len(pc.Agents) == 0 {
-		fmt.Println("⚠️  No agents configured locally. Use 'diane agent define' first.")
-		return
+	fmt.Printf("═══ Agent: %s ═══\n", found.Name)
+	if found.Description != nil {
+		fmt.Printf("  Description:     %s\n", *found.Description)
 	}
-
-	fmt.Printf("═══ Syncing %d agent(s) to Memory Platform ═══\n", len(pc.Agents))
+	fmt.Printf("  Flow type:       %s\n", orDefault(found.FlowType, "standard"))
+	fmt.Printf("  Visibility:      %s\n", found.Visibility)
+	fmt.Printf("  Tools:           %d\n", found.ToolCount)
+	if found.IsDefault {
+		fmt.Println("  [default agent]")
+	}
 	fmt.Println()
-
-	synced := 0
-	for name, ac := range pc.Agents {
-		fmt.Printf("  %s... ", name)
-		if err := syncOneAgent(ctx, bridge, name, ac); err != nil {
-			fmt.Printf("❌ %v\n", err)
-		} else {
-			fmt.Println("✅")
-			synced++
-		}
-	}
-	fmt.Printf("\n✅ Synced %d/%d agent(s)\n", synced, len(pc.Agents))
 }
+
+func cmdAgentSync(name string) {
+	fmt.Println("═══ Agent sync is no longer needed ═══")
+	fmt.Println("Agents are now managed directly on Memory Platform.")
+	fmt.Println()
+	fmt.Println("  • 'diane agent define' ↔ creates/updates agents on MP")
+	fmt.Println("  • 'diane agent delete' ↔ deletes agents from MP")
+	fmt.Println("  • 'diane agent seed'   ↔ seeds built-in agents (one-time setup)")
+	fmt.Println()
+	fmt.Println("Local config no longer stores agent definitions.")
+}
+
+// doAgentSync has been removed — agents are managed directly on Memory Platform.
+// Use 'diane agent define' to create/update, 'diane agent delete' to delete.
+// Built-in agents are seeded via 'diane agent seed'.
 
 func cmdAgentSeed() {
 	cfg, err := config.Load()
@@ -1009,51 +911,59 @@ func cmdAgentDelete(name string) {
 		return
 	}
 
-	// User-defined agent: delete from local config + MP
+	// User-defined agent: delete from Memory Platform (single source of truth)
 	if pc.Agents == nil || pc.Agents[name] == nil {
-		fmt.Printf("Agent '%s' not found in local config.\n", name)
-		return
+		fmt.Printf("Agent '%s' not found in local config. Skipping config delete.\n", name)
 	}
+	// (config no longer stores agent definitions — all agents live on MP)
 
 	reader := bufio.NewReader(os.Stdin)
-	fmt.Printf("Delete agent '%s' from local config AND Memory Platform? [y/N]: ", name)
+	fmt.Printf("Delete agent '%s' from Memory Platform? [y/N]: ", name)
 	if yn := readLine(reader); strings.ToLower(yn) != "y" && strings.ToLower(yn) != "yes" {
 		fmt.Println("Aborted.")
 		return
 	}
 
-	// Delete from MP if synced
+	// Delete from MP
 	bridge, err := newBridge(pc)
-	if err == nil {
-		existingList, listErr := bridge.ListAgentDefs(context.Background())
-		if listErr == nil && existingList != nil {
-			for _, a := range existingList.Data {
-				if a.Name == name {
-					if delErr := bridge.DeleteAgentDef(context.Background(), a.ID); delErr != nil {
-						fmt.Printf("⚠️  MP delete failed: %v\n", delErr)
-					} else {
-						fmt.Println("🗑️  Deleted from Memory Platform")
-					}
-					break
-				}
-			}
-		}
-		bridge.Close()
+	if err != nil {
+		fmt.Printf("❌ Connection failed: %v\n", err)
+		return
+	}
+	defer bridge.Close()
+
+	existingList, listErr := bridge.ListAgentDefs(context.Background())
+	if listErr != nil {
+		fmt.Printf("❌ Failed to list agent definitions: %v\n", listErr)
+		return
+	}
+	if existingList == nil || len(existingList.Data) == 0 {
+		fmt.Printf("Agent '%s' not found on Memory Platform.\n", name)
+		return
 	}
 
-	// Delete from config
-	delete(pc.Agents, name)
-	if err := cfg.Save(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to save config: %v\n", err)
-		os.Exit(1)
+	found := false
+	for _, a := range existingList.Data {
+		if a.Name == name {
+			found = true
+			if delErr := bridge.DeleteAgentDef(context.Background(), a.ID); delErr != nil {
+				fmt.Printf("❌ Failed to delete agent from Memory Platform: %v\n", delErr)
+				os.Exit(1)
+			}
+			fmt.Println("🗑️  Deleted from Memory Platform")
+			break
+		}
 	}
-	fmt.Printf("✅ Agent '%s' deleted from local config\n", name)
+	if !found {
+		fmt.Printf("Agent '%s' not found on Memory Platform.\n", name)
+		return
+	}
 
 	// Log the operation
-	ctx2 := context.Background()
+	ctx := context.Background()
 	bridge2, err2 := newBridge(pc)
 	if err2 == nil {
-		if logErr := agents.WriteAgentOp(ctx2, bridge2.Client().Graph, "agent.delete", name, "cli", "success", "User-defined agent deleted from config and MP"); logErr != nil {
+		if logErr := agents.WriteAgentOp(ctx, bridge2.Client().Graph, "agent.delete", name, "cli", "success", "User-defined agent deleted from MP"); logErr != nil {
 			log.Printf("[operation-log] Failed to write agent.delete for %s: %v", name, logErr)
 		}
 		bridge2.Close()

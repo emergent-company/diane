@@ -1,0 +1,43 @@
+---
+# View container logs — filtered or unfiltered.
+#
+# Usage:
+#   ansible-playbook plays/logs.yml                          # master + slave, last 50 lines
+#   ansible-playbook plays/logs.yml -e target=master          # just master
+#   ansible-playbook plays/logs.yml -e lines=200              # more lines
+#   ansible-playbook plays/logs.yml -e filter="override"      # filter by pattern
+#   ansible-playbook plays/logs.yml -e follow=true            # tail -f (Ctrl+C to stop)
+#
+- name: View container logs
+  hosts: all
+  gather_facts: no
+  vars:
+    target: all
+    lines: 50
+    filter: ""
+    follow: false
+
+  tasks:
+    - name: Select containers
+      set_fact:
+        targets: "{{ [target] if target != 'all' else ['master', 'slave'] }}"
+
+    - name: Fetch logs
+      command: |
+        docker logs {{ hostvars[inventory_hostname][item ~ '_container'] }}
+          {% if follow %}--follow{% endif %}
+          --tail {{ lines }}
+          2>&1
+          {% if filter %} | grep -E '{{ filter }}' || true{% endif %}
+      loop: "{{ targets }}"
+      loop_control:
+        label: "──── {{ item }} ────"
+      register: log_output
+      changed_when: false
+
+    - name: Show logs
+      debug:
+        msg: "{{ item.stdout_lines | default([]) }}"
+      loop: "{{ log_output.results }}"
+      loop_control:
+        label: "{{ item.item | upper }}"

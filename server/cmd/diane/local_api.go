@@ -234,29 +234,23 @@ func (h *apiHandlers) handleDoctor(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	totalRemote := len(remoteNameSet)
-	totalLocal := len(pc.Agents)
-	deployed := 0
-	for name := range pc.Agents {
-		if remoteNameSet[name] != nil {
-			deployed++
-		}
-	}
 
-	if err != nil && totalLocal == 0 {
+	if err != nil && totalRemote == 0 {
 		addResult("agent_definitions", "warning", "Could not fetch agent definitions: "+err.Error())
-	} else if totalLocal == 0 && totalRemote == 0 {
-		addResult("agent_definitions", "ok", "None configured")
+	} else if totalRemote == 0 {
+		addResult("agent_definitions", "ok", "None configured — run 'diane agent seed'")
 	} else {
-		detail := fmt.Sprintf("%d in config, %d on server", totalLocal, totalRemote)
-		if totalLocal > 0 && deployed == totalLocal {
-			detail += " — all deployed"
-			addResult("agent_definitions", "ok", detail)
-		} else if totalLocal > 0 {
-			detail += fmt.Sprintf(" — %d deployed, %d pending", deployed, totalLocal-deployed)
-			addResult("agent_definitions", "warning", detail)
-		} else {
-			addResult("agent_definitions", "ok", detail)
+		builtInSet := map[string]bool{}
+		for _, ba := range agents.BuiltInAgents() {
+			builtInSet[ba.Name] = true
 		}
+		builtInCount := 0
+		for name := range remoteNameSet {
+			if builtInSet[name] {
+				builtInCount++
+			}
+		}
+		addResult("agent_definitions", "ok", fmt.Sprintf("%d on MP (%d built-in, %d user-defined)", totalRemote, builtInCount, totalRemote-builtInCount))
 	}
 
 	// ── 7. CLI / App version match ──
@@ -824,16 +818,7 @@ func (h *apiHandlers) handleDeleteAgent(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 
-	// Delete from local config if present
-	pc := h.pc
-	if pc != nil && pc.Agents != nil && pc.Agents[agentName] != nil {
-		delete(pc.Agents, agentName)
-		cfg, loadErr := config.Load()
-		if loadErr == nil {
-			_ = cfg.Save()
-		}
-	}
-
+	// (config no longer stores agent definitions — all agents live on MP)
 	writeJSON(w, map[string]any{"status": "deleted"})
 
 	// Log the operation

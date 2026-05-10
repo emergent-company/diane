@@ -1,0 +1,94 @@
+---
+# Manage agent overrides in the graph (disable/re-enable built-in agents).
+#
+# Usage:
+#   ansible-playbook plays/graph-override.yml -e agent=diane-dreamer -e state=disabled
+#   ansible-playbook plays/graph-override.yml -e agent=diane-dreamer -e state=enabled
+#   ansible-playbook plays/graph-override.yml -e agent=diane-researcher -e state=disabled
+#   ansible-playbook plays/graph-override.yml -e list=true
+#
+- name: Manage graph agent overrides
+  hosts: all
+  gather_facts: no
+  vars:
+    agent: ""
+    state: ""
+    list: false
+    master_container: diane-test-master
+    memory_project_id: e56b176b-a781-4670-8450-62a950650fb8
+
+  tasks:
+    - name: List all overrides
+      command: >
+        MEMORY_API_KEY={{ memory_api_key }}
+        memory graph objects list --type AgentOverrideConfig
+        --project {{ memory_project_id }} --output json
+      register: list_result
+      changed_when: false
+      when: list | bool
+
+    - name: Show overrides
+      debug:
+        msg: "{{ list_result.stdout | from_json }}"
+      when: list | bool
+
+    - name: Find existing override for agent
+      command: >
+        MEMORY_API_KEY={{ memory_api_key }}
+        memory graph objects list --type AgentOverrideConfig
+        --project {{ memory_project_id }} --output json
+      register: existing
+      changed_when: false
+      when: agent != "" and state != ""
+
+    - name: Set override_id fact
+      set_fact:
+        override_id: >
+          {{ (
+            existing.stdout | from_json
+          ).items | selectattr('properties.agent_name', 'equalto', agent) | map(attribute='id') | first | default('')
+          }}
+      when: existing.changed is defined
+
+    - name: Disable agent (create override)
+      command: >
+        MEMORY_API_KEY={{ memory_api_key }}
+        memory graph objects create --type AgentOverrideConfig
+        --properties '{"agent_name":"{{ agent }}","disabled":true}'
+        --project {{ memory_project_id }}
+      when:
+        - state == "disabled"
+        - override_id == ""
+
+    - name: Re-enable agent (delete override)
+      command: >
+        MEMORY_API_KEY={{ memory_api_key }}
+        memory graph objects delete --id {{ override_id }}
+        --project {{ memory_project_id }}
+      when:
+        - state == "enabled"
+        - override_id != ""
+
+    - name: Wait for SSE propagation
+      pause:
+        seconds: 4
+      when: agent != "" and state != ""
+
+    - name: Verify agent watch detected change
+      command: "docker logs {{ master_container }} --tail 3 2>&1"
+      register: watch_log
+      changed_when: false
+      when: agent != "" and state != ""
+      failed_when: watch_log.stdout is not search("agent-watch")
+
+    - name: Summary
+      debug:
+        msg: >
+          {% if state == 'disabled' %}
+          Agent '{{ agent }}' disabled ✓ (watch confirmed)
+          {% elif state == 'enabled' %}
+          Agent '{{ agent }}' re-enabled ✓ (override deleted)
+          {% elif list %}
+          {{ list_result.stdout_lines | length }} override(s) found
+          {% endif %}
+      when: agent != "" or list | bool
