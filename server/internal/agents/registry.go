@@ -868,9 +868,12 @@ func SeedBuiltInAgents(ctx context.Context, client *sdk.Client) error {
 		}
 	}
 
-	// diane-default is the project's default agent — it exists on MP but is not
-	// returned by the List() endpoint. Search for it via the graph API.
+	// diane-default is the project's default agent — it's stored separately on the MP
+	// and AgentDefinitions.List() doesn't return it. When Create returns 409, we skip
+	// it gracefully — the local API falls back to the built-in registry in code, and
+	// the MP default can be updated when the API adds support for updating it.
 	if _, hasDefault := existing["diane-default"]; !hasDefault {
+		// Try to find it via graph search (works for some MP versions)
 		defaultID, err := findAgentDefIDByName(ctx, client, "diane-default")
 		if err == nil && defaultID != "" {
 			existing["diane-default"] = defaultID
@@ -995,6 +998,13 @@ func SeedAgentList(ctx context.Context, client *sdk.Client, agents []BuiltInAgen
 			// Create
 			defResp, err := client.AgentDefinitions.Create(ctx, req)
 			if err != nil {
+				// 409 conflict: default agent is stored separately on MP and not returned
+				// by List(). The findAgentDefIDByName fallback above may also fail. Skip
+				// diane-default gracefully in this case — the local API falls back to code.
+				if ba.Name == "diane-default" && (strings.Contains(err.Error(), "409") || strings.Contains(err.Error(), "conflict")) {
+					log.Printf("[seed] Default agent %q exists on MP but cannot be updated via AgentDefinitions API — skipping", ba.Name)
+					continue
+				}
 				return fmt.Errorf("create built-in agent %s: %w", ba.Name, err)
 			}
 
