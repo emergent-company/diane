@@ -17,6 +17,16 @@ import (
 // companionAppPath is where Diane.app lives on macOS.
 const companionAppPath = "/Applications/Diane.app"
 
+// githubAPIURL is the base URL for GitHub release lookups.
+// Override via DIANE_UPGRADE_API_URL env var for testing with a mock server.
+var githubAPIURL = "https://api.github.com"
+
+func init() {
+	if u := os.Getenv("DIANE_UPGRADE_API_URL"); u != "" {
+		githubAPIURL = u
+	}
+}
+
 // releaseAsset represents a single file asset in a GitHub release.
 type releaseAsset struct {
 	Name               string `json:"name"`
@@ -64,7 +74,7 @@ func cmdUpgrade(args []string) {
 
 	currentVer := strings.TrimPrefix(Version, "v")
 	repo := "emergent-company/diane"
-	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
+	apiURL := fmt.Sprintf("%s/repos/%s/releases/latest", githubAPIURL, repo)
 
 	// Fetch latest release
 	req, err := http.NewRequest("GET", apiURL, nil)
@@ -519,7 +529,7 @@ func checkForUpdate() string {
 	}
 
 	repo := "emergent-company/diane"
-	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
+	apiURL := fmt.Sprintf("%s/repos/%s/releases/latest", githubAPIURL, repo)
 
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {

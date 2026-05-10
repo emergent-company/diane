@@ -214,8 +214,15 @@ func startAutoUpgrade(pc *config.ProjectConfig) {
 		return
 	}
 
-	// Parse check interval (default 3m)
+	// Parse check interval (default 3m, overridable via env)
 	interval := 3 * time.Minute
+	if envInterval := os.Getenv("UPGRADE_CHECK_INTERVAL"); envInterval != "" {
+		if d, err := time.ParseDuration(envInterval); err == nil {
+			interval = d
+		} else {
+			log.Printf("[UPGRADE] Invalid UPGRADE_CHECK_INTERVAL env %q: %v — using default 3m", envInterval, err)
+		}
+	}
 	if pc.UpgradeCheckInterval != "" {
 		if d, err := time.ParseDuration(pc.UpgradeCheckInterval); err == nil {
 			interval = d
@@ -256,7 +263,7 @@ func runAutoUpgradeCheck() {
 
 	// Fetch release assets
 	repo := "emergent-company/diane"
-	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
+	apiURL := fmt.Sprintf("%s/repos/%s/releases/latest", githubAPIURL, repo)
 
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
