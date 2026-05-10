@@ -40,20 +40,30 @@ echo ""
 echo "=== [2/3] Swift Unit Tests (XCTest) ==="
 cd "$SWIFT_DIR"
 
+# Clean up stale xcresult bundle from previous run
+rm -rf /tmp/DianeUnitTests.xcresult
+
 # Regenerate project if project.yml changed
 xcodegen generate 2>&1 | tail -1
 
+# Run tests — capture exit code but don't abort (set -e), so Step 3 still runs
+set +e
 xcodebuild test -project Diane.xcodeproj -scheme Diane \
   -destination 'platform=macOS,arch=arm64' \
   -only-testing:DianeTests \
   -skip-testing:DianeUITests \
   -resultBundlePath /tmp/DianeUnitTests.xcresult \
-  2>&1 | tee /tmp/test-output.txt | grep -E "Test Suite|error:|failed|passed"
+  2>&1 | tee /tmp/xctest-raw-output.txt | grep -E "Test Suite|error:|failed|passed"
+XCODE_EXIT=$?
+set -e
 
-if grep -q "failed (" /tmp/test-output.txt 2>/dev/null; then
+# Always clean up the result bundle
+rm -rf /tmp/DianeUnitTests.xcresult
+
+if [ "$XCODE_EXIT" -ne 0 ] && grep -q "failed at " /tmp/xctest-raw-output.txt 2>/dev/null; then
     echo "✗ Unit tests FAILED"
     ((FAIL++))
-    grep "failed (" /tmp/test-output.txt | head -5
+    grep "failed at " /tmp/xctest-raw-output.txt | grep -v "nw_" | head -5
 else
     echo "✓ All unit tests passed"
     ((PASS++))

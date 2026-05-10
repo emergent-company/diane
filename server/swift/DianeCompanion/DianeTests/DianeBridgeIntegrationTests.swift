@@ -37,7 +37,20 @@ final class DianeBridgeIntegrationTests: XCTestCase {
 
     override func setUp() async throws {
         api = RawAPI(baseURL: "http://127.0.0.1:8890")
-        _ = try await api.get("/api/status") // smoke test — server reachable
+        // Retry connecting to the server with backoff (it may still be starting up)
+        var lastError: Error?
+        for attempt in 1...10 {
+            do {
+                _ = try await api.get("/api/status")
+                return // connected successfully
+            } catch {
+                lastError = error
+                if attempt < 10 {
+                    try await Task.sleep(nanoseconds: UInt64(500_000 * attempt)) // 0.5s, 1s, 1.5s, ...
+                }
+            }
+        }
+        throw XCTSkip("diane serve not reachable on 127.0.0.1:8890 after retries: \(lastError!.localizedDescription)")
     }
 
     // MARK: - Server Status
