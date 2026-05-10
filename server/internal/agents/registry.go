@@ -248,8 +248,12 @@ func buildAgentList() []BuiltInAgent {
 				"entity-create",
 
 				// MCP relay tools (node-provided, glob patterns)
+				// "*" matches ALL tools registered by connected relay nodes.
+				// Each tool is named "{instance_id}_{tool_name}" so "*" is safe
+				// — it only matches what the relay has registered.
 				"*github*",
 				"*infakt*",
+				"*",
 
 				// User interaction — ask for approval during agent runs
 				"ask_user",
