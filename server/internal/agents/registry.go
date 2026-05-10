@@ -17,6 +17,7 @@ import (
 	"github.com/Emergent-Comapny/diane/internal/config"
 	sdk "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk"
 	sdkagents "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agentdefinitions"
+	"github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/graph"
 )
 
 // ---------------------------------------------------------------------------
@@ -867,6 +868,15 @@ func SeedBuiltInAgents(ctx context.Context, client *sdk.Client) error {
 		}
 	}
 
+	// diane-default is the project's default agent — it exists on MP but is not
+	// returned by the List() endpoint. Search for it via the graph API.
+	if _, hasDefault := existing["diane-default"]; !hasDefault {
+		defaultID, err := findAgentDefIDByName(ctx, client, "diane-default")
+		if err == nil && defaultID != "" {
+			existing["diane-default"] = defaultID
+		}
+	}
+
 	for _, ba := range builtIns {
 		req := toCreateRequest(ba)
 		defID, exists := existing[ba.Name]
@@ -882,6 +892,20 @@ func SeedBuiltInAgents(ctx context.Context, client *sdk.Client) error {
 			// Create
 			defResp, err := client.AgentDefinitions.Create(ctx, req)
 			if err != nil {
+				// 409 conflict: agent exists but not returned by List() (stored separately).
+				// Find via graph search and update instead.
+				if strings.Contains(err.Error(), "409") || strings.Contains(err.Error(), "conflict") {
+					foundID, findErr := findAgentDefIDByName(ctx, client, ba.Name)
+					if findErr != nil {
+						return fmt.Errorf("create built-in agent %s (conflict, then find): %w (orig: %v)", ba.Name, findErr, err)
+					}
+					updReq := toUpdateRequest(ba)
+					_, updErr := client.AgentDefinitions.Update(ctx, foundID, updReq)
+					if updErr != nil {
+						return fmt.Errorf("create built-in agent %s (conflict, then update): %w", ba.Name, updErr)
+					}
+					continue
+				}
 				return fmt.Errorf("create built-in agent %s: %w", ba.Name, err)
 			}
 
@@ -903,6 +927,29 @@ func SeedBuiltInAgents(ctx context.Context, client *sdk.Client) error {
 	}
 
 	return nil
+}
+
+// findAgentDefIDByName searches the MP graph for an agent definition by name.
+func findAgentDefIDByName(ctx context.Context, client *sdk.Client, name string) (string, error) {
+	resp, err := client.Graph.ListObjects(ctx, &graph.ListObjectsOptions{
+		Limit: 50,
+	})
+	if err != nil {
+		return "", fmt.Errorf("find %s: list graph objects: %w", name, err)
+	}
+	if resp == nil {
+		return "", fmt.Errorf("find %s: nil response", name)
+	}
+	for _, obj := range resp.Items {
+		if obj.Properties == nil {
+			continue
+		}
+		objName, _ := obj.Properties["name"].(string)
+		if objName == name {
+			return obj.ID, nil
+		}
+	}
+	return "", fmt.Errorf("find %s: not found (searched %d items)", name, len(resp.Items))
 }
 
 // SeedAgentList seeds a list of BuiltInAgent definitions to Memory Platform.
