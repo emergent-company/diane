@@ -168,6 +168,35 @@ final class DianeAPIClient: ObservableObject {
         return (try? JSONDecoder().decode([MCPServer].self, from: data)) ?? []
     }
 
+    // MARK: - MCP Server Authentication
+
+    func startMCPServerAuth(serverName: String) async throws -> (status: String, authURL: String?) {
+        let encoded = serverName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? serverName
+        let data = try await post("/api/mcp-servers/\(encoded)/auth", body: nil, timeout: 30)
+        struct Response: Decodable {
+            let status: String
+            let auth_url: String?
+            let server: String
+            let error: String?
+        }
+        let resp = try JSONDecoder().decode(Response.self, from: data)
+        return (resp.status, resp.auth_url)
+    }
+
+    func checkMCPServerAuthStatus(serverName: String) async throws -> (status: String, expiresAt: String?, error: String?) {
+        let encoded = serverName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? serverName
+        let data = try await get("/api/mcp-servers/\(encoded)/auth-status")
+        struct Response: Decodable {
+            let status: String
+            let server: String
+            let auth_url: String?
+            let error: String?
+            let expires_at: String?
+        }
+        let resp = try JSONDecoder().decode(Response.self, from: data)
+        return (resp.status, resp.expires_at, resp.error)
+    }
+
     // MARK: - Relay Nodes
 
     func fetchRelayNodes() async throws -> [RelayNode] {

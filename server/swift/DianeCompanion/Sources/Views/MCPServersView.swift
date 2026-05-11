@@ -50,7 +50,7 @@ struct MCPServersView: View {
             }
 
             if isLoading && servers.isEmpty {
-                LoadingStateView(message: "Loading MCP servers…")
+                LoadingStateView(message: "Loading MCP servers\u2026")
             } else if servers.isEmpty {
                 EmptyStateView(
                     title: "No MCP Servers",
@@ -229,6 +229,11 @@ private struct MCPServerDetailView: View {
     @State private var toolsError: String? = nil
     @State private var promptsError: String? = nil
 
+    // Auth state
+    @State private var authStatus: String? = nil
+    @State private var authIsLoading = false
+    @State private var authError: String? = nil
+
     private enum DetailTab: String, CaseIterable {
         case connection = "Connection"
         case tools = "Tools"
@@ -331,8 +336,121 @@ private struct MCPServerDetailView: View {
                     .padding(.vertical, 2)
                 }
             }
+
+            // Authentication section for HTTP servers
+            if server.type.lowercased() == "http" || server.type.lowercased() == "streamable-http" || server.type.lowercased() == "sse" {
+                Divider().padding(.horizontal, 12)
+                authSection
+            }
         }
         .padding(.vertical, 4)
+    }
+
+    // MARK: - Authentication Section
+
+    @ViewBuilder
+    private var authSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Authentication")
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+                .padding(.top, 4)
+
+            if let status = authStatus {
+                HStack(spacing: 6) {
+                    if authIsLoading {
+                        ProgressView().controlSize(.mini)
+                    }
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 12)
+            }
+
+            if let err = authError {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                        .font(.caption)
+                    Text(err)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 12)
+            }
+
+            if !authIsLoading {
+                Button {
+                    Task { await startAuth() }
+                } label: {
+                    Label("Re-authenticate", systemImage: "person.badge.key")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+            } else {
+                Button {} label: {
+                    Label("Authenticating...", systemImage: "person.badge.key")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(true)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+            }
+        }
+    }
+
+    @MainActor
+    private func startAuth() async {
+        authIsLoading = true
+        authError = nil
+        authStatus = nil
+
+        do {
+            let (status, authURL) = try await dianeAPI.startMCPServerAuth(serverName: server.name)
+            guard status == "pending", let urlStr = authURL, let url = URL(string: urlStr) else {
+                authError = "Failed to start authentication (status: \(status))"
+                authIsLoading = false
+                return
+            }
+
+            // Open the browser
+            NSWorkspace.shared.open(url)
+
+            authStatus = "Waiting for browser authorization..."
+
+            // Poll for completion (every 2 seconds, up to 5 minutes)
+            let pollStart = Date()
+            while Date().timeIntervalSince(pollStart) < 300 {
+                try await Task.sleep(nanoseconds: 2_000_000_000)
+                let (checkStatus, expiresAt, checkError) = try await dianeAPI.checkMCPServerAuthStatus(serverName: server.name)
+                if checkStatus == "completed" {
+                    if let exp = expiresAt, !exp.isEmpty {
+                        authStatus = "Authenticated (expires: \(exp))"
+                    } else {
+                        authStatus = "Authenticated"
+                    }
+                    authIsLoading = false
+                    return
+                }
+                if checkStatus == "failed" {
+                    authError = checkError ?? "Authentication failed"
+                    authIsLoading = false
+                    return
+                }
+            }
+            authError = "Authentication timed out"
+        } catch {
+            authError = error.localizedDescription
+        }
+        authIsLoading = false
     }
 
     private func connectionRow(label: String, value: String) -> some View {
@@ -359,7 +477,7 @@ private struct MCPServerDetailView: View {
             if isLoadingTools {
                 HStack {
                     Spacer()
-                    ProgressView("Loading tools…")
+                    ProgressView("Loading tools\u2026")
                         .controlSize(.small)
                         .padding(20)
                     Spacer()
@@ -433,7 +551,7 @@ private struct MCPServerDetailView: View {
             if isLoadingPrompts {
                 HStack {
                     Spacer()
-                    ProgressView("Loading prompts…")
+                    ProgressView("Loading prompts\u2026")
                         .controlSize(.small)
                         .padding(20)
                     Spacer()

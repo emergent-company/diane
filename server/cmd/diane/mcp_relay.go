@@ -89,6 +89,7 @@ type MCPSession struct {
 	mcpMu   sync.Mutex // protects mcpIn writes from tool watch vs forward loops
 	pending sync.Map   // map[requestID]chan response
 	done    chan struct{}
+	stopOnce sync.Once // ensures stopMCP is only called once across goroutines
 
 	// Dynamic tool registration: register immediately on connect, then
 	// re-register when new MCP servers appear (slow starters like AirMCP
@@ -337,6 +338,9 @@ func (s *MCPSession) run() error {
 }
 
 func (s *MCPSession) startMCP() error {
+	// Reset stop guards for a fresh connection attempt
+	s.stopOnce = sync.Once{}
+
 	// Split binary path and args (supports "diane mcp serve" etc.)
 	parts := strings.Fields(s.cfg.MCPBinary)
 	cmd := exec.Command(parts[0], parts[1:]...)
@@ -364,17 +368,19 @@ func (s *MCPSession) startMCP() error {
 }
 
 func (s *MCPSession) stopMCP() {
-	if s.mcpCmd != nil && s.mcpCmd.Process != nil {
-		s.mcpCmd.Process.Signal(syscall.SIGTERM)
-		go func() {
-			time.Sleep(5 * time.Second)
-			if s.mcpCmd != nil && s.mcpCmd.Process != nil {
-				s.mcpCmd.Process.Kill()
-			}
-		}()
-		s.mcpCmd.Wait()
-		s.mcpCmd = nil
-	}
+	s.stopOnce.Do(func() {
+		if s.mcpCmd != nil && s.mcpCmd.Process != nil {
+			s.mcpCmd.Process.Signal(syscall.SIGTERM)
+			go func() {
+				time.Sleep(5 * time.Second)
+				if s.mcpCmd != nil && s.mcpCmd.Process != nil {
+					s.mcpCmd.Process.Kill()
+				}
+			}()
+			s.mcpCmd.Wait()
+			s.mcpCmd = nil
+		}
+	})
 }
 
 func (s *MCPSession) disconnectWS() {
@@ -521,6 +527,7 @@ func (s *MCPSession) startToolWatch() {
 // forwarding goroutine. We always re-register on watch responses — the
 // overhead is negligible (one WS frame per 20s), and it ensures slow-starting
 // servers like AirMCP get registered as soon as their tools appear.
+// Skips registration when tools list is empty (no MCP servers started).
 func (s *MCPSession) checkToolChangeAndReregister(line []byte) {
 	// Verify the response has tools data
 	var mcpResponse struct {
@@ -532,11 +539,17 @@ func (s *MCPSession) checkToolChangeAndReregister(line []byte) {
 	if err := json.Unmarshal(line, &mcpResponse); err != nil {
 		return
 	}
-	if mcpResponse.Result == nil && mcpResponse.Tools == nil {
+	var tools []json.RawMessage
+	if mcpResponse.Result != nil {
+		tools = mcpResponse.Result.Tools
+	} else {
+		tools = mcpResponse.Tools
+	}
+	if len(tools) == 0 {
 		return
 	}
 
-	log.Printf("[mcp-relay] Tools update detected, re-registering...")
+	log.Printf("[mcp-relay] Tools update detected (%d tools), re-registering...", len(tools))
 	s.doRegister(line)
 }
 

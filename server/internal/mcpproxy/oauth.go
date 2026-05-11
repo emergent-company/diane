@@ -528,6 +528,27 @@ p{color:#666;margin:0}
 // defaultCallbackPort is the standard port for the OAuth callback server.
 const defaultCallbackPort = 28561
 
+// BuildAuthURL constructs an OAuth authorization URL with PKCE parameters.
+// The redirectURI should point to a local callback server (e.g., http://localhost:{port}/callback).
+// The challenge is a base64url-encoded SHA-256 hash of the verifier (S256 method).
+func BuildAuthURL(authURL, clientID, redirectURI, challenge string, scopes []string) (string, error) {
+	u, err := url.Parse(authURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse authorization URL: %w", err)
+	}
+	q := u.Query()
+	q.Set("response_type", "code")
+	q.Set("client_id", clientID)
+	q.Set("redirect_uri", redirectURI)
+	q.Set("code_challenge", challenge)
+	q.Set("code_challenge_method", "S256")
+	if len(scopes) > 0 {
+		q.Set("scope", strings.Join(scopes, " "))
+	}
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
 // AuthenticateAuthCodeFlow performs OAuth authorization code flow with PKCE.
 // Designed for headless environments:
 //  1. Generates PKCE params
@@ -569,7 +590,7 @@ func AuthenticateAuthCodeFlow(serverName string, oauth *OAuthConfig, background 
 	codeChan := make(chan string, 1)
 	errChan := make(chan error, 1)
 
-	server, port, err := startCallbackServer(codeChan, errChan)
+	server, port, err := StartCallbackServer(codeChan, errChan)
 	if err != nil {
 		// Can't start local server — fall back to stdin paste
 		log.Printf("[OAuth] Cannot start callback server: %v, falling back to stdin", err)
@@ -633,7 +654,7 @@ func AuthenticateAuthCodeFlow(serverName string, oauth *OAuthConfig, background 
 // startCallbackServer starts a local HTTP server on an available port.
 // The server handles GET /callback?code=... requests and sends the code
 // to the provided channel. Returns the server (for caller shutdown) and port.
-func startCallbackServer(codeChan chan string, errChan chan error) (*http.Server, int, error) {
+func StartCallbackServer(codeChan chan string, errChan chan error) (*http.Server, int, error) {
 	// Try the default port first, then fall back to random
 	port := defaultCallbackPort
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))

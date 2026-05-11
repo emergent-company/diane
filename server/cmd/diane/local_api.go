@@ -64,7 +64,7 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	mux.HandleFunc("/api/schema/objects/", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleSchemaObjects(w, r) })
 	mux.HandleFunc("/api/doctor", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleDoctor(w, r) })
 
-	expected := 18
+	expected := 20
 	if registered != expected {
 		log.Printf("[LOCAL-API] WARNING: registered %d routes, expected %d — check for missing handlers", registered, expected)
 	}
@@ -1798,6 +1798,25 @@ func (h *apiHandlers) handleMCPServerSubRoutes(w http.ResponseWriter, r *http.Re
 		}
 		// Prompts not yet supported at proxy level — return empty list
 		writeJSON(w, map[string]any{"prompts": []any{}})
+		return
+	}
+
+	if len(parts) == 1 && parts[0] == "auth" {
+		// POST /api/mcp-servers/{name}/auth
+		// Starts or resumes the OAuth authorization flow.
+		// name is already extracted in serverName above (before the tools/prompts check)
+		// BUT: this branch handles the case where path is just "auth" — need the name
+		jsonError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "auth" {
+		h.handleMCPServerAuth(w, r, serverName)
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "auth-status" {
+		h.handleMCPServerAuthStatus(w, r, serverName)
 		return
 	}
 
