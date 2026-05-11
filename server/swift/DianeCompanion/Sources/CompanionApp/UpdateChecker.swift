@@ -52,6 +52,9 @@ final class UpdateChecker: ObservableObject {
         // Check for rollback availability
         checkRollbackAvailability()
 
+        // Migrate: clean up stale Diane.v*.backup.app from /Applications/ (pre-v1.38.52 storage)
+        cleanupStaleApplicationsBackups()
+
         await checkForUpdates()
         timer = Timer.scheduledTimer(withTimeInterval: checkInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in await self?.checkForUpdates() }
@@ -233,9 +236,11 @@ rm -rf "\(appPath)"
 cp -R "\(backupPath.path)" "\(appPath)"
 # Fix permissions
 chmod -R a=u+rX "\(appPath)"
+# Clean up backup file
+rm -rf "\(backupPath.path)"
 # Relaunch
 open -n -a "\(appPath)"
-# Clean up
+# Clean up script
 rm -f "\(scriptPath.path)"
 """
                 try script.write(to: scriptPath, atomically: true, encoding: .utf8)
@@ -372,12 +377,18 @@ rm -f "\(scriptPath.path)"
     // MARK: - Backup & Rollback
 
     /// Backup the current app bundle before installing an update.
+    /// Stores in ~/.diane/backups/ instead of /Applications/ to avoid cluttering
+    /// the Applications folder with stale .backup.app bundles.
     private func backupCurrentApp() {
         let appPath = "/Applications/Diane.app"
         guard let version = currentVersion, version != "unknown" else { return }
 
         let backupPath = appBackupPath(version: version)
         let fm = FileManager.default
+
+        // Create backups directory
+        try? fm.createDirectory(at: backupPath.deletingLastPathComponent(),
+                                withIntermediateDirectories: true)
 
         // Remove old backup if exists
         try? fm.removeItem(at: backupPath)
@@ -394,38 +405,59 @@ rm -f "\(scriptPath.path)"
 
     /// Check if a backup exists for rollback.
     private func checkRollbackAvailability() {
-        guard let appVersion = currentVersion else {
+        let fm = FileManager.default
+        let backupDir = backupDirURL()
+
+        // Check all backups in ~/.diane/backups/
+        guard let backups = try? fm.contentsOfDirectory(at: backupDir,
+                                                         includingPropertiesForKeys: nil) else {
             rollbackAvailable = false
             return
         }
 
-        // Check if there's a backup from a previous version
-        let backupPath = appBackupPath(version: appVersion)
-        let fm = FileManager.default
-
-        if fm.fileExists(atPath: backupPath.path) {
-            previousVersion = appVersion
-            rollbackAvailable = true
-            logInfo("UpdateChecker: Rollback available for \(appVersion)", category: "Updates")
-        } else {
-            // Also check for any Diane.v*.backup.app in /Applications/
-            if let apps = try? fm.contentsOfDirectory(atPath: "/Applications") {
-                for app in apps where app.hasPrefix("Diane.v") && app.hasSuffix(".backup.app") {
-                    let ver = app
-                        .replacingOccurrences(of: "Diane.v", with: "")
-                        .replacingOccurrences(of: ".backup.app", with: "")
-                    previousVersion = ver
-                    rollbackAvailable = true
-                    logInfo("UpdateChecker: Rollback available: \(ver)", category: "Updates")
-                    return
-                }
+        for backup in backups {
+            if backup.lastPathComponent.hasPrefix("Diane.v") && backup.lastPathComponent.hasSuffix(".backup.app") {
+                let ver = backup.lastPathComponent
+                    .replacingOccurrences(of: "Diane.v", with: "")
+                    .replacingOccurrences(of: ".backup.app", with: "")
+                previousVersion = ver
+                rollbackAvailable = true
+                logInfo("UpdateChecker: Rollback available: \(ver)", category: "Updates")
+                return
             }
+        }
+        rollbackAvailable = false
+    }
+
+    /// Clean up stale backup(s) in case the same version or older exist.
+    /// Called after a successful update or rollback.
+    private func cleanupBackup(version: String? = nil) {
+        let fm = FileManager.default
+        if let ver = version {
+            let path = appBackupPath(version: ver)
+            try? fm.removeItem(at: path)
+            logInfo("UpdateChecker: Cleaned up backup for \(ver)", category: "Updates")
+        }
+    }
+
+    private func backupDirURL() -> URL {
+        return URL(fileURLWithPath: dianeDir).appendingPathComponent("backups")
+    }
+
+    /// Remove any Diane.v*.backup.app left in /Applications/ from old versions.
+    private func cleanupStaleApplicationsBackups() {
+        let fm = FileManager.default
+        guard let apps = try? fm.contentsOfDirectory(atPath: "/Applications") else { return }
+        for app in apps where app.hasPrefix("Diane.v") && app.hasSuffix(".backup.app") {
+            let path = "/Applications/\(app)"
+            try? fm.removeItem(atPath: path)
+            logInfo("UpdateChecker: Cleaned up stale backup from /Applications/: \(app)", category: "Updates")
         }
     }
 
     private func appBackupPath(version: String) -> URL {
         let cleaned = version.hasPrefix("v") ? String(version.dropFirst()) : version
-        return URL(fileURLWithPath: "/Applications/Diane.v\(cleaned).backup.app")
+        return backupDirURL().appendingPathComponent("Diane.v\(cleaned).backup.app")
     }
 
     /// Download a file and report progress
