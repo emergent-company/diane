@@ -17,7 +17,6 @@ import (
 
 	"github.com/Emergent-Comapny/diane/internal/agents"
 	"github.com/Emergent-Comapny/diane/internal/config"
-	"github.com/Emergent-Comapny/diane/internal/mcpproxy"
 	"github.com/Emergent-Comapny/diane/internal/memory"
 	"github.com/Emergent-Comapny/diane/internal/schema"
 	"github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/acp"
@@ -1729,6 +1728,7 @@ func (h *apiHandlers) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	servers := make([]serverEntry, 0, len(entries))
+	seen := make(map[string]int) // server name → index in servers (dedup by highest version)
 	for _, e := range entries {
 		var sc struct {
 			Name    string `json:"name"`
@@ -1739,6 +1739,20 @@ func (h *apiHandlers) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[LOCAL-API] mcp server config unmarshal (%s): %v", e.Scope, err)
 			continue
 		}
+		if idx, exists := seen[sc.Name]; exists {
+			// Keep the entry with the higher version (newer config wins)
+			if e.Version > servers[idx].Version {
+				servers[idx] = serverEntry{
+					Name:    sc.Name,
+					Type:    sc.Type,
+					Enabled: sc.Enabled,
+					Scope:   e.Scope,
+					Version: e.Version,
+				}
+			}
+			continue
+		}
+		seen[sc.Name] = len(servers)
 		servers = append(servers, serverEntry{
 			Name:    sc.Name,
 			Type:    sc.Type,
@@ -1789,106 +1803,75 @@ func (h *apiHandlers) handleMCPServerSubRoutes(w http.ResponseWriter, r *http.Re
 }
 
 // handleMCPServerTools returns tools exposed by a specific MCP server.
+// Instead of creating a temp proxy (which can't handle OAuth), it queries
+// the running relay session's tools via the MP relay API and filters by server name.
 // GET /api/mcp-servers/{name}/tools → {"tools": [...]}
 func (h *apiHandlers) handleMCPServerTools(w http.ResponseWriter, r *http.Request, serverName string) {
 	ctx := r.Context()
 
-	// Load the server config from the graph
-	bridge, err := h.bridge(ctx)
-	if err != nil {
-		writeJSON(w, map[string]any{"tools": []any{}})
-		return
-	}
-	defer bridge.Close()
-
-	entries, err := bridge.ListMCPProxyConfigs(ctx)
-	if err != nil {
+	// Resolve instance ID from config (required for relay tools query)
+	instanceID := h.pc.InstanceID
+	if instanceID == "" {
 		writeJSON(w, map[string]any{"tools": []any{}})
 		return
 	}
 
-	// Find the matching server config by name
-	var foundCfg *struct {
-		Name    string            `json:"name"`
-		Type    string            `json:"type"`
-		Enabled bool              `json:"enabled"`
-		Command string            `json:"command"`
-		Args    []string          `json:"args"`
-		Env     map[string]string `json:"env"`
-		URL     string            `json:"url"`
-		Headers map[string]string `json:"headers"`
-		Timeout int               `json:"timeout"`
+	// Query the MP relay for this instance's registered tools
+	toolsURL := strings.TrimSuffix(h.pc.ServerURL, "/") + "/api/mcp-relay/sessions/" + url.PathEscape(instanceID) + "/tools"
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, toolsURL, nil)
+	if err != nil {
+		log.Printf("[LOCAL-API] handleMCPServerTools: build request: %v", err)
+		writeJSON(w, map[string]any{"tools": []any{}})
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+h.pc.Token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("[LOCAL-API] handleMCPServerTools: query relay: %v", err)
+		writeJSON(w, map[string]any{"tools": []any{}})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		writeJSON(w, map[string]any{"tools": []any{}})
+		return
 	}
 
-	for _, e := range entries {
-		var sc struct {
-			Name    string            `json:"name"`
-			Type    string            `json:"type"`
-			Enabled bool              `json:"enabled"`
-			Command string            `json:"command"`
-			Args    []string          `json:"args"`
-			Env     map[string]string `json:"env"`
-			URL     string            `json:"url"`
-			Headers map[string]string `json:"headers"`
-			Timeout int               `json:"timeout"`
-		}
-		if err := json.Unmarshal([]byte(e.Config), &sc); err != nil {
+	var relayResp struct {
+		Tools []any `json:"tools"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&relayResp); err != nil {
+		log.Printf("[LOCAL-API] handleMCPServerTools: decode: %v", err)
+		writeJSON(w, map[string]any{"tools": []any{}})
+		return
+	}
+
+	if relayResp.Tools == nil {
+		writeJSON(w, map[string]any{"tools": []any{}})
+		return
+	}
+
+	// Filter tools by server prefix and strip the prefix
+	prefix := serverName + "_"
+	var result []any
+	for _, t := range relayResp.Tools {
+		tool, ok := t.(map[string]any)
+		if !ok {
 			continue
 		}
-		if sc.Name == serverName {
-			cp := sc
-			foundCfg = &cp
-			break
+		name, ok := tool["name"].(string)
+		if !ok || !strings.HasPrefix(name, prefix) {
+			continue
 		}
-	}
-
-	if foundCfg == nil || !foundCfg.Enabled {
-		writeJSON(w, map[string]any{"tools": []any{}})
-		return
-	}
-
-	// Build ServerConfig list for the proxy
-	proxyServers := []mcpproxy.ServerConfig{
-		{
-			Name:    foundCfg.Name,
-			Type:    foundCfg.Type,
-			Command: foundCfg.Command,
-			Args:    foundCfg.Args,
-			URL:     foundCfg.URL,
-			Headers: foundCfg.Headers,
-			Env:     foundCfg.Env,
-			Timeout: foundCfg.Timeout,
-			Enabled: true,
-		},
-	}
-
-	proxy, err := mcpproxy.NewProxy(proxyServers)
-	if err != nil {
-		log.Printf("[LOCAL-API] handleMCPServerTools: NewProxy(%s): %v", serverName, err)
-		writeJSON(w, map[string]any{"tools": []any{}})
-		return
-	}
-	defer proxy.Close()
-
-	tools, err := proxy.ListAllTools()
-	if err != nil {
-		log.Printf("[LOCAL-API] handleMCPServerTools: ListAllTools(%s): %v", serverName, err)
-		writeJSON(w, map[string]any{"tools": []any{}})
-		return
-	}
-
-	// Strip the server prefix from tool names (response is already scoped to this server)
-	var result []map[string]any
-	prefix := serverName + "_"
-	for _, tool := range tools {
-		if name, ok := tool["name"].(string); ok && strings.HasPrefix(name, prefix) {
-			tool["name"] = strings.TrimPrefix(name, prefix)
-			delete(tool, "_server") // internal field, not needed by the companion
-		}
+		tool["name"] = strings.TrimPrefix(name, prefix)
+		delete(tool, "_server")
 		result = append(result, tool)
 	}
 	if result == nil {
-		result = []map[string]any{}
+		result = []any{}
 	}
 
 	writeJSON(w, map[string]any{"tools": result})
