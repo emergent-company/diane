@@ -1792,6 +1792,47 @@ func (h *apiHandlers) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 
+	// ── Relay tools check: override status for enabled servers with no tools ──
+	if len(servers) > 0 && h.pc.InstanceID != "" {
+		toolsURL := strings.TrimSuffix(h.pc.ServerURL, "/") + "/api/mcp-relay/sessions/" + url.PathEscape(h.pc.InstanceID) + "/tools"
+		toolsCtx, toolsCancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer toolsCancel()
+
+		req, err := http.NewRequestWithContext(toolsCtx, http.MethodGet, toolsURL, nil)
+		if err == nil {
+			req.Header.Set("Authorization", "Bearer "+h.pc.Token)
+			if resp, err := http.DefaultClient.Do(req); err == nil {
+				defer resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					var toolsResp struct {
+						Tools []map[string]any `json:"tools"`
+					}
+					if err := json.NewDecoder(resp.Body).Decode(&toolsResp); err == nil && toolsResp.Tools != nil {
+						// Count tools per server by prefix
+						toolCounts := make(map[string]int)
+						for _, t := range toolsResp.Tools {
+							name, _ := t["name"].(string)
+							for _, s := range servers {
+								prefix := s.Name + "_"
+								if strings.HasPrefix(name, prefix) {
+									toolCounts[s.Name]++
+									break
+								}
+							}
+						}
+						// Override status for enabled servers with no tools
+						for i, s := range servers {
+							if (s.Status == "running" || s.Status == "auth_required" || s.Status == "auth_expired") && toolCounts[s.Name] == 0 {
+								servers[i].Status = "no_tools"
+								servers[i].ErrorMessage = "no tools registered"
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	writeJSON(w, map[string]any{"servers": servers})
 }
 

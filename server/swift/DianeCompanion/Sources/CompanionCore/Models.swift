@@ -302,12 +302,13 @@ public extension MCPServer {
     var statusLabel: String {
         guard let s = status else { return enabled ? "Running" : "Disabled" }
         switch s {
-        case "running":   return "Running"
-        case "disabled":  return "Disabled"
+        case "running":      return "Running"
+        case "disabled":     return "Disabled"
         case "auth_required": return "Auth Required"
         case "auth_expired":  return "Auth Expired"
-        case "error":     return errorMessage ?? "Error"
-        default:          return enabled ? "Running" : "Disabled"
+        case "no_tools":     return "No Tools"
+        case "error":        return errorMessage ?? "Error"
+        default:             return enabled ? "Running" : "Disabled"
         }
     }
 
@@ -319,6 +320,7 @@ public extension MCPServer {
         case "disabled":       return .secondary
         case "auth_required",
              "auth_expired":   return .orange
+        case "no_tools":       return .orange
         case "error":          return .red
         default:               return enabled ? .green : .secondary
         }
