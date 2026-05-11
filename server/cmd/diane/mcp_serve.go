@@ -14,6 +14,11 @@ import (
 	"github.com/Emergent-Comapny/diane/internal/mcpproxy"
 )
 
+// lastMCPConfig stores the most recently loaded server config so SIGUSR1
+// can reload without needing to re-query the graph (config is pushed in-band
+// by the relay via config/set notifications).
+var lastMCPConfig []mcpproxy.ServerConfig
+
 // cmdMCPServe runs the MCP server that reads JSON-RPC from stdin and writes to stdout.
 // This is used by 'diane mcp relay' as the MCP subprocess.
 func cmdMCPServe() {
@@ -28,9 +33,8 @@ func cmdMCPServe() {
 	}
 	defer os.Remove(pidFile)
 
-	// Initialize MCP proxy from graph (managed by relay, not from file)
-	// The relay creates its own proxy and passes config in-band.
-	// The subprocess proxy is optional — only needed for standalone `diane mcp serve` use.
+	// Initialize MCP proxy with empty config — the relay pushes server config
+	// in-band via config/set JSON-RPC notifications over stdin.
 	proxy, proxyErr := mcpproxy.NewProxy([]mcpproxy.ServerConfig{})
 	if proxyErr != nil {
 		log.Printf("Warning: Failed to initialize MCP proxy: %v", proxyErr)
@@ -46,13 +50,15 @@ func cmdMCPServe() {
 	encoder := json.NewEncoder(os.Stdout)
 
 	// Setup signal handler for reload (SIGUSR1)
+	// Re-applies the last config received via config/set.
+	// The relay handles graph re-query and pushes updated config in-band.
 	if proxy != nil {
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGUSR1)
 		go func() {
 			for range sigChan {
-				log.Printf("Received SIGUSR1, reloading MCP configuration...")
-				if err := proxy.Reload([]mcpproxy.ServerConfig{}); err != nil {
+				log.Printf("Received SIGUSR1, reloading MCP configuration from last config/set...")
+				if err := proxy.Reload(lastMCPConfig); err != nil {
 					log.Printf("Failed to reload MCP config: %v", err)
 				}
 			}
@@ -77,6 +83,10 @@ func cmdMCPServe() {
 		}
 
 		resp := handleMCPServeRequest(req, proxy)
+		// Skip response for JSON-RPC notifications (no id field)
+		if req.ID == nil {
+			continue
+		}
 		resp.JSONRPC = "2.0"
 		resp.ID = req.ID
 		if err := encoder.Encode(resp); err != nil {
@@ -196,6 +206,51 @@ func handleMCPServeRequest(
 
 		return mcpServeResponse{
 			Result: resultObj,
+		}
+	case "config/set":
+		if proxy == nil {
+			return mcpServeResponse{
+				Error: &struct {
+					Code    int    `json:"code"`
+					Message string `json:"message"`
+				}{
+					Code:    -32603,
+					Message: "proxy not initialized",
+				},
+			}
+		}
+		var params struct {
+			Servers []mcpproxy.ServerConfig `json:"servers"`
+		}
+		if req.Params != nil {
+			if err := json.Unmarshal(req.Params, &params); err != nil {
+				return mcpServeResponse{
+					Error: &struct {
+						Code    int    `json:"code"`
+						Message string `json:"message"`
+					}{
+						Code:    -32602,
+						Message: fmt.Sprintf("invalid config/set params: %v", err),
+					},
+				}
+			}
+		}
+		if err := proxy.Reload(params.Servers); err != nil {
+			log.Printf("Failed to reload MCP config: %v", err)
+			return mcpServeResponse{
+				Error: &struct {
+					Code    int    `json:"code"`
+					Message string `json:"message"`
+				}{
+					Code:    -32603,
+					Message: err.Error(),
+				},
+			}
+		}
+		lastMCPConfig = params.Servers
+		log.Printf("MCP config updated via config/set: %d servers", len(params.Servers))
+		return mcpServeResponse{
+			Result: map[string]interface{}{"ok": true},
 		}
 	default:
 		return mcpServeResponse{

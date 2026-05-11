@@ -1137,15 +1137,17 @@ func (h *apiHandlers) handleGetSession(w http.ResponseWriter, r *http.Request, s
 	}
 
 	writeJSON(w, map[string]any{
-		"id":            session.ID,
-		"key":           session.Key,
-		"title":         session.Title,
-		"status":        session.Status,
+		"id":           session.ID,
+		"entity_id":    session.ID,
+		"canonical_id": session.ID,
+		"key":          session.Key,
+		"title":        session.Title,
+		"status":       session.Status,
 		"message_count": session.MessageCount,
-		"total_tokens":  session.TotalTokens,
-		"created_at":    session.CreatedAt.Format(time.RFC3339),
-		"updated_at":    updatedAt,
-		"aggregates":    agg,
+		"total_tokens": session.TotalTokens,
+		"created_at":   session.CreatedAt.Format(time.RFC3339),
+		"updated_at":   updatedAt,
+		"aggregates":   agg,
 	})
 }
 

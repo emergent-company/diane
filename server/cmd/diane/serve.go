@@ -163,6 +163,17 @@ func cmdServe() {
 		}()
 	}
 
+	// ── Start MCP config watch (SSE) ──
+	// Watches for MCPProxyConfig entity changes in the graph and auto-pushes
+	// updated config to the relay session, so MCP servers reload without restart.
+	if hasInstance {
+		go func() {
+			instanceID := resolveInstanceID(pc, *instancePtr)
+			log.Printf("[SERVE] Starting MCP config watch (SSE)...")
+			startMCPConfigWatch(context.Background(), pc.ServerURL, pc.Token, pc.ProjectID, instanceID)
+		}()
+	}
+
 	// ── Start auto-upgrade loop ──
 	if startAPI {
 		startAutoUpgrade(pc)

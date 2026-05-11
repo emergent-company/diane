@@ -19,7 +19,14 @@ FAIL=0
 echo ""
 echo "=== [1/3] Go Backend Tests ==="
 cd "$GO_DIR"
-if go vet ./... 2>&1 | tail -3; then
+
+# Run vet — capture full output, tail only summary lines for display
+set +e
+go vet ./... > /tmp/govet-output.txt 2>&1
+VET_EXIT=$?
+set -e
+tail -3 /tmp/govet-output.txt
+if [ "$VET_EXIT" -eq 0 ]; then
     echo "✓ go vet passed"
     ((PASS++))
 else
@@ -27,7 +34,13 @@ else
     ((FAIL++))
 fi
 
-if go test ./... 2>&1 | tail -3; then
+# Run tests — capture full output (avoid pipefail/SIGPIPE from tail)
+set +e
+go test -count=1 ./... > /tmp/gotest-output.txt 2>&1
+TEST_EXIT=$?
+set -e
+tail -10 /tmp/gotest-output.txt
+if [ "$TEST_EXIT" -eq 0 ]; then
     echo "✓ go test passed"
     ((PASS++))
 else

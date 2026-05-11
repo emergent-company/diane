@@ -1011,8 +1011,13 @@ struct DianeSession: Identifiable, Codable, Hashable, Sendable {
     
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        // Support both flat (id) and graph (entity_id) formats
-        if let flatID = try? container.decode(String.self, forKey: .id) {
+        // Support both flat (id) and graph (entity_id) formats.
+        // Prefer entity_id (the canonical session ID) over id (which may be
+        // a version ID in graph-object responses) so that session IDs are
+        // consistent across list, detail, and create endpoints.
+        if let entityID = try container.decodeIfPresent(String.self, forKey: .entityID), !entityID.isEmpty {
+            self.id = entityID
+        } else if let flatID = try? container.decode(String.self, forKey: .id), !flatID.isEmpty {
             self.id = flatID
         } else {
             self.id = try container.decode(String.self, forKey: .entityID)

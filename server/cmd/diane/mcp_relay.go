@@ -23,6 +23,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -43,6 +44,16 @@ import (
 	"github.com/Emergent-Comapny/diane/internal/config"
 	"github.com/gorilla/websocket"
 )
+
+// graphMCPConfig holds the merged MCP proxy config JSON from the graph,
+// set by syncConfigFromGraph before the relay starts. The relay sends
+// this to the mcp serve subprocess via config/set notifications.
+var graphMCPConfig string
+
+// pushMCPConfigFunc is set by the active MCPSession to push updated config
+// to the mcp serve subprocess. Called by the SSE watch goroutine when
+// MCPProxyConfig changes in the graph, enabling auto-reload without restart.
+var pushMCPConfigFunc func(configJSON string)
 
 // MCPRelayConfig holds the configuration for the relay connection.
 type MCPRelayConfig struct {
@@ -201,6 +212,18 @@ func (s *MCPSession) run() error {
 	// tools and re-registers. This picks up slow-starting servers (AirMCP)
 	// without blocking initial registration.
 	s.startToolWatch()
+
+	// Push MCP proxy config from graph to subprocess via in-band JSON-RPC.
+	// This replaces the old file-based approach (mcp-servers.json).
+	s.sendConfigToMCP()
+
+	// Register the push function so the SSE watch goroutine can push config
+	// updates to this session when MCPProxyConfig changes in the graph.
+	pushMCPConfigFunc = func(configJSON string) {
+		graphMCPConfig = configJSON
+		s.sendConfigToMCP()
+	}
+	defer func() { pushMCPConfigFunc = nil }()
 
 	defer s.disconnectWS()
 
@@ -392,6 +415,22 @@ func (s *MCPSession) forwardToMCP(frame RelayFrame) {
 	s.mcpIn.Flush()
 }
 
+// sendConfigToMCP pushes the merged MCP proxy config from the graph to the
+// mcp serve subprocess as a JSON-RPC notification. This replaces the old
+// file-based mcp-servers.json approach — config flows graph → relay → subprocess.
+func (s *MCPSession) sendConfigToMCP() {
+	if graphMCPConfig == "" {
+		return
+	}
+	msg := `{"jsonrpc":"2.0","method":"config/set","params":` + graphMCPConfig + `}`
+	s.mcpMu.Lock()
+	s.mcpIn.WriteString(msg)
+	s.mcpIn.WriteByte('\n')
+	s.mcpIn.Flush()
+	s.mcpMu.Unlock()
+	log.Printf("[mcp-relay] Pushed MCP config to subprocess: %s", msg[:min(len(msg), 120)])
+}
+
 func (s *MCPSession) sendRegister() {
 	// Single tools/list poll — register immediately with whatever is available.
 	// Slow-starting servers (AirMCP) get picked up later via toolWatchLoop.
@@ -568,12 +607,8 @@ func syncConfigFromGraph(serverURL, token, projectID, instanceID string) {
 		if len(matched) > 0 {
 			// Merge configs (highest score wins on conflict)
 			merged := mergeProxyConfigs(matched)
-			configPath := filepath.Join(dianeDir, "mcp-servers.json")
-			if err := os.WriteFile(configPath, []byte(merged), 0644); err != nil {
-				log.Printf("[mcp-relay] Failed to write mcp-servers.json: %v", err)
-			} else {
-				log.Printf("[mcp-relay] Synced MCP proxy config from graph (%d matching, merged to %s)", len(matched), configPath)
-			}
+			graphMCPConfig = merged
+			log.Printf("[mcp-relay] Synced MCP proxy config from graph (%d matching, stored in-memory)", len(matched))
 		} else {
 			log.Printf("[mcp-relay] No MCPProxyConfig objects found for scope matching '%s'", instanceID)
 		}
@@ -704,18 +739,37 @@ func queryGraphObjects(memoryCLI, serverURL, token, projectID, objectType string
 		return nil, fmt.Errorf("%s: %s", err, string(out))
 	}
 
-	var objects []map[string]interface{}
-	if err := json.Unmarshal(out, &objects); err != nil {
-		// Try single object response
-		var single map[string]interface{}
-		if err2 := json.Unmarshal(out, &single); err2 == nil {
-			// Wrap single object in array
-			objects = []map[string]interface{}{single}
-		} else {
-			return nil, fmt.Errorf("parse %s list: %w", objectType, err)
-		}
+	// Debug: dump raw output
+	os.WriteFile("/tmp/mcp-relay-"+objectType+".json", out, 0644)
+
+	// Strip trailing non-JSON content (memory CLI appends upgrade notices to stdout)
+	out = stripTrailingJSON(out)
+
+	// The CLI returns {"items": [...], "total": N}
+	var listResp struct {
+		Items []map[string]interface{} `json:"items"`
 	}
-	return objects, nil
+	if err := json.Unmarshal(out, &listResp); err == nil && listResp.Items != nil {
+		return listResp.Items, nil
+	}
+	log.Printf("[mcp-relay] queryGraphObjects: items parse failed (err=%v, nil=%v, first=%.60s)", err, listResp.Items == nil, string(out[:min(len(out), 60)]))
+
+	// Fallback: try flat array
+	var objects []map[string]interface{}
+	if err := json.Unmarshal(out, &objects); err == nil {
+		return objects, nil
+	}
+	log.Printf("[mcp-relay] queryGraphObjects: flat array parse failed: %v", err)
+
+	// Last resort: single object
+	var single map[string]interface{}
+	if err := json.Unmarshal(out, &single); err == nil {
+		log.Printf("[mcp-relay] queryGraphObjects: single object with %d keys", len(single))
+		return []map[string]interface{}{single}, nil
+	}
+	log.Printf("[mcp-relay] queryGraphObjects: all parse attempts failed for %s: first=%.60s", objectType, string(out[:min(len(out), 60)]))
+
+	return nil, fmt.Errorf("parse %s list: %s", objectType, string(out[:min(len(out), 200)]))
 }
 
 // scopeMatchScore returns how well a scope matches an instance ID.
@@ -751,6 +805,23 @@ func getPropInt(obj map[string]interface{}, key string) int {
 	}
 	v, _ := props[key].(float64)
 	return int(v)
+}
+
+// stripTrailingJSON finds the last complete JSON object/array in data
+// and returns only up to and including it, discarding trailing non-JSON
+// content such as CLI upgrade notices.
+func stripTrailingJSON(data []byte) []byte {
+	// Find the last closing brace for an object or array
+	lastObj := bytes.LastIndex(data, []byte("}"))
+	lastArr := bytes.LastIndex(data, []byte("]"))
+	end := lastObj
+	if lastArr > lastObj {
+		end = lastArr
+	}
+	if end < 0 {
+		return data
+	}
+	return data[:end+1]
 }
 
 // mergeProxyConfigs merges multiple scored MCP proxy configs into one.
