@@ -47,7 +47,7 @@ func main() {
 		fmt.Println("  upgrade         Upgrade Diane to the latest version")
 		fmt.Println("  version         Show CLI and companion app versions")
 		fmt.Println("  service         Manage the MCP relay as a service (start|stop|status|restart)")
-		fmt.Println("  mcp             Manage MCP servers (list, relay, serve)")
+		fmt.Println("  mcp             Manage MCP servers (list, relay)")
 		fmt.Println("  tool            Test MCP tools through the proxy (test)")
 		fmt.Println("  schema apply    Apply embedded schema definitions to Memory Platform")
 		fmt.Println("  serve           Start bot, relay, and local companion API (--api-port 0 to disable)")
@@ -104,8 +104,7 @@ func main() {
 			fmt.Println("Commands:")
 			fmt.Println("  auth            Authenticate an MCP server via OAuth (--server required)")
 			fmt.Println("  list            List configured MCP servers (and tools with --tools)")
-			fmt.Println("  relay           Connect MCP server to Memory Platform relay")
-			fmt.Println("  serve           Run MCP JSON-RPC server (stdin/stdout)")
+		fmt.Println("  relay           Connect MCP server to Memory Platform relay")
 			os.Exit(1)
 		}
 		switch os.Args[2] {

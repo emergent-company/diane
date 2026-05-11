@@ -17,6 +17,7 @@ import (
 
 	"github.com/Emergent-Comapny/diane/internal/agents"
 	"github.com/Emergent-Comapny/diane/internal/config"
+	"github.com/Emergent-Comapny/diane/internal/mcpproxy"
 	"github.com/Emergent-Comapny/diane/internal/memory"
 	"github.com/Emergent-Comapny/diane/internal/schema"
 	"github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/acp"
@@ -54,6 +55,7 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	mux.HandleFunc("/api/chat/send", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleChatSend(w, r) })
 	mux.HandleFunc("/api/chat/stream", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleChatStream(w, r) })
 	mux.HandleFunc("/api/mcp-servers", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleMCPServers(w, r) })
+	mux.HandleFunc("/api/mcp-servers/", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleMCPServerSubRoutes(w, r) })
 	mux.HandleFunc("/api/nodes", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleNodes(w, r) })
 	mux.HandleFunc("/api/nodes/", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleNodeSubRoutes(w, r) })
 	mux.HandleFunc("/api/providers", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleProviders(w, r) })
@@ -63,7 +65,7 @@ func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) 
 	mux.HandleFunc("/api/schema/objects/", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleSchemaObjects(w, r) })
 	mux.HandleFunc("/api/doctor", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleDoctor(w, r) })
 
-	expected := 17
+	expected := 18
 	if registered != expected {
 		log.Printf("[LOCAL-API] WARNING: registered %d routes, expected %d — check for missing handlers", registered, expected)
 	}
@@ -1747,6 +1749,149 @@ func (h *apiHandlers) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, map[string]any{"servers": servers})
+}
+
+// ── MCP server sub-routes ──
+
+func (h *apiHandlers) handleMCPServerSubRoutes(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/mcp-servers/")
+	parts := strings.SplitN(path, "/", 2)
+	if len(parts) == 0 || parts[0] == "" {
+		jsonError(w, http.StatusBadRequest, "invalid MCP server name")
+		return
+	}
+	serverName, err := url.PathUnescape(parts[0])
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid server name encoding")
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "tools" {
+		if r.Method != http.MethodGet {
+			jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		h.handleMCPServerTools(w, r, serverName)
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "prompts" {
+		if r.Method != http.MethodGet {
+			jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		// Prompts not yet supported at proxy level — return empty list
+		writeJSON(w, map[string]any{"prompts": []any{}})
+		return
+	}
+
+	jsonError(w, http.StatusNotFound, "not found")
+}
+
+// handleMCPServerTools returns tools exposed by a specific MCP server.
+// GET /api/mcp-servers/{name}/tools → {"tools": [...]}
+func (h *apiHandlers) handleMCPServerTools(w http.ResponseWriter, r *http.Request, serverName string) {
+	ctx := r.Context()
+
+	// Load the server config from the graph
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		writeJSON(w, map[string]any{"tools": []any{}})
+		return
+	}
+	defer bridge.Close()
+
+	entries, err := bridge.ListMCPProxyConfigs(ctx)
+	if err != nil {
+		writeJSON(w, map[string]any{"tools": []any{}})
+		return
+	}
+
+	// Find the matching server config by name
+	var foundCfg *struct {
+		Name    string            `json:"name"`
+		Type    string            `json:"type"`
+		Enabled bool              `json:"enabled"`
+		Command string            `json:"command"`
+		Args    []string          `json:"args"`
+		Env     map[string]string `json:"env"`
+		URL     string            `json:"url"`
+		Headers map[string]string `json:"headers"`
+		Timeout int               `json:"timeout"`
+	}
+
+	for _, e := range entries {
+		var sc struct {
+			Name    string            `json:"name"`
+			Type    string            `json:"type"`
+			Enabled bool              `json:"enabled"`
+			Command string            `json:"command"`
+			Args    []string          `json:"args"`
+			Env     map[string]string `json:"env"`
+			URL     string            `json:"url"`
+			Headers map[string]string `json:"headers"`
+			Timeout int               `json:"timeout"`
+		}
+		if err := json.Unmarshal([]byte(e.Config), &sc); err != nil {
+			continue
+		}
+		if sc.Name == serverName {
+			cp := sc
+			foundCfg = &cp
+			break
+		}
+	}
+
+	if foundCfg == nil || !foundCfg.Enabled {
+		writeJSON(w, map[string]any{"tools": []any{}})
+		return
+	}
+
+	// Build ServerConfig list for the proxy
+	proxyServers := []mcpproxy.ServerConfig{
+		{
+			Name:    foundCfg.Name,
+			Type:    foundCfg.Type,
+			Command: foundCfg.Command,
+			Args:    foundCfg.Args,
+			URL:     foundCfg.URL,
+			Headers: foundCfg.Headers,
+			Env:     foundCfg.Env,
+			Timeout: foundCfg.Timeout,
+			Enabled: true,
+		},
+	}
+
+	proxy, err := mcpproxy.NewProxy(proxyServers)
+	if err != nil {
+		log.Printf("[LOCAL-API] handleMCPServerTools: NewProxy(%s): %v", serverName, err)
+		writeJSON(w, map[string]any{"tools": []any{}})
+		return
+	}
+	defer proxy.Close()
+
+	tools, err := proxy.ListAllTools()
+	if err != nil {
+		log.Printf("[LOCAL-API] handleMCPServerTools: ListAllTools(%s): %v", serverName, err)
+		writeJSON(w, map[string]any{"tools": []any{}})
+		return
+	}
+
+	// Strip the server prefix from tool names (response is already scoped to this server)
+	var result []map[string]any
+	prefix := serverName + "_"
+	for _, tool := range tools {
+		if name, ok := tool["name"].(string); ok && strings.HasPrefix(name, prefix) {
+			tool["name"] = strings.TrimPrefix(name, prefix)
+			delete(tool, "_server") // internal field, not needed by the companion
+		}
+		result = append(result, tool)
+	}
+	if result == nil {
+		result = []map[string]any{}
+	}
+
+	writeJSON(w, map[string]any{"tools": result})
 }
 
 // handleNodes returns connected relay nodes from the Memory Platform.

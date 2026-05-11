@@ -419,6 +419,14 @@ class EmergentAPIClient: ObservableObject {
         return resp.data
     }
 
+    /// Recreate chunks for a document (deletes existing chunks, regenerates from source content).
+    /// POST /api/documents/{id}/recreate-chunks
+    func recreateChunks(projectID: String, documentID: String) async throws {
+        _ = try await post("/api/documents/\(documentID)/recreate-chunks",
+                           body: Data("{}".utf8),
+                           projectID: projectID)
+    }
+
     // MARK: - Query
 
     func executeQuery(projectID: String, query: String) async throws -> QueryResult {

@@ -17,7 +17,6 @@ import (
 	"github.com/Emergent-Comapny/diane/internal/config"
 	sdk "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk"
 	sdkagents "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agentdefinitions"
-	"github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/graph"
 )
 
 // ---------------------------------------------------------------------------
@@ -843,120 +842,8 @@ If nothing is worth saving from a session, skip it.`,
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Seeding: Built-in → Memory Platform
-// ---------------------------------------------------------------------------
-
-// SeedBuiltInAgents ensures all built-in agents exist on Memory Platform.
-// Existing built-ins are updated if their definition changed. Non-built-in
-// agents that happen to share a name with a built-in are NOT touched
-// (they're user agents that happen to clash — we skip to avoid overwriting).
-func SeedBuiltInAgents(ctx context.Context, client *sdk.Client) error {
-	builtIns := BuiltInAgents()
-
-	// Fetch existing agent definitions from MP
-	resp, err := client.AgentDefinitions.List(ctx)
-	if err != nil {
-		return fmt.Errorf("list existing agent defs: %w", err)
-	}
-
-	// Index existing by name
-	existing := make(map[string]string) // name → ID
-	if resp != nil {
-		for _, d := range resp.Data {
-			existing[d.Name] = d.ID
-		}
-	}
-
-	// diane-default is the project's default agent — it's stored separately on the MP
-	// and AgentDefinitions.List() doesn't return it. When Create returns 409, we skip
-	// it gracefully — the local API falls back to the built-in registry in code, and
-	// the MP default can be updated when the API adds support for updating it.
-	if _, hasDefault := existing["diane-default"]; !hasDefault {
-		// Try to find it via graph search (works for some MP versions)
-		defaultID, err := findAgentDefIDByName(ctx, client, "diane-default")
-		if err == nil && defaultID != "" {
-			existing["diane-default"] = defaultID
-		}
-	}
-
-	for _, ba := range builtIns {
-		req := toCreateRequest(ba)
-		defID, exists := existing[ba.Name]
-
-		if exists {
-			// Update — preserve existing ID, update fields
-			updReq := toUpdateRequest(ba)
-			_, err := client.AgentDefinitions.Update(ctx, defID, updReq)
-			if err != nil {
-				return fmt.Errorf("update built-in agent %s: %w", ba.Name, err)
-			}
-		} else {
-			// Create
-			defResp, err := client.AgentDefinitions.Create(ctx, req)
-			if err != nil {
-				// 409 conflict: agent exists but not returned by List() (stored separately).
-				// Find via graph search and update instead.
-				if strings.Contains(err.Error(), "409") || strings.Contains(err.Error(), "conflict") {
-					foundID, findErr := findAgentDefIDByName(ctx, client, ba.Name)
-					if findErr != nil {
-						return fmt.Errorf("create built-in agent %s (conflict, then find): %w (orig: %v)", ba.Name, findErr, err)
-					}
-					updReq := toUpdateRequest(ba)
-					_, updErr := client.AgentDefinitions.Update(ctx, foundID, updReq)
-					if updErr != nil {
-						return fmt.Errorf("create built-in agent %s (conflict, then update): %w", ba.Name, updErr)
-					}
-					continue
-				}
-				return fmt.Errorf("create built-in agent %s: %w", ba.Name, err)
-			}
-
-			// Set workspace config if sandbox is enabled
-			if ba.Sandbox != nil && ba.Sandbox.Enabled && defResp != nil {
-				sbConfig := map[string]any{
-					"enabled":    true,
-					"baseImage":  ba.Sandbox.BaseImage,
-					"pullPolicy": ba.Sandbox.PullPolicy,
-				}
-				if ba.Sandbox.Env != nil {
-					sbConfig["env"] = ba.Sandbox.Env
-				}
-				if _, err := client.AgentDefinitions.SetWorkspaceConfig(ctx, defResp.Data.ID, sbConfig); err != nil {
-					return fmt.Errorf("set workspace config for %s: %w", ba.Name, err)
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-// findAgentDefIDByName searches the MP graph for an agent definition by name.
-func findAgentDefIDByName(ctx context.Context, client *sdk.Client, name string) (string, error) {
-	resp, err := client.Graph.ListObjects(ctx, &graph.ListObjectsOptions{
-		Limit: 50,
-	})
-	if err != nil {
-		return "", fmt.Errorf("find %s: list graph objects: %w", name, err)
-	}
-	if resp == nil {
-		return "", fmt.Errorf("find %s: nil response", name)
-	}
-	for _, obj := range resp.Items {
-		if obj.Properties == nil {
-			continue
-		}
-		objName, _ := obj.Properties["name"].(string)
-		if objName == name {
-			return obj.ID, nil
-		}
-	}
-	return "", fmt.Errorf("find %s: not found (searched %d items)", name, len(resp.Items))
-}
-
 // SeedAgentList seeds a list of BuiltInAgent definitions to Memory Platform.
-// Unlike SeedBuiltInAgents, this accepts a custom agent list (after overrides
+// Unlike SeedBuiltInAgents (deprecated), this accepts a custom agent list (after overrides
 // and tool pattern merges have been applied).
 // SeedAgentList creates or updates agent definitions on Memory Platform.
 // The `agents` parameter is the filtered list of agents to seed (disabled agents excluded).

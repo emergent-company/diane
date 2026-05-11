@@ -14,6 +14,10 @@ struct DocumentDetailView: View {
     @State private var isLoadingBranchObjects = false
     @State private var showContent = false
 
+    @State private var isRetryingChunks = false
+    @State private var retryMessage: String?
+    @State private var retryMessageIsError = false
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Design.Spacing.md) {
@@ -111,10 +115,27 @@ struct DocumentDetailView: View {
                     Label(err, systemImage: "info.circle")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-                    Text("Extraction will run automatically after upload. Check back later.")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+
+                    let status = document.extractionStatus ?? ""
+                    if status == "dead_letter" || status == "failed" {
+                        Label("Extraction entered terminal failure state. Retry below.",
+                              systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    } else {
+                        Text("Extraction will run automatically after upload. Check back later.")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
                 }
+
+                // Retry actions for failed/dead_letter extraction
+                let status = document.extractionStatus ?? ""
+                if status == "dead_letter" || status == "failed" {
+                    Divider()
+                    retryActions
+                }
+
             } else if let summary = extractionSummary {
                 // Branch name
                 if let jobId = extractionSummary?.jobId {
@@ -280,6 +301,72 @@ struct DocumentDetailView: View {
         default:
             EmptyView()
         }
+    }
+
+    // MARK: - Retry Actions
+
+    @ViewBuilder
+    private var retryActions: some View {
+        VStack(alignment: .leading, spacing: Design.Spacing.sm) {
+            Text("Recovery Actions")
+                .font(.subheadline)
+                .fontWeight(.medium)
+
+            // Recreate chunks
+            HStack {
+                Button {
+                    Task { await performRecreateChunks() }
+                } label: {
+                    if isRetryingChunks {
+                        HStack(spacing: 4) {
+                            ProgressView().controlSize(.small)
+                            Text("Recreating…")
+                        }
+                    } else {
+                        Label("Recreate Chunks", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(isRetryingChunks)
+                .help("Deletes existing chunks and regenerates from source content using current strategy")
+
+                Spacer()
+            }
+
+            // Retry message feedback
+            if let msg = retryMessage {
+                Label(msg, systemImage: retryMessageIsError ? "xmark.circle" : "checkmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(retryMessageIsError ? .red : .green)
+            }
+
+            Text("Recreate Chunks: re-chunks the document from its converted text. "
+                 + "If extraction failed due to chunk quality, this may help.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    private func performRecreateChunks() async {
+        isRetryingChunks = true
+        retryMessage = nil
+        retryMessageIsError = false
+        do {
+            try await apiClient.recreateChunks(
+                projectID: serverConfig.projectID,
+                documentID: document.id
+            )
+            retryMessage = "Chunks recreated. Extraction will re-run automatically."
+            retryMessageIsError = false
+            // Refresh document + extraction after a short delay
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            await loadExtraction()
+        } catch {
+            retryMessage = error.localizedDescription
+            retryMessageIsError = true
+        }
+        isRetryingChunks = false
     }
 
     private func loadExtraction() async {

@@ -27,6 +27,7 @@ import (
 
 	sdkagents "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agentdefinitions"
 	sdkagentrun "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agents"
+	sdkskills "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/skills"
 )
 
 // Bridge is the main interface to the Memory Platform.
@@ -334,6 +335,40 @@ func (b *Bridge) UpsertOrgProvider(ctx context.Context, orgID, providerType stri
 // TestProvider sends a live generation call to verify provider credentials work.
 func (b *Bridge) TestProvider(ctx context.Context, orgID, providerType string) (*sdkprovider.TestProviderResponse, error) {
 	return b.client.Provider.TestProvider(ctx, providerType, b.projectID, orgID)
+}
+
+// ============================================================================
+// Skills API — delegates to Memory Platform's Skills API
+// ============================================================================
+
+// SkillsClient returns the raw skills client for advanced operations.
+func (b *Bridge) SkillsClient() *sdkskills.Client {
+	return b.client.Skills
+}
+
+// ListSkills returns all skills for the current project (merged with global).
+func (b *Bridge) ListSkills(ctx context.Context) ([]*sdkskills.Skill, error) {
+	return b.client.Skills.List(ctx, b.projectID)
+}
+
+// GetSkill returns a skill by ID.
+func (b *Bridge) GetSkill(ctx context.Context, id string) (*sdkskills.Skill, error) {
+	return b.client.Skills.Get(ctx, id)
+}
+
+// CreateSkill creates a new skill scoped to the current project.
+func (b *Bridge) CreateSkill(ctx context.Context, req *sdkskills.CreateSkillRequest) (*sdkskills.Skill, error) {
+	return b.client.Skills.Create(ctx, b.projectID, req)
+}
+
+// UpdateSkill updates an existing skill.
+func (b *Bridge) UpdateSkill(ctx context.Context, id string, req *sdkskills.UpdateSkillRequest) (*sdkskills.Skill, error) {
+	return b.client.Skills.Update(ctx, id, req)
+}
+
+// DeleteSkill deletes a skill by ID.
+func (b *Bridge) DeleteSkill(ctx context.Context, id string) error {
+	return b.client.Skills.Delete(ctx, id)
 }
 
 // ============================================================================
