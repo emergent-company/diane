@@ -18,6 +18,7 @@ import (
 
 	"github.com/Emergent-Comapny/diane/internal/agents"
 	"github.com/Emergent-Comapny/diane/internal/config"
+	"github.com/Emergent-Comapny/diane/internal/mcpproxy"
 	"github.com/Emergent-Comapny/diane/internal/memory"
 	"github.com/Emergent-Comapny/diane/internal/schema"
 	"github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/acp"
@@ -1724,48 +1725,72 @@ func (h *apiHandlers) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type serverEntry struct {
-		Name    string `json:"name"`
-		Type    string `json:"type"`
-		Enabled bool   `json:"enabled"`
-		Scope   string `json:"scope"`
-		Version int    `json:"version"`
-	}
+		type serverEntry struct {
+			Name         string `json:"name"`
+			Type         string `json:"type"`
+			Enabled      bool   `json:"enabled"`
+			Scope        string `json:"scope"`
+			Version      int    `json:"version"`
+			Status       string `json:"status"`
+			ErrorMessage string `json:"error_message,omitempty"`
+		}
 
-	servers := make([]serverEntry, 0, len(entries))
-	seen := make(map[string]int) // server name → index in servers (dedup by highest version)
-	for _, e := range entries {
-		var sc struct {
-			Name    string `json:"name"`
-			Type    string `json:"type"`
-			Enabled bool   `json:"enabled"`
-		}
-		if err := json.Unmarshal([]byte(e.Config), &sc); err != nil {
-			log.Printf("[LOCAL-API] mcp server config unmarshal (%s): %v", e.Scope, err)
-			continue
-		}
-		if idx, exists := seen[sc.Name]; exists {
-			// Keep the entry with the higher version (newer config wins)
-			if e.Version > servers[idx].Version {
-				servers[idx] = serverEntry{
-					Name:    sc.Name,
-					Type:    sc.Type,
-					Enabled: sc.Enabled,
-					Scope:   e.Scope,
-					Version: e.Version,
+		servers := make([]serverEntry, 0, len(entries))
+		seen := make(map[string]int) // server name → index in servers (dedup by highest version)
+		for _, e := range entries {
+			var fullConfig mcpproxy.ServerConfig
+			if err := json.Unmarshal([]byte(e.Config), &fullConfig); err != nil {
+				log.Printf("[LOCAL-API] mcp server config unmarshal (%s): %v", e.Scope, err)
+				continue
+			}
+
+			// Compute runtime status
+			status := "running"
+			var errorMsg string
+			if !fullConfig.Enabled {
+				status = "disabled"
+			} else if fullConfig.Type == "http" || fullConfig.Type == "sse" || fullConfig.Type == "streamable-http" {
+				if fullConfig.OAuth != nil {
+					tokens, err := mcpproxy.LoadTokens(fullConfig.Name)
+					if err != nil {
+						if os.IsNotExist(err) {
+							status = "auth_required"
+						} else {
+							status = "error"
+							errorMsg = fmt.Sprintf("failed to load auth tokens: %v", err)
+						}
+					} else if !tokens.ExpiresAt.IsZero() && time.Now().After(tokens.ExpiresAt) {
+						status = "auth_expired"
+					}
 				}
 			}
-			continue
+
+			if idx, exists := seen[fullConfig.Name]; exists {
+				// Keep the entry with the higher version (newer config wins)
+				if e.Version > servers[idx].Version {
+					servers[idx] = serverEntry{
+						Name:         fullConfig.Name,
+						Type:         fullConfig.Type,
+						Enabled:      fullConfig.Enabled,
+						Scope:        e.Scope,
+						Version:      e.Version,
+						Status:       status,
+						ErrorMessage: errorMsg,
+					}
+				}
+				continue
+			}
+			seen[fullConfig.Name] = len(servers)
+			servers = append(servers, serverEntry{
+				Name:         fullConfig.Name,
+				Type:         fullConfig.Type,
+				Enabled:      fullConfig.Enabled,
+				Scope:        e.Scope,
+				Version:      e.Version,
+				Status:       status,
+				ErrorMessage: errorMsg,
+			})
 		}
-		seen[sc.Name] = len(servers)
-		servers = append(servers, serverEntry{
-			Name:    sc.Name,
-			Type:    sc.Type,
-			Enabled: sc.Enabled,
-			Scope:   e.Scope,
-			Version: e.Version,
-		})
-	}
 
 	writeJSON(w, map[string]any{"servers": servers})
 }

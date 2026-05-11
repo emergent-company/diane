@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 // MARK: - Project
 
@@ -285,11 +286,43 @@ public struct MCPServer: Identifiable, Codable, Hashable, Sendable {
     public let args: [String]?
     public let env: [String: String]?
     public let timeout: Int?
+    public let status: String?       // "running" | "disabled" | "auth_required" | "auth_expired" | "error"
+    public let errorMessage: String? // error details when status == "error"
 
     public var id: String { name }
 
     public func hash(into hasher: inout Hasher) { hasher.combine(name) }
     public static func == (lhs: MCPServer, rhs: MCPServer) -> Bool { lhs.name == rhs.name }
+}
+
+// MARK: - Status Display
+
+public extension MCPServer {
+    /// Human-readable label for the current server status.
+    var statusLabel: String {
+        guard let s = status else { return enabled ? "Running" : "Disabled" }
+        switch s {
+        case "running":   return "Running"
+        case "disabled":  return "Disabled"
+        case "auth_required": return "Auth Required"
+        case "auth_expired":  return "Auth Expired"
+        case "error":     return errorMessage ?? "Error"
+        default:          return enabled ? "Running" : "Disabled"
+        }
+    }
+
+    /// Dot color representing server status.
+    var statusColor: Color {
+        guard let s = status else { return enabled ? .green : .secondary }
+        switch s {
+        case "running":        return .green
+        case "disabled":       return .secondary
+        case "auth_required",
+             "auth_expired":   return .orange
+        case "error":          return .red
+        default:               return enabled ? .green : .secondary
+        }
+    }
 }
 
 public struct MCPTool: Identifiable, Codable, Sendable {

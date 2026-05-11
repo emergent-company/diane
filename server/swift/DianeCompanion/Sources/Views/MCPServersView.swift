@@ -143,7 +143,7 @@ struct MCPServersView: View {
     private func serverRow(_ server: MCPServer) -> some View {
         HStack(spacing: 8) {
             Circle()
-                .fill(server.enabled ? Color.green : Color.secondary)
+                .fill(server.statusColor)
                 .frame(width: 7, height: 7)
             VStack(alignment: .leading, spacing: 2) {
                 Text(server.name)
@@ -153,9 +153,9 @@ struct MCPServersView: View {
                     Text(server.type.uppercased())
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                    Text(server.enabled ? "Enabled" : "Disabled")
+                    Text(server.statusLabel)
                         .font(.caption2)
-                        .foregroundStyle(server.enabled ? Color.green : Color.secondary)
+                        .foregroundStyle(server.statusColor)
                 }
             }
             Spacer()
@@ -250,9 +250,9 @@ private struct MCPServerDetailView: View {
                         .fontWeight(.semibold)
                     HStack(spacing: 6) {
                         Circle()
-                            .fill(server.enabled ? Color.green : Color.secondary)
+                            .fill(server.statusColor)
                             .frame(width: 7, height: 7)
-                        Text(server.enabled ? "Enabled" : "Disabled")
+                        Text(server.statusLabel)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
