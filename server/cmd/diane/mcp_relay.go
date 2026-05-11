@@ -774,16 +774,37 @@ func queryGraphObjects(memoryCLI, serverURL, token, projectID, objectType string
 
 // scopeMatchScore returns how well a scope matches an instance ID.
 // 3 = exact match, 2 = scope starts with instance prefix, 1 = scope=all, 0 = no match
+//
+// Scopes can use prefixes like "instance:" or "slave:" for targeting:
+//   - "all" or "" matches everything (score 1)
+//   - "instance:mcj-mini" matches instance ID "mcj-mini" (strips prefix, score 3)
+//   - "instance:tool-test" matches instance ID "tool-test" (score 3)
+//   - "slave:*" matches any instance ID (wildcard, score 2)
+//   - "mcj-mini" matches instance ID "mcj-mini" exactly (score 3)
 func scopeMatchScore(scope, instanceID string) int {
 	if scope == "" || scope == "all" {
 		return 1
 	}
-	if scope == instanceID {
-		return 3
-	}
-	if strings.HasPrefix(instanceID, scope) || strings.HasPrefix(scope, instanceID) {
+
+	// Strip common prefixes for comparison
+	scopeID := strings.TrimPrefix(scope, "instance:")
+	scopeID = strings.TrimPrefix(scopeID, "slave:")
+
+	// If scope is "slave:*" or "instance:*", match any instance
+	if scopeID == "*" {
 		return 2
 	}
+
+	// Exact match after stripping prefixes
+	if scopeID == instanceID {
+		return 3
+	}
+
+	// Prefix match
+	if strings.HasPrefix(instanceID, scopeID) || strings.HasPrefix(scopeID, instanceID) {
+		return 2
+	}
+
 	return 0
 }
 
@@ -831,7 +852,13 @@ func mergeProxyConfigs(configs []scoredConfig) string {
 		return `{"servers":[]}`
 	}
 	if len(configs) == 1 {
-		return configs[0].config
+		// Always wrap in {"servers": [...]} so the subprocess config/set handler
+		// can parse it uniformly regardless of config count.
+		wrapped := configs[0].config
+		if !strings.HasPrefix(wrapped, `{"servers":`) {
+			wrapped = `{"servers":[` + configs[0].config + `]}`
+		}
+		return wrapped
 	}
 
 	// Parse all configs and merge servers
@@ -842,6 +869,9 @@ func mergeProxyConfigs(configs []scoredConfig) string {
 		Command string            `json:"command"`
 		Args    []string          `json:"args"`
 		Env     map[string]string `json:"env"`
+		URL     string            `json:"url"`
+		Headers map[string]string `json:"headers,omitempty"`
+		Timeout int               `json:"timeout,omitempty"`
 	}
 	type proxyCfg struct {
 		Servers []serverDef `json:"servers"`
@@ -860,8 +890,14 @@ func mergeProxyConfigs(configs []scoredConfig) string {
 	}
 
 	for _, sc := range configs {
+		// Configs may be stored as a single server object (graph entries)
+		// or pre-wrapped as {"servers":[...]} (legacy). Detect and normalize.
+		wrapped := sc.config
+		if !strings.HasPrefix(wrapped, `{"servers":`) {
+			wrapped = `{"servers":[` + sc.config + `]}`
+		}
 		var cfg proxyCfg
-		if err := json.Unmarshal([]byte(sc.config), &cfg); err != nil {
+		if err := json.Unmarshal([]byte(wrapped), &cfg); err != nil {
 			continue
 		}
 		for _, s := range cfg.Servers {
