@@ -404,29 +404,50 @@ rm -f "\(scriptPath.path)"
     }
 
     /// Check if a backup exists for rollback.
+    /// Returns the newest backup by version comparison.
     private func checkRollbackAvailability() {
         let fm = FileManager.default
         let backupDir = backupDirURL()
 
-        // Check all backups in ~/.diane/backups/
         guard let backups = try? fm.contentsOfDirectory(at: backupDir,
                                                          includingPropertiesForKeys: nil) else {
             rollbackAvailable = false
             return
         }
 
+        var newestVersion: String?
+        var newestParts: [Int] = []
+
         for backup in backups {
-            if backup.lastPathComponent.hasPrefix("Diane.v") && backup.lastPathComponent.hasSuffix(".backup.app") {
-                let ver = backup.lastPathComponent
-                    .replacingOccurrences(of: "Diane.v", with: "")
-                    .replacingOccurrences(of: ".backup.app", with: "")
-                previousVersion = ver
-                rollbackAvailable = true
-                logInfo("UpdateChecker: Rollback available: \(ver)", category: "Updates")
-                return
+            let name = backup.lastPathComponent
+            guard name.hasPrefix("Diane.v") && name.hasSuffix(".backup.app") else { continue }
+            let ver = name
+                .replacingOccurrences(of: "Diane.v", with: "")
+                .replacingOccurrences(of: ".backup.app", with: "")
+            let parts = versionParts(ver)
+            if newestVersion == nil || compareVersionParts(parts, newestParts) > 0 {
+                newestVersion = ver
+                newestParts = parts
             }
         }
-        rollbackAvailable = false
+
+        if let ver = newestVersion {
+            previousVersion = ver
+            rollbackAvailable = true
+            logInfo("UpdateChecker: Rollback available: \(ver)", category: "Updates")
+        } else {
+            rollbackAvailable = false
+        }
+    }
+
+    /// Returns > 0 if a > b, < 0 if a < b, 0 if equal.
+    private func compareVersionParts(_ a: [Int], _ b: [Int]) -> Int {
+        for i in 0..<max(a.count, b.count) {
+            let av = i < a.count ? a[i] : 0
+            let bv = i < b.count ? b[i] : 0
+            if av != bv { return av - bv }
+        }
+        return 0
     }
 
     /// Clean up stale backup(s) in case the same version or older exist.
