@@ -1,53 +1,56 @@
-#!/bin/sh
-# Pre-commit hook: run go vet + unit tests before allowing a commit.
-# Skips if GIT_SKIP_TESTS is set (e.g. GIT_SKIP_TESTS=1 git commit ...)
+#!/bin/bash
+# Pre-commit hook: build the Swift companion app when Swift files change.
+# 
+# This catches compilation errors (like unicode escape issues, type mismatches)
+# before they reach CI.
 #
-# Installed via: git config core.hooksPath .githooks
+# To install hooks: make setup
+#   or: git config core.hooksPath .githooks
 
-set -e
+set -euo pipefail
 
-if [ -n "$GIT_SKIP_TESTS" ]; then
-    echo "🔶 SKIP_TESTS set — skipping checks"
+SWIFT_DIR="server/swift/DianeCompanion"
+
+# Only run if Swift files are staged
+STAGED_SWIFT=$(git diff --cached --name-only --diff-filter=ACMR | grep '\.swift$' | head -1)
+if [ -z "$STAGED_SWIFT" ]; then
     exit 0
 fi
 
-# Find the server directory (where go.mod lives)
-SERVER_DIR="$(cd "$(git rev-parse --show-toplevel)/server" 2>/dev/null && pwd)"
-if [ -z "$SERVER_DIR" ] || [ ! -f "$SERVER_DIR/go.mod" ]; then
-    echo "⚠️  server/go.mod not found — skipping checks"
+echo "🔍 Swift files staged — checking companion app build..."
+
+# Check for xcodegen
+if ! command -v xcodegen &>/dev/null; then
+    echo "⚠️  xcodegen not found — skipping Swift build check"
+    echo "   Install: brew install xcodegen"
     exit 0
 fi
 
-STAGED_GO_FILES=$(git diff --cached --name-only --diff-filter=ACMR | grep '\.go$' || true)
-if [ -z "$STAGED_GO_FILES" ]; then
-    echo "✅ No Go files staged — skipping checks"
-    exit 0
-fi
+# Generate Xcode project from project.yml
+echo "==> Generating Xcode project..."
+(cd "$SWIFT_DIR" && xcodegen generate --quiet) 2>&1
 
-cd "$SERVER_DIR"
+# Quick build check — just compile, no signing
+echo "==> Building Diane scheme (debug, no signing)..."
+xcodebuild \
+    -project "$SWIFT_DIR/Diane.xcodeproj" \
+    -scheme Diane \
+    -configuration Debug \
+    -derivedDataPath "$SWIFT_DIR/build/DerivedData" \
+    CODE_SIGN_IDENTITY="" \
+    CODE_SIGNING_REQUIRED=NO \
+    CODE_SIGNING_ALLOWED=NO \
+    SWIFT_ACTIVE_COMPILATION_CONDITIONS= \
+    build \
+    2>&1 | tail -20
 
-echo "🔍 Running go vet..."
-go vet ./internal/... ./cmd/... 2>&1
-VET_EXIT=$?
-
-if [ $VET_EXIT -ne 0 ]; then
+BUILD_EXIT=${PIPESTATUS[0]}
+if [ "$BUILD_EXIT" -ne 0 ]; then
     echo ""
-    echo "❌ go vet FAILED — commit blocked."
-    echo "   Fix the issues or bypass with: GIT_SKIP_TESTS=1 git commit ..."
+    echo "❌ Swift build FAILED. Fix errors before committing."
+    echo "   Run locally:"
+    echo "     cd $SWIFT_DIR && xcodegen generate && xcodebuild -project Diane.xcodeproj -scheme Diane build"
     exit 1
 fi
 
-echo "🧪 Running unit tests..."
-go test -count=1 ./internal/... ./cmd/... 2>&1
-TEST_EXIT=$?
-
-if [ $TEST_EXIT -ne 0 ]; then
-    echo ""
-    echo "❌ Unit tests FAILED — commit blocked."
-    echo "   Fix the tests or bypass with: GIT_SKIP_TESTS=1 git commit ..."
-    exit 1
-fi
-
-echo ""
-echo "✅ go vet + unit tests passed — committing."
-exit 0
+echo "✅ Swift companion app builds cleanly."

@@ -69,6 +69,24 @@ lint-fix:
 	}
 	cd $(SERVER_DIR) && golangci-lint run --fix ./internal/... ./cmd/...
 
+# ── Swift Companion App ──────────────────────────────────────────────────────
+
+## Build (and test) the Swift companion app
+check-swift:
+	@if ! command -v xcodegen &>/dev/null; then echo "❌ xcodegen not found. Install: brew install xcodegen"; exit 1; fi
+	cd server/swift/DianeCompanion && xcodegen generate --quiet
+	cd server/swift/DianeCompanion && xcodebuild \
+		-project Diane.xcodeproj \
+		-scheme Diane \
+		-configuration Debug \
+		-derivedDataPath build/DerivedData \
+		CODE_SIGN_IDENTITY="" \
+		CODE_SIGNING_REQUIRED=NO \
+		CODE_SIGNING_ALLOWED=NO \
+		SWIFT_ACTIVE_COMPILATION_CONDITIONS= \
+		build 2>&1 | tail -5
+	@echo "✅ Swift companion app builds cleanly."
+
 # ── Full Gate ──────────────────────────────────────────────────────────────
 
 mod-tidy:

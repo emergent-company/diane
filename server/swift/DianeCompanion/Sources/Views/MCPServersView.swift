@@ -667,3 +667,4 @@ private struct MCPServerDetailView: View {
         .environmentObject(EmergentAPIClient())
         .frame(width: 800, height: 600)
 }
+
