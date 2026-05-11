@@ -50,7 +50,7 @@ struct MCPServersView: View {
             }
 
             if isLoading && servers.isEmpty {
-                LoadingStateView(message: "Loading MCP servers\u2026")
+                LoadingStateView(message: "Loading MCP servers…")
             } else if servers.isEmpty {
                 EmptyStateView(
                     title: "No MCP Servers",
@@ -477,7 +477,7 @@ private struct MCPServerDetailView: View {
             if isLoadingTools {
                 HStack {
                     Spacer()
-                    ProgressView("Loading tools\u2026")
+                    ProgressView("Loading tools…")
                         .controlSize(.small)
                         .padding(20)
                     Spacer()
@@ -551,7 +551,7 @@ private struct MCPServerDetailView: View {
             if isLoadingPrompts {
                 HStack {
                     Spacer()
-                    ProgressView("Loading prompts\u2026")
+                    ProgressView("Loading prompts…")
                         .controlSize(.small)
                         .padding(20)
                     Spacer()
