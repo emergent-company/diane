@@ -2,4 +2,4 @@ build/
 DerivedData/
 *.dmg
 *.xcodeproj/
-diane
+/diane
