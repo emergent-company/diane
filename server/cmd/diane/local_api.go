@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -940,12 +941,14 @@ func propBoolPtr(props map[string]any, key string) *bool {
 // handleStatus returns server status including version and config info.
 func (h *apiHandlers) handleStatus(w http.ResponseWriter, r *http.Request) {
 	cleanVersion := strings.TrimPrefix(Version, "v")
+	exe, _ := os.Executable()
 	writeJSON(w, map[string]any{
-		"ok":         true,
-		"version":    cleanVersion,
-		"started_at": startedAt,
-		"server_url": h.pc.ServerURL,
-		"project_id": h.pc.ProjectID,
+		"ok":          true,
+		"version":     cleanVersion,
+		"binary_path": exe,
+		"started_at":  startedAt,
+		"server_url":  h.pc.ServerURL,
+		"project_id":  h.pc.ProjectID,
 	})
 }
 

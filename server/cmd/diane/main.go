@@ -90,6 +90,10 @@ func main() {
 	case "nodes":
 		cmdNodes()
 	case "serve":
+		if len(os.Args) > 2 && os.Args[2] == "restart" {
+			cmdServeRestart()
+			return
+		}
 		cmdServe()
 	case "upgrade":
 		cmdUpgrade(os.Args[2:])

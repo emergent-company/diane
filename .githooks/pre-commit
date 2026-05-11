@@ -12,7 +12,7 @@ set -euo pipefail
 SWIFT_DIR="server/swift/DianeCompanion"
 
 # Only run if Swift files are staged
-STAGED_SWIFT=$(git diff --cached --name-only --diff-filter=ACMR | grep '\.swift$' | head -1)
+STAGED_SWIFT=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null | grep '\.swift$' || true)
 if [ -z "$STAGED_SWIFT" ]; then
     exit 0
 fi

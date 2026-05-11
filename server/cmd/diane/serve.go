@@ -111,6 +111,10 @@ func cmdServe() {
 		}
 	}
 
+	// Log the binary path for upgrade debugging
+	exe, _ := os.Executable()
+	log.Printf("[SERVE] Binary: %s (version %s)", exe, Version)
+
 	// ── Start Discord bot ──
 	if startBot {
 		go func() {
@@ -307,4 +311,10 @@ func runAutoUpgradeCheck() {
 	if runtime.GOOS == "darwin" {
 		writeDMGTrigger(release.TagName)
 	}
+}
+
+// cmdServeRestart restarts the diane serve process via launchctl.
+// Use this after manually updating the binary to pick up the new version.
+func cmdServeRestart() {
+	restartServeProcess()
 }
