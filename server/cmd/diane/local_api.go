@@ -1796,43 +1796,54 @@ func (h *apiHandlers) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 		}
 
 	// ── Relay tools check: override status for enabled servers with no tools ──
-	if len(servers) > 0 && h.pc.InstanceID != "" {
-		toolsURL := strings.TrimSuffix(h.pc.ServerURL, "/") + "/api/mcp-relay/sessions/" + url.PathEscape(h.pc.InstanceID) + "/tools"
-		toolsCtx, toolsCancel := context.WithTimeout(r.Context(), 5*time.Second)
-		defer toolsCancel()
+	// Queries ALL connected relay sessions' tools, not just the local instance,
+	// so servers running on other nodes (e.g., infakt on tool-test) report
+	// correctly instead of always showing "no_tools".
+	if len(servers) > 0 && h.pc.ServerURL != "" {
+		// 1. Get all active sessions
+		relayURL := strings.TrimSuffix(h.pc.ServerURL, "/") + "/api/mcp-relay/sessions"
+		sessions := h.queryRelaySessions(r.Context(), relayURL)
 
-		req, err := http.NewRequestWithContext(toolsCtx, http.MethodGet, toolsURL, nil)
-		if err == nil {
-			req.Header.Set("Authorization", "Bearer "+h.pc.Token)
-			if resp, err := http.DefaultClient.Do(req); err == nil {
-				defer resp.Body.Close()
-				if resp.StatusCode == http.StatusOK {
-					var toolsResp struct {
-						Tools []map[string]any `json:"tools"`
-					}
-					if err := json.NewDecoder(resp.Body).Decode(&toolsResp); err == nil && toolsResp.Tools != nil {
-						// Count tools per server by prefix
-						toolCounts := make(map[string]int)
-						for _, t := range toolsResp.Tools {
-							name, _ := t["name"].(string)
-							for _, s := range servers {
-								prefix := h.pc.InstanceID + "_" + s.Name + "_"
-								if strings.HasPrefix(name, prefix) {
-									toolCounts[s.Name]++
-									break
-								}
-							}
-						}
-				// Override status for enabled servers with no tools.
-					// Preserve auth_required/auth_expired — they're actionable.
-					for i, s := range servers {
-						if s.Status == "running" && toolCounts[s.Name] == 0 {
-							servers[i].Status = "no_tools"
-							servers[i].ErrorMessage = "server connected but no tools registered"
-						}
-					}
+		// 2. Collect tools from all sessions, grouped by instance ID
+		type instanceTools struct {
+			InstanceID string
+			Tools      []map[string]any
+		}
+		var allInstanceTools []instanceTools
+		for _, instID := range sessions {
+			if instID == "" {
+				continue
+			}
+			tools := h.queryInstanceTools(r.Context(), instID)
+			if len(tools) > 0 {
+				allInstanceTools = append(allInstanceTools, instanceTools{InstanceID: instID, Tools: tools})
+			}
+		}
+
+		// 3. Count tools per server across all instances
+		toolCounts := make(map[string]int)
+		for _, it := range allInstanceTools {
+			for _, t := range it.Tools {
+				name, _ := t["name"].(string)
+				if name == "" {
+					continue
+				}
+				for _, s := range servers {
+					prefix := it.InstanceID + "_" + s.Name + "_"
+					if strings.HasPrefix(name, prefix) {
+						toolCounts[s.Name]++
+						break
 					}
 				}
+			}
+		}
+
+		// 4. Override status for enabled servers with no tools.
+		// Preserve auth_required/auth_expired — they're actionable.
+		for i, s := range servers {
+			if s.Status == "running" && toolCounts[s.Name] == 0 {
+				servers[i].Status = "no_tools"
+				servers[i].ErrorMessage = "server connected but no tools registered"
 			}
 		}
 	}
@@ -1974,79 +1985,61 @@ func (h *apiHandlers) handleMCPServerUpdateScope(w http.ResponseWriter, r *http.
 
 // handleMCPServerTools returns tools exposed by a specific MCP server.
 // Instead of creating a temp proxy (which can't handle OAuth), it queries
-// the running relay session's tools via the MP relay API and filters by server name.
+// ALL connected relay sessions' tools via the MP relay API and filters by server name.
+// This allows viewing tools from servers running on any node (not just the local instance).
 // GET /api/mcp-servers/{name}/tools → {"tools": [...]}
 func (h *apiHandlers) handleMCPServerTools(w http.ResponseWriter, r *http.Request, serverName string) {
 	ctx := r.Context()
 
-	// Resolve instance ID from config (required for relay tools query)
-	instanceID := h.pc.InstanceID
-	if instanceID == "" {
+	if h.pc.ServerURL == "" {
 		writeJSON(w, map[string]any{"tools": []any{}})
 		return
 	}
 
-	// Query the MP relay for this instance's registered tools
-	toolsURL := strings.TrimSuffix(h.pc.ServerURL, "/") + "/api/mcp-relay/sessions/" + url.PathEscape(instanceID) + "/tools"
+	// Get all connected relay sessions
+	relayURL := strings.TrimSuffix(h.pc.ServerURL, "/") + "/api/mcp-relay/sessions"
+	sessions := h.queryRelaySessions(ctx, relayURL)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, toolsURL, nil)
-	if err != nil {
-		log.Printf("[LOCAL-API] handleMCPServerTools: build request: %v", err)
-		writeJSON(w, map[string]any{"tools": []any{}})
-		return
-	}
-	req.Header.Set("Authorization", "Bearer "+h.pc.Token)
-
-	log.Printf("[LOCAL-API] handleMCPServerTools: querying %s", toolsURL)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		log.Printf("[LOCAL-API] handleMCPServerTools: query relay: %v", err)
-		writeJSON(w, map[string]any{"tools": []any{}})
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		writeJSON(w, map[string]any{"tools": []any{}})
-		return
-	}
-
-	var relayResp struct {
-		Tools []any `json:"tools"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&relayResp); err != nil {
-		log.Printf("[LOCAL-API] handleMCPServerTools: decode: %v", err)
-		writeJSON(w, map[string]any{"tools": []any{}})
-		return
-	}
-
-	if relayResp.Tools == nil {
-		writeJSON(w, map[string]any{"tools": []any{}})
-		return
-	}
-
-	// Filter tools by server prefix and strip the prefix
-	prefix := h.pc.InstanceID + "_" + serverName + "_"
-	var result []any
-	for _, t := range relayResp.Tools {
-		tool, ok := t.(map[string]any)
-		if !ok {
+	// Query each session's tools, looking for ones matching {instanceId}_{serverName}_
+	for _, instID := range sessions {
+		if instID == "" {
 			continue
 		}
-		name, ok := tool["name"].(string)
-		if !ok || !strings.HasPrefix(name, prefix) {
+		tools := h.queryInstanceTools(ctx, instID)
+		if len(tools) == 0 {
 			continue
 		}
-		tool["name"] = strings.TrimPrefix(name, prefix)
-		delete(tool, "_server")
-		result = append(result, tool)
-	}
-	if result == nil {
-		result = []any{}
+
+		// Check if any tool in this session matches the server name prefix
+		prefix := instID + "_" + serverName + "_"
+		var result []any
+		for _, t := range tools {
+			name, ok := t["name"]
+			if !ok {
+				continue
+			}
+			nameStr, ok := name.(string)
+			if !ok || !strings.HasPrefix(nameStr, prefix) {
+				continue
+			}
+			// Convert to map[string]any for manipulation
+			tool := make(map[string]any)
+			for k, v := range t {
+				tool[k] = v
+			}
+			tool["name"] = strings.TrimPrefix(nameStr, prefix)
+			delete(tool, "_server")
+			result = append(result, tool)
+		}
+
+		if len(result) > 0 {
+			writeJSON(w, map[string]any{"tools": result})
+			return
+		}
 	}
 
-	writeJSON(w, map[string]any{"tools": result})
+	// No tools found on any session
+	writeJSON(w, map[string]any{"tools": []any{}})
 }
 
 // handleNodes returns connected relay nodes from the Memory Platform.
@@ -3132,6 +3125,81 @@ func (h *apiHandlers) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		sessionID[:min(len(sessionID), 12)],
 		runID[:min(len(runID), 12)],
 		tokenCount, toolCallCount, sawRunComplete)
+}
+
+// queryRelaySessions fetches the list of active relay instance IDs from the MP relay.
+func (h *apiHandlers) queryRelaySessions(ctx context.Context, relayURL string) []string {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, relayURL, nil)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Authorization", "Bearer "+h.pc.Token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var raw any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil
+	}
+	// Parse sessions from various response formats
+	var sessions []string
+	switch v := raw.(type) {
+	case []any:
+		for _, item := range v {
+			if m, ok := item.(map[string]any); ok {
+				if id, ok := m["instance_id"].(string); ok && id != "" {
+					sessions = append(sessions, id)
+				}
+			}
+		}
+	case map[string]any:
+		for _, key := range []string{"sessions", "items", "data", "nodes"} {
+			if arr, ok := v[key].([]any); ok {
+				for _, item := range arr {
+					if m, ok := item.(map[string]any); ok {
+						if id, ok := m["instance_id"].(string); ok && id != "" {
+							sessions = append(sessions, id)
+						}
+					}
+				}
+				if len(sessions) > 0 {
+					break
+				}
+			}
+		}
+	}
+	return sessions
+}
+
+// queryInstanceTools fetches the tool list for a specific relay instance.
+func (h *apiHandlers) queryInstanceTools(ctx context.Context, instanceID string) []map[string]any {
+	toolsURL := strings.TrimSuffix(h.pc.ServerURL, "/") + "/api/mcp-relay/sessions/" + url.PathEscape(instanceID) + "/tools"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, toolsURL, nil)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Authorization", "Bearer "+h.pc.Token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	var toolsResp struct {
+		Tools []map[string]any `json:"tools"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&toolsResp); err != nil {
+		return nil
+	}
+	return toolsResp.Tools
 }
 
 // writeJSON marshals v as JSON and writes it to w with Content-Type header.
