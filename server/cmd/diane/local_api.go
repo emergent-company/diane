@@ -1750,19 +1750,21 @@ func (h *apiHandlers) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 			if !fullConfig.Enabled {
 				status = "disabled"
 			} else if fullConfig.Type == "http" || fullConfig.Type == "sse" || fullConfig.Type == "streamable-http" {
-				if fullConfig.OAuth != nil {
-					tokens, err := mcpproxy.LoadTokens(fullConfig.Name)
-					if err != nil {
-						if os.IsNotExist(err) {
-							status = "auth_required"
-						} else {
-							status = "error"
-							errorMsg = fmt.Sprintf("failed to load auth tokens: %v", err)
-						}
-					} else if !tokens.ExpiresAt.IsZero() && time.Now().After(tokens.ExpiresAt) {
-						status = "auth_expired"
+		if fullConfig.OAuth != nil {
+				tokens, err := mcpproxy.LoadTokens(fullConfig.Name)
+				if err != nil {
+					if os.IsNotExist(err) {
+						status = "auth_required"
+						errorMsg = "OAuth required — no valid tokens found. Re-authenticate in companion app."
+					} else {
+						status = "error"
+						errorMsg = fmt.Sprintf("failed to load auth tokens: %v", err)
 					}
+				} else if !tokens.ExpiresAt.IsZero() && time.Now().After(tokens.ExpiresAt) {
+					status = "auth_expired"
+					errorMsg = fmt.Sprintf("auth tokens expired at %s — re-authenticate in companion app", tokens.ExpiresAt.Format(time.RFC3339))
 				}
+			}
 			}
 
 			if idx, exists := seen[fullConfig.Name]; exists {
@@ -1820,13 +1822,14 @@ func (h *apiHandlers) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 								}
 							}
 						}
-						// Override status for enabled servers with no tools
-						for i, s := range servers {
-							if (s.Status == "running" || s.Status == "auth_required" || s.Status == "auth_expired") && toolCounts[s.Name] == 0 {
-								servers[i].Status = "no_tools"
-								servers[i].ErrorMessage = "no tools registered"
-							}
+				// Override status for enabled servers with no tools.
+					// Preserve auth_required/auth_expired — they're actionable.
+					for i, s := range servers {
+						if s.Status == "running" && toolCounts[s.Name] == 0 {
+							servers[i].Status = "no_tools"
+							servers[i].ErrorMessage = "server connected but no tools registered"
 						}
+					}
 					}
 				}
 			}
