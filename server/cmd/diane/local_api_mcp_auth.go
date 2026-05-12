@@ -109,7 +109,7 @@ func startPendingAuth(serverName string, oauth *mcpproxy.OAuthConfig, callbackHo
 	pendingAuths[strings.ToLower(serverName)] = pa
 	pendingAuthsMu.Unlock()
 
-	// Background: wait for the callback, exchange code, save tokens
+	// Background: wait for the callback, exchange the code, save tokens
 	go func() {
 		select {
 		case code := <-codeChan:
@@ -118,10 +118,13 @@ func startPendingAuth(serverName string, oauth *mcpproxy.OAuthConfig, callbackHo
 				pa.fail(fmt.Sprintf("token exchange failed: %v", err))
 				return
 			}
+			log.Printf("[OAuth] Token exchange succeeded for %s: expires_at=%s, scope=%s",
+				serverName, stored.ExpiresAt.Format(time.RFC3339), stored.Scope)
 			if err := mcpproxy.SaveTokens(serverName, stored); err != nil {
 				pa.fail(fmt.Sprintf("failed to save tokens: %v", err))
 				return
 			}
+			log.Printf("[OAuth] Saved tokens for %s to %s", serverName, mcpproxy.TokenPath(serverName))
 			expiresAt := ""
 			if !stored.ExpiresAt.IsZero() {
 				expiresAt = stored.ExpiresAt.Format(time.RFC3339)

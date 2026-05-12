@@ -1816,7 +1816,7 @@ func (h *apiHandlers) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 						for _, t := range toolsResp.Tools {
 							name, _ := t["name"].(string)
 							for _, s := range servers {
-								prefix := s.Name + "_"
+								prefix := h.pc.InstanceID + "_" + s.Name + "_"
 								if strings.HasPrefix(name, prefix) {
 									toolCounts[s.Name]++
 									break
@@ -1997,6 +1997,8 @@ func (h *apiHandlers) handleMCPServerTools(w http.ResponseWriter, r *http.Reques
 	}
 	req.Header.Set("Authorization", "Bearer "+h.pc.Token)
 
+	log.Printf("[LOCAL-API] handleMCPServerTools: querying %s", toolsURL)
+
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		log.Printf("[LOCAL-API] handleMCPServerTools: query relay: %v", err)
@@ -2025,7 +2027,7 @@ func (h *apiHandlers) handleMCPServerTools(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Filter tools by server prefix and strip the prefix
-	prefix := serverName + "_"
+	prefix := h.pc.InstanceID + "_" + serverName + "_"
 	var result []any
 	for _, t := range relayResp.Tools {
 		tool, ok := t.(map[string]any)

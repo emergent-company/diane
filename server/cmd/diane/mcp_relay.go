@@ -703,9 +703,30 @@ func syncConfigFromGraph(serverURL, token, projectID, instanceID string) {
 				if !strings.HasSuffix(name, ".json") && !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
 					secretPath += ".json"
 				}
+
+				// Skip OAuth token files — they're managed locally via auth flows.
+				// The graph may contain stale tokens from a previous auth session;
+				// overwriting fresh local tokens causes auth failures.
+				if strings.Contains(name, "oauth") || strings.HasSuffix(name, "-oauth-config.json") {
+					log.Printf("[mcp-relay] Skipping graph secret %s (OAuth config — local is authoritative)", name)
+					continue
+				}
+				if existing, err := os.ReadFile(secretPath); err == nil && len(existing) > 0 {
+					// Check if local file has a later expiry than the graph secret
+					if isTokenNewer(existing, []byte(value)) {
+						log.Printf("[mcp-relay] Skipping graph secret %s (local tokens are newer)", name)
+						continue
+					}
+				}
+
 				if err := os.WriteFile(secretPath, []byte(value), 0600); err != nil {
 					log.Printf("[mcp-relay] Failed to write secret %s: %v", name, err)
 				} else {
+					valPreview := strings.TrimSpace(value)
+					if len(valPreview) > 30 {
+						valPreview = valPreview[:30] + "..."
+					}
+					log.Printf("[mcp-relay] Wrote secret %s from graph (%s)", name, valPreview)
 					written++
 				}
 			}
@@ -714,6 +735,28 @@ func syncConfigFromGraph(serverURL, token, projectID, instanceID string) {
 			log.Printf("[mcp-relay] Synced %d secrets from graph to %s/secrets/", written, dianeDir)
 		}
 	}
+}
+
+// isTokenNewer checks if local token JSON has a later expires_at than the graph value.
+// This prevents the secrets sync from overwriting freshly-authenticated tokens
+// with stale graph-stored tokens.
+func isTokenNewer(localJSON, graphJSON []byte) bool {
+	type token struct {
+		ExpiresAt string `json:"expires_at"`
+	}
+	var lt, gt token
+	if json.Unmarshal(localJSON, &lt) != nil || lt.ExpiresAt == "" {
+		return false
+	}
+	if json.Unmarshal(graphJSON, &gt) != nil || gt.ExpiresAt == "" {
+		return true // no expiry in graph → local is definitely newer
+	}
+	tLocal, err1 := time.Parse(time.RFC3339, lt.ExpiresAt)
+	tGraph, err2 := time.Parse(time.RFC3339, gt.ExpiresAt)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	return tLocal.After(tGraph)
 }
 
 // updateNodeVersionInGraph updates the DianeNodeConfig version in the Memory
