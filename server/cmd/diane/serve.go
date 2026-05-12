@@ -29,12 +29,16 @@ import (
 //	                    Set to "" to disable locking (force-start)
 //	--instance <name>   MCP relay instance ID (from config if empty)
 //	--api-port <port>   Local companion API port (default: 8890, set to 0 to disable)
+//	--callback-host <host>
+//	                    Hostname for OAuth callback redirect URI (default: "localhost").
+//	                    Use the node's Tailscale IP when auth should redirect to a remote node.
 func cmdServe() {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	pidfileDefault := filepath.Join(os.Getenv("HOME"), ".diane", "serve.pid")
 	pidfilePtr := fs.String("pidfile", pidfileDefault, "PID lock file path (empty = disable)")
 	instancePtr := fs.String("instance", "", "MCP relay instance ID (from config if empty)")
 	apiPort := fs.Int("api-port", 8890, "Local companion API port (0 = disable)")
+	callbackHost := fs.String("callback-host", "localhost", "Hostname for OAuth redirect URI (use Tailscale IP for remote nodes)")
 	fs.Parse(os.Args[2:])
 
 	// ── PID lock: atomic flock guards against duplicate instances ──
@@ -102,7 +106,7 @@ func cmdServe() {
 	// ── Start local companion API ──
 	var apiServer *localAPIServer
 	if startAPI {
-		as, err := startLocalAPI(pc, *apiPort)
+		as, err := startLocalAPI(pc, *apiPort, *callbackHost)
 		if err != nil {
 			log.Printf("[SERVE] Failed to start local API: %v", err)
 		} else {

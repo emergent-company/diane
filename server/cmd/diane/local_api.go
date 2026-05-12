@@ -42,10 +42,10 @@ type localAPIServer struct {
 
 // startLocalAPI creates and starts the local companion API server on the given port.
 // Returns immediately — the server runs in its own goroutine.
-func startLocalAPI(pc *config.ProjectConfig, port int) (*localAPIServer, error) {
+func startLocalAPI(pc *config.ProjectConfig, port int, callbackHost string) (*localAPIServer, error) {
 	mux := http.NewServeMux()
 
-	api := &apiHandlers{pc: pc}
+	api := &apiHandlers{pc: pc, callbackHost: callbackHost}
 	registered := 0
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleStatus(w, r) })
 	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleStats(w, r) })
@@ -99,7 +99,8 @@ func (s *localAPIServer) close() {
 
 // apiHandlers holds shared state for HTTP handlers.
 type apiHandlers struct {
-	pc *config.ProjectConfig
+	pc           *config.ProjectConfig
+	callbackHost string // hostname for OAuth redirect URI ("localhost" = local machine)
 }
 
 // bridge creates and returns a memory bridge from the project config.

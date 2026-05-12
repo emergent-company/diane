@@ -337,9 +337,40 @@ func (s *MCPSession) run() error {
 	return <-errCh
 }
 
+func killStaleMCP() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	pidFile := filepath.Join(home, ".diane", "mcp.pid")
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		return // No stale PID file
+	}
+	var pid int
+	if _, err := fmt.Sscanf(string(data), "%d", &pid); err != nil {
+		os.Remove(pidFile)
+		return
+	}
+	// Check if the process is still running and is a diane mcp serve
+	if proc, err := os.FindProcess(pid); err == nil {
+		// Send SIGTERM — if it responds, it's ours to kill
+		if err := proc.Signal(syscall.Signal(0)); err == nil {
+			log.Printf("[mcp-relay] Killing stale MCP server (PID: %d)", pid)
+			proc.Signal(syscall.SIGTERM)
+			time.Sleep(3 * time.Second)
+			proc.Signal(syscall.SIGKILL)
+		}
+	}
+	os.Remove(pidFile)
+}
+
 func (s *MCPSession) startMCP() error {
 	// Reset stop guards for a fresh connection attempt
 	s.stopOnce = sync.Once{}
+
+	// Kill any stale MCP server subprocess from a previous session
+	killStaleMCP()
 
 	// Split binary path and args (supports "diane mcp serve" etc.)
 	parts := strings.Fields(s.cfg.MCPBinary)

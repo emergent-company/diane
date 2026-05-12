@@ -42,7 +42,9 @@ var (
 )
 
 // startPendingAuth initiates an OAuth authorization code flow for an MCP server.
-func startPendingAuth(serverName string, oauth *mcpproxy.OAuthConfig) (*pendingAuth, error) {
+// callbackHost is the hostname/IP used in the redirect URI (default: "localhost").
+// When the callback server runs on a remote node, set this to the node's reachable address.
+func startPendingAuth(serverName string, oauth *mcpproxy.OAuthConfig, callbackHost string) (*pendingAuth, error) {
 	if oauth == nil {
 		return nil, fmt.Errorf("no OAuth configuration for server %q", serverName)
 	}
@@ -78,7 +80,7 @@ func startPendingAuth(serverName string, oauth *mcpproxy.OAuthConfig) (*pendingA
 	}
 
 	// Build authorization URL
-	redirectURI := fmt.Sprintf("http://localhost:%d/callback", port)
+	redirectURI := fmt.Sprintf("http://%s:%d/callback", callbackHost, port)
 	authURL, err := mcpproxy.BuildAuthURL(oauth.AuthorizationURL, oauth.ClientID, redirectURI, challenge, oauth.Scopes)
 	if err != nil {
 		callbackServer.Shutdown(nil)
@@ -220,7 +222,7 @@ func (h *apiHandlers) handleMCPServerAuth(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	pa, err := startPendingAuth(serverName, oauth)
+	pa, err := startPendingAuth(serverName, oauth, h.callbackHost)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("failed to start auth: %v", err))
 		return
