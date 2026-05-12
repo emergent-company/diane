@@ -2028,6 +2028,7 @@ func (h *apiHandlers) handleMCPServerTools(w http.ResponseWriter, r *http.Reques
 				tool[k] = v
 			}
 			tool["name"] = strings.TrimPrefix(nameStr, prefix)
+			tool["id"] = tool["name"] // Swift companion app requires Identifiable.id
 			delete(tool, "_server")
 			result = append(result, tool)
 		}
