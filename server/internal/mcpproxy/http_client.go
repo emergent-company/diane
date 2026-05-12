@@ -156,6 +156,16 @@ func (c *HTTPMCPClient) sendRequest(method string, params json.RawMessage) (json
 		return nil, fmt.Errorf("failed to read %s response: %w", method, err)
 	}
 
+	// Handle SSE-formatted responses (streamable-http).
+	// These start with "event: message\ndata: {json}\n\n" instead of raw JSON.
+	if len(body) > 0 && body[0] == 'e' && hasSSEPrefix(body) {
+		parsed, sseErr := parseSSEData(body)
+		if sseErr != nil {
+			return nil, fmt.Errorf("failed to parse SSE %s response: %w", method, sseErr)
+		}
+		body = parsed
+	}
+
 	var mcpResp MCPResponse
 	if err := json.Unmarshal(body, &mcpResp); err != nil {
 		return nil, fmt.Errorf("failed to parse %s response: %w", method, err)
@@ -442,4 +452,33 @@ func (c *HTTPMCPClient) SetToken(token string) {
 // Close is a no-op for HTTP clients (no subprocess to kill).
 func (c *HTTPMCPClient) Close() error {
 	return nil
+}
+
+// hasSSEPrefix checks if the response body looks like SSE format.
+func hasSSEPrefix(body []byte) bool {
+	trimmed := bytes.TrimLeft(body, " \t\r\n")
+	return bytes.HasPrefix(trimmed, []byte("event:")) || bytes.HasPrefix(trimmed, []byte("data:"))
+}
+
+// parseSSEData extracts the JSON payload from an SSE-formatted response.
+// SSE format: "event: message\ndata: {json}\n\n"
+// Multiple data: lines are concatenated with newlines.
+func parseSSEData(body []byte) ([]byte, error) {
+	var dataLines []string
+	scanner := bufio.NewScanner(bytes.NewReader(body))
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB buffer for large tool lists
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "data:") {
+			data := strings.TrimSpace(line[5:])
+			dataLines = append(dataLines, data)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	if len(dataLines) == 0 {
+		return nil, fmt.Errorf("no data: lines found in SSE response")
+	}
+	return []byte(strings.Join(dataLines, "\n")), nil
 }
