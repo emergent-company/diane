@@ -1889,7 +1889,83 @@ func (h *apiHandlers) handleMCPServerSubRoutes(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	if len(parts) == 2 && parts[1] == "scope" {
+		// PUT /api/mcp-servers/{name}/scope
+		// Updates the node binding scope for this MCP server.
+		if r.Method != http.MethodPut {
+			jsonError(w, http.StatusMethodNotAllowed, "method not allowed (use PUT)")
+			return
+		}
+		h.handleMCPServerUpdateScope(w, r, serverName)
+		return
+	}
+
 	jsonError(w, http.StatusNotFound, "not found")
+}
+
+// handleMCPServerUpdateScope updates the node binding scope for an MCP server.
+// PUT /api/mcp-servers/{name}/scope  body: {"scope": "instance:mcj-mini"}
+func (h *apiHandlers) handleMCPServerUpdateScope(w http.ResponseWriter, r *http.Request, serverName string) {
+	ctx := r.Context()
+
+	var req struct {
+		Scope string `json:"scope"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Scope == "" {
+		jsonError(w, http.StatusBadRequest, "scope is required")
+		return
+	}
+
+	// Validate scope format
+	if req.Scope != "all" && !strings.HasPrefix(req.Scope, "instance:") && !strings.HasPrefix(req.Scope, "slave:") {
+		jsonError(w, http.StatusBadRequest, "scope must be 'all', 'instance:<id>', or 'slave:*'")
+		return
+	}
+
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		log.Printf("[LOCAL-API] handleMCPServerUpdateScope: bridge: %v", err)
+		jsonError(w, http.StatusInternalServerError, "failed to connect to Memory Platform")
+		return
+	}
+	defer bridge.Close()
+
+	// Find the entity ID by listing configs and matching server name in config JSON
+	entries, err := bridge.ListMCPProxyConfigs(ctx)
+	if err != nil {
+		log.Printf("[LOCAL-API] handleMCPServerUpdateScope: list configs: %v", err)
+		jsonError(w, http.StatusInternalServerError, "failed to list MCP configs")
+		return
+	}
+
+	var targetEntityID string
+	for _, e := range entries {
+		var nameCheck struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal([]byte(e.Config), &nameCheck) == nil && nameCheck.Name == serverName {
+			targetEntityID = e.EntityID
+			break
+		}
+	}
+
+	if targetEntityID == "" {
+		jsonError(w, http.StatusNotFound, "MCP server not found: "+serverName)
+		return
+	}
+
+	if err := bridge.UpdateMCPProxyConfigScope(ctx, targetEntityID, req.Scope); err != nil {
+		log.Printf("[LOCAL-API] handleMCPServerUpdateScope: update: %v", err)
+		jsonError(w, http.StatusInternalServerError, "failed to update scope")
+		return
+	}
+
+	log.Printf("[LOCAL-API] Updated MCP server %s scope to %s", serverName, req.Scope)
+	writeJSON(w, map[string]any{"status": "ok", "server": serverName, "scope": req.Scope})
 }
 
 // handleMCPServerTools returns tools exposed by a specific MCP server.

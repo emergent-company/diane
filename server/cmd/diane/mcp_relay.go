@@ -607,21 +607,50 @@ func syncConfigFromGraph(serverURL, token, projectID, instanceID string) {
 	} else {
 		// Match by scope: collect all configs that apply to this instance
 		var matched []scoredConfig
+		// Track by server name to detect duplicates across scopes
+		type scoredName struct {
+			config string
+			version int
+			score   int
+		}
+		bestByName := map[string]scoredName{}
 		for _, obj := range configs {
 			scope := getPropString(obj, "scope")
 			cfgStr := getPropString(obj, "config")
 			ver := getPropInt(obj, "version")
 			score := scopeMatchScore(scope, instanceID)
 			if score > 0 && cfgStr != "" {
-				matched = append(matched, scoredConfig{config: cfgStr, version: ver, score: score})
+				// Extract server name to detect duplicates
+				var nameCheck struct {
+					Name string `json:"name"`
+				}
+				serverName := scope // fallback: use scope as name
+				if json.Unmarshal([]byte(cfgStr), &nameCheck) == nil && nameCheck.Name != "" {
+					serverName = nameCheck.Name
+				}
+
+				// Deduplicate by server name — keep highest score, then highest version
+				existing, exists := bestByName[serverName]
+				if !exists || score > existing.score || (score == existing.score && ver > existing.version) {
+					bestByName[serverName] = scoredName{config: cfgStr, version: ver, score: score}
+				}
 			}
+		}
+
+		// Flatten deduplicated map into matched slice, warn on duplicates removed
+		if len(bestByName) < len(configs) {
+			log.Printf("[mcp-relay] WARNING: found %d MCPProxyConfig objects but only %d unique server names — duplicate configs for the same server across different scopes were consolidated (highest scope match score wins)",
+				len(configs), len(bestByName))
+		}
+		for _, sn := range bestByName {
+			matched = append(matched, scoredConfig{config: sn.config, version: sn.version, score: sn.score})
 		}
 
 		if len(matched) > 0 {
 			// Merge configs (highest score wins on conflict)
 			merged := mergeProxyConfigs(matched)
 			graphMCPConfig = merged
-			log.Printf("[mcp-relay] Synced MCP proxy config from graph (%d matching, stored in-memory)", len(matched))
+			log.Printf("[mcp-relay] Synced MCP proxy config from graph (%d unique servers from %d graph objects)", len(matched), len(configs))
 		} else {
 			log.Printf("[mcp-relay] No MCPProxyConfig objects found for scope matching '%s'", instanceID)
 		}

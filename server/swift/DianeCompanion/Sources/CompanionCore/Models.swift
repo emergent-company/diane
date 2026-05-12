@@ -288,6 +288,8 @@ public struct MCPServer: Identifiable, Codable, Hashable, Sendable {
     public let timeout: Int?
     public let status: String?       // "running" | "disabled" | "auth_required" | "auth_expired" | "error"
     public let errorMessage: String? // error details when status == "error"
+    public let scope: String?        // node binding: "instance:mcj-mini", "slave:*", "all"
+    public let version: Int?         // config version from the graph
 
     public var id: String { name }
 
@@ -324,6 +326,20 @@ public extension MCPServer {
         case "error":          return .red
         default:               return enabled ? .green : .secondary
         }
+    }
+}
+
+public extension MCPServer {
+    /// Human-readable description of the node binding scope.
+    var scopeLabel: String {
+        guard let s = scope, !s.isEmpty else { return "All nodes" }
+        if s == "all" { return "All nodes" }
+        if s == "slave:*" { return "All slave nodes" }
+        if s == "instance:*" { return "All nodes" }
+        if let instance = s.split(separator: ":").last, instance != s {
+            return "Node: \(instance)"
+        }
+        return "Node: \(s)"
     }
 }
 

@@ -197,6 +197,12 @@ final class DianeAPIClient: ObservableObject {
         return (resp.status, resp.expires_at, resp.error)
     }
 
+    func updateMCPServerScope(serverName: String, scope: String) async throws {
+        let encoded = serverName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? serverName
+        let body = try JSONEncoder().encode(["scope": scope])
+        _ = try await put("/api/mcp-servers/\(encoded)/scope", body: body)
+    }
+
     // MARK: - Relay Nodes
 
     func fetchRelayNodes() async throws -> [RelayNode] {

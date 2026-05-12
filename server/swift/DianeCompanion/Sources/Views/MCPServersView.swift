@@ -166,7 +166,7 @@ struct MCPServersView: View {
     // MARK: - Server Detail Panel
 
     private func serverDetailPanel(_ server: MCPServer) -> some View {
-        MCPServerDetailView(server: server, dianeAPI: dianeAPI)
+        MCPServerDetailView(server: server, dianeAPI: dianeAPI, nodes: nodes)
     }
 
     // MARK: - Data Loading
@@ -220,6 +220,7 @@ struct MCPServersView: View {
 private struct MCPServerDetailView: View {
     let server: MCPServer
     let dianeAPI: DianeAPIClient
+    let nodes: [RelayNode]
 
     @State private var selectedTab: DetailTab = .connection
     @State private var tools: [MCPTool] = []
@@ -233,6 +234,11 @@ private struct MCPServerDetailView: View {
     @State private var authStatus: String? = nil
     @State private var authIsLoading = false
     @State private var authError: String? = nil
+
+    // Scope state
+    @State private var newScope: String = ""
+    @State private var isUpdatingScope = false
+    @State private var scopeUpdateError: String? = nil
 
     private enum DetailTab: String, CaseIterable {
         case connection = "Connection"
@@ -292,6 +298,24 @@ private struct MCPServerDetailView: View {
             await loadTools()
             await loadPrompts()
         }
+        .onAppear {
+            newScope = server.scope ?? "all"
+        }
+    }
+
+    // MARK: - Scope Update
+
+    @MainActor
+    private func updateScope() async {
+        scopeUpdateError = nil
+        isUpdatingScope = true
+        do {
+            try await dianeAPI.updateMCPServerScope(serverName: server.name, scope: newScope)
+            isUpdatingScope = false
+        } catch {
+            scopeUpdateError = error.localizedDescription
+            isUpdatingScope = false
+        }
     }
 
     // MARK: - Connection Tab
@@ -300,6 +324,7 @@ private struct MCPServerDetailView: View {
     private var connectionContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             connectionRow(label: "Type", value: server.type.uppercased())
+            connectionRow(label: "Bound To", value: server.scopeLabel)
             if let url = server.url, !url.isEmpty {
                 connectionRow(label: "URL", value: url)
             }
@@ -311,6 +336,57 @@ private struct MCPServerDetailView: View {
             }
             if let timeout = server.timeout, timeout > 0 {
                 connectionRow(label: "Timeout", value: "\(timeout)s")
+            }
+
+            // Node binding (scope) picker
+            Divider().padding(.horizontal, 12)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Node Binding")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 4)
+
+                Picker("Scope", selection: $newScope) {
+                    Text("All nodes").tag("all")
+                    Text("All slave nodes").tag("slave:*")
+                    ForEach(nodes.filter { $0.mode != "master" }) { node in
+                        Text("\(node.hostname ?? node.instanceID)").tag("instance:\(node.instanceID)")
+                    }
+                }
+                .pickerStyle(.radioGroup)
+                .padding(.horizontal, 12)
+                .disabled(isUpdatingScope)
+
+                if isUpdatingScope {
+                    HStack(spacing: 4) {
+                        ProgressView().controlSize(.mini)
+                        Text("Updating...")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 12)
+                } else if scopeUpdateError != nil {
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                            .font(.caption)
+                        Text(scopeUpdateError!)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 12)
+                }
+
+                Button("Update") {
+                    Task { await updateScope() }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+                .disabled(isUpdatingScope || newScope == server.scope ?? "all")
             }
 
             if let env = server.env, !env.isEmpty {

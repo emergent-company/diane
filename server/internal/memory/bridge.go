@@ -973,3 +973,17 @@ func (b *Bridge) ListMCPProxyConfigs(ctx context.Context) ([]MCPProxyConfigEntry
 	}
 	return entries, nil
 }
+
+// UpdateMCPProxyConfigScope updates the scope of an MCP proxy config by entity ID.
+// Returns the updated entity ID on success.
+func (b *Bridge) UpdateMCPProxyConfigScope(ctx context.Context, entityID, newScope string) error {
+	_, err := b.client.Graph.UpdateObject(ctx, entityID, &graph.UpdateObjectRequest{
+		Properties: map[string]any{
+			"scope": newScope,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("update mcp proxy config scope: %w", err)
+	}
+	return nil
+}
