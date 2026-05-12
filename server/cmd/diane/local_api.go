@@ -1751,7 +1751,13 @@ func (h *apiHandlers) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 			if !fullConfig.Enabled {
 				status = "disabled"
 			} else if fullConfig.Type == "http" || fullConfig.Type == "sse" || fullConfig.Type == "streamable-http" {
-		if fullConfig.OAuth != nil {
+			// Check OAuth status from graph config OR locally discovered config
+			// (graph config may lack oauth; locally discovered config covers that case)
+			oauth := fullConfig.OAuth
+			if oauth == nil {
+				oauth = mcpproxy.LoadDiscoveredConfig(fullConfig.Name)
+			}
+			if oauth != nil {
 				tokens, err := mcpproxy.LoadTokens(fullConfig.Name)
 				if err != nil {
 					if os.IsNotExist(err) {
@@ -1838,14 +1844,19 @@ func (h *apiHandlers) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// 4. Override status for enabled servers with no tools.
-		// Preserve auth_required/auth_expired — they're actionable.
-		for i, s := range servers {
-			if s.Status == "running" && toolCounts[s.Name] == 0 {
-				servers[i].Status = "no_tools"
-				servers[i].ErrorMessage = "server connected but no tools registered"
+	// 4. Override status for enabled servers with no tools.
+	// Preserve auth_required/auth_expired — they're actionable.
+	for i, s := range servers {
+		if s.Status == "running" && toolCounts[s.Name] == 0 {
+			servers[i].Status = "no_tools"
+			msg := "server connected but no tools registered"
+			// Add scope context when the server is bound to a different instance
+			if s.Scope != "" && !strings.HasSuffix(s.Scope, h.pc.InstanceID) {
+				msg = fmt.Sprintf("server bound to %s — tools not visible from this node", s.Scope)
 			}
+			servers[i].ErrorMessage = msg
 		}
+	}
 	}
 
 	writeJSON(w, map[string]any{"servers": servers})
