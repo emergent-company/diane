@@ -3,5 +3,5 @@ projects:
     server_url: "${MEMORY_SERVER_URL}"
     project_id: "${MEMORY_PROJECT_ID}"
     token: "${MEMORY_API_KEY}"
-    mode: slave
+    mode: "${DIANE_MODE}"
     instance_id: "${DIANE_INSTANCE_ID}"

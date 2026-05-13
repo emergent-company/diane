@@ -25,9 +25,10 @@ fi
 # ── Defaults ─────────────────────────────────────────────────────────────────
 DIANE_INSTANCE_ID="${DIANE_INSTANCE_ID:-test-node-$(hostname)}"
 DIANE_API_PORT="${DIANE_API_PORT:-8890}"
+DIANE_MODE="${DIANE_MODE:-slave}"
 
 # ── Render config ────────────────────────────────────────────────────────────
-export MEMORY_SERVER_URL MEMORY_PROJECT_ID MEMORY_API_KEY DIANE_INSTANCE_ID DIANE_API_PORT
+export MEMORY_SERVER_URL MEMORY_PROJECT_ID MEMORY_API_KEY DIANE_INSTANCE_ID DIANE_API_PORT DIANE_MODE
 mkdir -p /home/diane/.config
 envsubst < /etc/diane/config.tmpl.yml > /home/diane/.config/diane.yml
 
