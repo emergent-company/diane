@@ -120,6 +120,13 @@ func (c *HTTPMCPClient) sendRequest(method string, params json.RawMessage) (json
 			discovered, discErr := c.discoverOAuthFromHeader(resp.Header)
 			if discErr == nil && discovered != nil {
 				c.OAuth = discovered
+				// Preserve existing client_id — dynamic registration ran once during
+				// 'diane mcp auth' and is authoritative. The WWW-Authenticate header
+				// only contains endpoints, not the registered client_id.
+				existing := LoadDiscoveredConfig(c.Name)
+				if existing != nil && existing.ClientID != "" {
+					discovered.ClientID = existing.ClientID
+				}
 				_ = SaveDiscoveredConfig(c.Name, discovered)
 				log.Printf("[OAuth] Discovered and saved OAuth config for %s. Run 'diane mcp auth --server %s' to authenticate.",
 					c.Name, c.Name)

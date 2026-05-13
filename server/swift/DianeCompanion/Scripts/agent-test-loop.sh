@@ -1,9 +1,13 @@
 #!/bin/bash
-# Diane Agent Test Loop — headless Mac mini
+# ⚠️ DEPRECATED — Use ../scripts/agent-test-loop.sh (project root) instead
+# This script has 11 tests including Swift build + UI screenshots.
+# The active test loop uses a simpler 4-test script to avoid XCUITest
+# limitations on headless Mac mini.
+#
+# Diane Agent Test Loop — headless Mac mini (DEPRECATED)
 # Tests the companion app build, Go server, API endpoints,
 # AND UI navigation via AppleScript + screenshot analysis.
 #
-# Usage: bash scripts/agent-test-loop.sh
 # Output: JSON results at /tmp/diane-test-results.json
 
 set -euo pipefail
