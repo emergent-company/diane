@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"time"
 )
@@ -644,6 +645,8 @@ func AuthenticateAuthCodeFlow(serverName string, oauth *OAuthConfig, background 
 
 	// Open browser on macOS
 	if runtime.GOOS == "darwin" {
+		log.Printf("[OAuth] Opening browser for %s auth URL (AuthenticateAuthCodeFlow main path)", serverName)
+		debug.PrintStack()
 		exec.Command("open", authURL.String()).Start()
 	}
 
@@ -783,6 +786,8 @@ func authenticateAuthCodeFlowStdin(serverName string, oauth *OAuthConfig, verifi
 
 	// On macOS, try to open the browser automatically
 	if runtime.GOOS == "darwin" {
+		log.Printf("[OAuth] Opening browser for %s auth URL (authenticateAuthCodeFlowStdin fallback)", serverName)
+		debug.PrintStack()
 		exec.Command("open", authURL.String()).Start()
 	}
 
