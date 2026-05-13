@@ -35,6 +35,16 @@ struct MCPServersView: View {
         )
         .navigationTitle("MCP Servers")
         .task { await load() }
+        .task { await autoRefreshLoop() }
+    }
+
+    /// Refreshes server list every 30 seconds while the view is visible.
+    private func autoRefreshLoop() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            guard !Task.isCancelled else { break }
+            await load()
+        }
     }
 
     // MARK: - Servers List
@@ -63,6 +73,7 @@ struct MCPServersView: View {
                         .tag(server)
                 }
                 .listStyle(.plain)
+                .refreshable { await load() }
             }
 
             Divider()
