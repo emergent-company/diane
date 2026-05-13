@@ -32,6 +32,7 @@ type StoredTokens struct {
 	RefreshToken string    `json:"refresh_token,omitempty"`
 	ExpiresAt    time.Time `json:"expires_at,omitempty"`
 	Scope        string    `json:"scope,omitempty"`
+	ClientID     string    `json:"client_id,omitempty"`
 }
 
 // secretsDir is a package-level variable so tests can override it.
@@ -457,6 +458,7 @@ func ExchangeCodeForTokens(tokenURL, clientID, code, redirectURI, verifier strin
 	stored := &StoredTokens{
 		AccessToken: tokenResp.AccessToken,
 		Scope:       tokenResp.Scope,
+		ClientID:    clientID,
 	}
 	if tokenResp.RefreshToken != "" {
 		stored.RefreshToken = tokenResp.RefreshToken
@@ -508,6 +510,7 @@ func RefreshTokens(tokenURL, clientID, refreshToken string) (*StoredTokens, erro
 	stored := &StoredTokens{
 		AccessToken: tokenResp.AccessToken,
 		Scope:       tokenResp.Scope,
+		ClientID:    clientID,
 	}
 	if tokenResp.RefreshToken != "" {
 		stored.RefreshToken = tokenResp.RefreshToken

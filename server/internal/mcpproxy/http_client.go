@@ -391,6 +391,16 @@ func (c *HTTPMCPClient) ensureAuthenticated() error {
 			}
 			if oauth != nil && tokens.RefreshToken != "" && oauth.TokenURL != "" {
 				clientID := oauth.ClientID
+				// Fall back to client_id stored alongside tokens if OAuth config lacks it
+				if clientID == "" {
+					clientID = tokens.ClientID
+				}
+				// Last resort: check discovered config
+				if clientID == "" {
+					if disc := LoadDiscoveredConfig(c.Name); disc != nil {
+						clientID = disc.ClientID
+					}
+				}
 				newTokens, refreshErr := RefreshTokens(oauth.TokenURL, clientID, tokens.RefreshToken)
 				if refreshErr == nil {
 					c.Token = newTokens.AccessToken
