@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// MCPClient represents a connection to an MCP server
+// MCPClient communicates with an MCP server over stdin/stdout JSON-RPC.
 type MCPClient struct {
 	Name       string
 	cmd        *exec.Cmd
@@ -20,13 +20,13 @@ type MCPClient struct {
 	stderr     io.ReadCloser
 	encoder    *json.Encoder
 	decoder    *json.Decoder
-	mu         sync.Mutex
-	notifyChan chan string // Channel for notifications (method names)
-	responseCh chan MCPResponse
+	notifyChan chan string
 	nextID     int
-	timeout    time.Duration // Per-request timeout for tool calls
+	timeout    time.Duration
+	mu         sync.Mutex
 	pendingMu  sync.Mutex
 	pending    map[interface{}]chan MCPResponse
+	logFunc    func(format string, args ...interface{})
 }
 
 // MCPRequest represents a JSON-RPC request
@@ -133,7 +133,11 @@ func NewMCPClient(name string, command string, args []string, env map[string]str
 	go func() {
 		scanner := bufio.NewScanner(stderr)
 		for scanner.Scan() {
-			log.Printf("[%s stderr] %s", name, scanner.Text())
+			text := scanner.Text()
+			log.Printf("[%s stderr] %s", name, text)
+			if client.logFunc != nil {
+				client.logFunc("[stderr] %s", text)
+			}
 		}
 	}()
 

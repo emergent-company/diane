@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -44,6 +46,9 @@ func cmdMCPServe() {
 			proxy.Close()
 		}
 	}()
+
+	// Start log HTTP server for companion app (127.0.0.1 only)
+	go startMCPLogHTTPServer(proxy)
 
 	// MCP servers communicate via stdin/stdout
 	decoder := json.NewDecoder(os.Stdin)
@@ -277,4 +282,42 @@ func buildMCPToolList() []map[string]interface{} {
 	}
 
 	return tools
+}
+
+// mcpLogsPort is the local HTTP port for serving MCP log entries to the companion app.
+const mcpLogsPort = 18990
+
+// startMCPLogHTTPServer starts an HTTP server on localhost that serves
+// MCP server log entries from the proxy's ring buffer.
+func startMCPLogHTTPServer(proxy *mcpproxy.Proxy) {
+	if proxy == nil {
+		log.Printf("[mcp-logs] No proxy available, not starting log HTTP server")
+		return
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/logs/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		// Extract server name from path: /logs/{name}
+		serverName := strings.TrimPrefix(r.URL.Path, "/logs/")
+		if serverName == "" {
+			writeJSON(w, map[string]any{"error": "server name required"})
+			return
+		}
+
+		entries := proxy.GetLogs(serverName)
+		if entries == nil {
+			entries = []mcpproxy.LogEntry{}
+		}
+		writeJSON(w, map[string]any{"logs": entries})
+	})
+
+	addr := fmt.Sprintf("127.0.0.1:%d", mcpLogsPort)
+	log.Printf("[mcp-logs] Starting log HTTP server on %s", addr)
+	if err := http.ListenAndServe(addr, mux); err != nil {
+		log.Printf("[mcp-logs] HTTP server error: %v", err)
+	}
 }

@@ -27,6 +27,7 @@ type HTTPMCPClient struct {
 	client  *http.Client
 	mu      sync.Mutex
 	nextID  int
+	logFunc func(format string, args ...interface{})
 }
 
 // Compile-time check that *HTTPMCPClient implements Client.
@@ -407,6 +408,12 @@ func (c *HTTPMCPClient) ensureAuthenticated() error {
 					_ = SaveTokens(c.Name, newTokens)
 					return nil
 				}
+				// Refresh failed — the stored refresh token is likely consumed/rotated.
+				// Delete the stale token file so we don't keep retrying with a dead token.
+				if delErr := DeleteTokens(c.Name); delErr != nil {
+					log.Printf("[%s] Failed to delete stale token file: %v", c.Name, delErr)
+				}
+				log.Printf("[%s] Token refresh failed: %v — stale token file deleted, will re-authenticate on next 401", c.Name, refreshErr)
 			}
 			// Can't refresh, will need to re-authenticate on 401
 			return nil

@@ -56,6 +56,16 @@ func TokenPath(serverName string) string {
 	return filepath.Join(secretsDir(), safeName+".json")
 }
 
+// DeleteTokens removes stored tokens for the given server name from disk.
+// Returns nil if the file doesn't exist (idempotent).
+func DeleteTokens(serverName string) error {
+	path := TokenPath(serverName)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to delete token file %s: %w", path, err)
+	}
+	return nil
+}
+
 // LoadTokens loads stored tokens from disk for the given server name.
 // Returns an error if the token file does not exist or cannot be parsed.
 func LoadTokens(serverName string) (*StoredTokens, error) {

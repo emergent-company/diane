@@ -38,14 +38,15 @@ import (
 //	GET /api/doctor              → DoctorResponse
 type localAPIServer struct {
 	server *http.Server
+	api    *apiHandlers  // exposed so callers can inject references (e.g. mcpProxy) after creation
 }
 
 // startLocalAPI creates and starts the local companion API server on the given port.
 // Returns immediately — the server runs in its own goroutine.
-func startLocalAPI(pc *config.ProjectConfig, port int, callbackHost string) (*localAPIServer, error) {
+func startLocalAPI(pc *config.ProjectConfig, port int, callbackHost string, mcpProxy *mcpproxy.Proxy) (*localAPIServer, error) {
 	mux := http.NewServeMux()
 
-	api := &apiHandlers{pc: pc, callbackHost: callbackHost}
+	api := &apiHandlers{pc: pc, callbackHost: callbackHost, mcpProxy: mcpProxy}
 	registered := 0
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleStatus(w, r) })
 	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleStats(w, r) })
@@ -76,6 +77,7 @@ func startLocalAPI(pc *config.ProjectConfig, port int, callbackHost string) (*lo
 			Addr:    fmt.Sprintf("127.0.0.1:%d", port),
 			Handler: mux,
 		},
+		api: api,
 	}
 
 	go func() {
@@ -100,7 +102,8 @@ func (s *localAPIServer) close() {
 // apiHandlers holds shared state for HTTP handlers.
 type apiHandlers struct {
 	pc           *config.ProjectConfig
-	callbackHost string // hostname for OAuth redirect URI ("localhost" = local machine)
+	callbackHost string             // hostname for OAuth redirect URI ("localhost" = local machine)
+	mcpProxy     *mcpproxy.Proxy    // optional reference for log/status queries (may be nil)
 }
 
 // bridge creates and returns a memory bridge from the project config.
@@ -1943,6 +1946,15 @@ func (h *apiHandlers) handleMCPServerSubRoutes(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	if len(parts) == 2 && parts[1] == "logs" {
+		if r.Method != http.MethodGet {
+			jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		h.handleMCPServerLogs(w, r, serverName)
+		return
+	}
+
 	jsonError(w, http.StatusNotFound, "not found")
 }
 
@@ -2009,6 +2021,21 @@ func (h *apiHandlers) handleMCPServerUpdateScope(w http.ResponseWriter, r *http.
 
 	log.Printf("[LOCAL-API] Updated MCP server %s scope to %s", serverName, req.Scope)
 	writeJSON(w, map[string]any{"status": "ok", "server": serverName, "scope": req.Scope})
+}
+
+// handleMCPServerLogs returns recent log entries for a specific MCP server.
+// GET /api/mcp-servers/{name}/logs → {"logs": [...]}
+func (h *apiHandlers) handleMCPServerLogs(w http.ResponseWriter, r *http.Request, serverName string) {
+	if h.mcpProxy == nil {
+		writeJSON(w, map[string]any{"logs": []any{}, "message": "MCP proxy not available (logs only available on the relay node)"})
+		return
+	}
+
+	entries := h.mcpProxy.GetLogs(serverName)
+	if entries == nil {
+		entries = []mcpproxy.LogEntry{}
+	}
+	writeJSON(w, map[string]any{"logs": entries})
 }
 
 // handleMCPServerTools returns tools exposed by a specific MCP server.

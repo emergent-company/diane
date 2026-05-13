@@ -53,6 +53,7 @@ type Proxy struct {
 	clients    map[string]Client
 	mu         sync.RWMutex
 	notifyChan chan string // Aggregated notifications channel
+	logBuf     *LogBuffer  // Per-server log ring buffer
 }
 
 // NewProxy creates a new MCP proxy from a list of server configs.
@@ -60,6 +61,7 @@ func NewProxy(servers []ServerConfig) (*Proxy, error) {
 	proxy := &Proxy{
 		clients:    make(map[string]Client),
 		notifyChan: make(chan string, 10), // Buffered channel for notifications
+		logBuf:     NewLogBuffer(DefaultMaxLogLines),
 	}
 
 	// Start enabled MCP servers
@@ -229,6 +231,23 @@ func (p *Proxy) Reload(servers []ServerConfig) error {
 	return nil
 }
 
+// Log appends a log entry for the given server.
+func (p *Proxy) Log(serverName, format string, args ...interface{}) {
+	if p.logBuf == nil {
+		return
+	}
+	msg := fmt.Sprintf(format, args...)
+	p.logBuf.Append(serverName, msg)
+}
+
+// GetLogs returns stored log entries for a server.
+func (p *Proxy) GetLogs(serverName string) []LogEntry {
+	if p.logBuf == nil {
+		return nil
+	}
+	return p.logBuf.Lines(serverName)
+}
+
 // startClientUnlocked starts a client (assumes lock is held by caller)
 func (p *Proxy) startClientUnlocked(config ServerConfig) error {
 	var client Client
@@ -236,9 +255,26 @@ func (p *Proxy) startClientUnlocked(config ServerConfig) error {
 
 	switch config.Type {
 	case "stdio":
-		client, err = NewMCPClient(config.Name, config.Command, config.Args, config.Env, config.Timeout)
+		stdioClient, cerr := NewMCPClient(config.Name, config.Command, config.Args, config.Env, config.Timeout)
+		if cerr != nil {
+			return cerr
+		}
+		// Route stderr to the log buffer
+		stdioClient.logFunc = func(format string, args ...interface{}) {
+			p.Log(config.Name, format, args...)
+		}
+		p.Log(config.Name, "Server started (stdio)")
+		client = stdioClient
 	case "http", "streamable-http", "sse":
-		client, err = NewHTTPMCPClient(config.Name, config.URL, config.Headers, config.OAuth, config.Timeout)
+		httpClient, herr := NewHTTPMCPClient(config.Name, config.URL, config.Headers, config.OAuth, config.Timeout)
+		if herr != nil {
+			return herr
+		}
+		httpClient.logFunc = func(format string, args ...interface{}) {
+			p.Log(config.Name, format, args...)
+		}
+		p.Log(config.Name, "Server started (HTTP)")
+		client = httpClient
 	default:
 		return fmt.Errorf("unknown MCP server type: %s", config.Type)
 	}
@@ -261,6 +297,7 @@ func (p *Proxy) monitorClient(clientName string, client Client) {
 	for method := range client.NotificationChan() {
 		if method == "notifications/tools/list_changed" {
 			log.Printf("[%s] Tools changed, forwarding notification", clientName)
+			p.Log(clientName, "Tools changed")
 			select {
 			case p.notifyChan <- clientName:
 			default:

@@ -250,6 +250,35 @@ final class DianeAPIClient: ObservableObject {
         return (try? JSONDecoder().decode([MCPPrompt].self, from: data)) ?? []
     }
 
+    /// Fetch recent log entries for a specific MCP server.
+    /// Tries the local MCP log HTTP endpoint first (port 18990, served by mcp serve),
+    /// falls back to the diane serve local API endpoint.
+    func fetchMCPLogs(serverName: String) async throws -> [MCPServerLogEntry] {
+        let encoded = serverName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? serverName
+
+        // Try the dedicated MCP log HTTP server first (runs in diane mcp serve)
+        let logURL = "http://127.0.0.1:18990/logs/\(encoded)"
+        if let url = URL(string: logURL) {
+            do {
+                let (data, _) = try await URLSession.shared.data(from: url)
+                struct LogResponse: Decodable { let logs: [MCPServerLogEntry]? }
+                if let resp = try? JSONDecoder().decode(LogResponse.self, from: data), let logs = resp.logs {
+                    return logs
+                }
+            } catch {
+                // Log server not running — try local API fallback
+            }
+        }
+
+        // Fallback: try via diane serve local API endpoint
+        let data = try await get("/api/mcp-servers/\(encoded)/logs")
+        struct FallbackResponse: Decodable { let logs: [MCPServerLogEntry]? }
+        if let resp = try? JSONDecoder().decode(FallbackResponse.self, from: data), let logs = resp.logs {
+            return logs
+        }
+        return (try? JSONDecoder().decode([MCPServerLogEntry].self, from: data)) ?? []
+    }
+
     // MARK: - MCP Server CRUD
 
     /// Toggle an MCP server's enabled/disabled state.

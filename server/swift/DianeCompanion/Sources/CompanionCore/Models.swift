@@ -376,6 +376,15 @@ public struct MCPPromptArgument: Identifiable, Codable, Sendable {
     public var id: String { name }
 }
 
+// MARK: - MCP Server Log Entry
+
+public struct MCPServerLogEntry: Identifiable, Codable, Sendable {
+    public let time: String
+    public let message: String
+
+    public var id: String { time + message }
+}
+
 // MARK: - User Profile
 
 public struct UserProfile: Codable, Sendable {

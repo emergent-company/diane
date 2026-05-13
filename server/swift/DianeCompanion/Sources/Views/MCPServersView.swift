@@ -241,6 +241,11 @@ private struct MCPServerDetailView: View {
     @State private var toolsError: String? = nil
     @State private var promptsError: String? = nil
 
+    // Logs state
+    @State private var logs: [MCPServerLogEntry] = []
+    @State private var isLoadingLogs = false
+    @State private var logsError: String? = nil
+
     // Auth state
     @State private var authStatus: String? = nil
     @State private var authIsLoading = false
@@ -255,6 +260,7 @@ private struct MCPServerDetailView: View {
         case connection = "Connection"
         case tools = "Tools"
         case prompts = "Prompts"
+        case logs = "Logs"
     }
 
     var body: some View {
@@ -303,6 +309,8 @@ private struct MCPServerDetailView: View {
                         toolsContent
                     case .prompts:
                         promptsContent
+                    case .logs:
+                        logsContent
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -718,6 +726,105 @@ private struct MCPServerDetailView: View {
         .padding(.vertical, 6)
     }
 
+    // MARK: - Logs Tab
+
+    @ViewBuilder
+    private var logsContent: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if isLoadingLogs {
+                HStack {
+                    Spacer()
+                    ProgressView("Loading logs…")
+                        .controlSize(.small)
+                        .padding(20)
+                    Spacer()
+                }
+            } else if let err = logsError {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                    Text(err)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Retry") { Task { await loadLogs() } }
+                        .font(.caption)
+                        .buttonStyle(.borderless)
+                }
+                .padding(12)
+            } else if logs.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "doc.text")
+                        .font(.title2)
+                        .foregroundStyle(.tertiary)
+                    Text("No logs")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Text("Log entries appear here after the server processes requests.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(24)
+            } else {
+                Text("\(logs.count) log\(logs.count == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+
+                ScrollViewReader { proxy in
+                    List(logs) { entry in
+                        logRow(entry)
+                    }
+                    .listStyle(.plain)
+                    .onChange(of: logs.count) { _ in
+                        withAnimation { proxy.scrollTo(logs.last?.id, anchor: .bottom) }
+                    }
+                }
+            }
+        }
+        .onAppear { Task { await loadLogs() } }
+        .onChange(of: selectedTab) { newTab in
+            if newTab == .logs { Task { await loadLogs() } }
+        }
+    }
+
+    private func logRow(_ entry: MCPServerLogEntry) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(formatLogTime(entry.time))
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(.tertiary)
+                .frame(width: 80, alignment: .trailing)
+            Text(entry.message)
+                .font(.system(.caption, design: .monospaced))
+                .lineLimit(nil)
+                .textSelection(.enabled)
+        }
+        .padding(.vertical, 2)
+        .padding(.horizontal, 8)
+        .listRowInsets(EdgeInsets())
+        .listRowSeparator(.visible)
+    }
+
+    private func formatLogTime(_ iso: String) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: iso) {
+            let timeFormatter = DateFormatter()
+            timeFormatter.dateFormat = "HH:mm:ss"
+            return timeFormatter.string(from: date)
+        }
+        formatter.formatOptions = [.withInternetDateTime]
+        if let date = formatter.date(from: iso) {
+            let timeFormatter = DateFormatter()
+            timeFormatter.dateFormat = "HH:mm:ss"
+            return timeFormatter.string(from: date)
+        }
+        return String(iso.suffix(8).prefix(8))
+    }
+
     // MARK: - Data Loading
 
     @MainActor
@@ -744,6 +851,19 @@ private struct MCPServerDetailView: View {
             prompts = []
         }
         isLoadingPrompts = false
+    }
+
+    @MainActor
+    private func loadLogs() async {
+        isLoadingLogs = true
+        logsError = nil
+        do {
+            logs = try await dianeAPI.fetchMCPLogs(serverName: server.name)
+        } catch {
+            logsError = error.localizedDescription
+            logs = []
+        }
+        isLoadingLogs = false
     }
 }
 

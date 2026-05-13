@@ -106,7 +106,7 @@ func cmdServe() {
 	// ── Start local companion API ──
 	var apiServer *localAPIServer
 	if startAPI {
-		as, err := startLocalAPI(pc, *apiPort, *callbackHost)
+		as, err := startLocalAPI(pc, *apiPort, *callbackHost, nil)
 		if err != nil {
 			log.Printf("[SERVE] Failed to start local API: %v", err)
 		} else {
