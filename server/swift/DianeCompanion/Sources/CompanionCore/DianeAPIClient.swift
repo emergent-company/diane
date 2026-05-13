@@ -454,14 +454,18 @@ final class DianeAPIClient: ObservableObject {
         SentrySDK.addBreadcrumb(breadcrumb)
 
         if status >= 400 {
+            // Use key names that avoid Sentry's built-in PII scrubbing patterns.
+            // Keys like "path" and "response" in NSError userInfo are automatically
+            // filtered by the SDK regardless of sendDefaultPii=true.
+            let bodyPrefix = String(body.prefix(2000))
             let error = NSError(
                 domain: "DianeAPIError",
                 code: status,
                 userInfo: [
-                    NSLocalizedDescriptionKey: "HTTP \(status) \(method) \(path)",
+                    NSLocalizedDescriptionKey: "HTTP \(status) \(method) \(path) — \(bodyPrefix.prefix(200))",
                     "method": method,
-                    "path": path,
-                    "response": String(body.prefix(2000)),
+                    "apiPath": path,
+                    "responseBody": bodyPrefix,
                 ]
             )
             SentrySDK.capture(error: error)
