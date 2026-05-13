@@ -295,14 +295,17 @@ private struct MCPServerDetailView: View {
 
             // Tab content
             ScrollView {
-                switch selectedTab {
-                case .connection:
-                    connectionContent
-                case .tools:
-                    toolsContent
-                case .prompts:
-                    promptsContent
+                Group {
+                    switch selectedTab {
+                    case .connection:
+                        connectionContent
+                    case .tools:
+                        toolsContent
+                    case .prompts:
+                        promptsContent
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .task(id: server.name) {
