@@ -346,12 +346,20 @@ func GenerateCodeChallenge(verifier string) string {
 // that supports RFC 7591. It POSTs a client metadata document to the registration
 // endpoint and returns the assigned client_id.
 //
-// The redirect_uri defaults to http://localhost:28561/callback which Diane uses
-// as its standard OAuth callback port.
-func DynamicClientRegistration(registrationURL string) (string, error) {
+// The default redirect_uri is http://localhost:28561/callback. Additional
+// redirectURIs (e.g., a Tailscale IP) can be provided for multi-node setups.
+// When the client is used from a remote node, the correct callback host is
+// set via --callback-host and all registered URIs are accepted.
+func DynamicClientRegistration(registrationURL string, redirectURIs ...string) (string, error) {
+	uris := []string{"http://localhost:28561/callback"}
+	for _, uri := range redirectURIs {
+		if uri != "" {
+			uris = append(uris, uri)
+		}
+	}
 	body := map[string]interface{}{
 		"client_name":                "Diane AI Assistant",
-		"redirect_uris":              []string{"http://localhost:28561/callback"},
+		"redirect_uris":              uris,
 		"grant_types":                []string{"authorization_code", "refresh_token"},
 		"response_types":             []string{"code"},
 		"token_endpoint_auth_method": "none",
@@ -525,13 +533,13 @@ p{color:#666;margin:0}
 <div class="card"><h1>✅ Authorization Complete</h1>
 <p>You can close this window and return to Diane.</p></div></body></html>`
 
-// defaultCallbackPort is the standard port for the OAuth callback server.
-const defaultCallbackPort = 28561
+// DefaultCallbackPort is the standard port for the OAuth callback server.
+const DefaultCallbackPort = 28561
 
 // BuildAuthURL constructs an OAuth authorization URL with PKCE parameters.
 // The redirectURI should point to a local callback server (e.g., http://localhost:{port}/callback).
 // The challenge is a base64url-encoded SHA-256 hash of the verifier (S256 method).
-func BuildAuthURL(authURL, clientID, redirectURI, challenge string, scopes []string) (string, error) {
+func BuildAuthURL(authURL, clientID, redirectURI, challenge, state string, scopes []string) (string, error) {
 	u, err := url.Parse(authURL)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse authorization URL: %w", err)
@@ -542,6 +550,9 @@ func BuildAuthURL(authURL, clientID, redirectURI, challenge string, scopes []str
 	q.Set("redirect_uri", redirectURI)
 	q.Set("code_challenge", challenge)
 	q.Set("code_challenge_method", "S256")
+	if state != "" {
+		q.Set("state", state)
+	}
 	if len(scopes) > 0 {
 		q.Set("scope", strings.Join(scopes, " "))
 	}
@@ -590,7 +601,10 @@ func AuthenticateAuthCodeFlow(serverName string, oauth *OAuthConfig, background 
 	codeChan := make(chan string, 1)
 	errChan := make(chan error, 1)
 
-	server, port, err := StartCallbackServer(codeChan, errChan)
+	// Generate a random state to prevent stale redirects from hijacking
+	state := GenerateCodeVerifier()
+
+	server, port, err := StartCallbackServer(codeChan, errChan, state)
 	if err != nil {
 		// Can't start local server — fall back to stdin paste
 		log.Printf("[OAuth] Cannot start callback server: %v, falling back to stdin", err)
@@ -613,6 +627,7 @@ func AuthenticateAuthCodeFlow(serverName string, oauth *OAuthConfig, background 
 	q.Set("redirect_uri", redirectURI)
 	q.Set("code_challenge", challenge)
 	q.Set("code_challenge_method", "S256")
+	q.Set("state", state)
 	if len(oauth.Scopes) > 0 {
 		q.Set("scope", strings.Join(oauth.Scopes, " "))
 	}
@@ -654,9 +669,9 @@ func AuthenticateAuthCodeFlow(serverName string, oauth *OAuthConfig, background 
 // startCallbackServer starts a local HTTP server on an available port.
 // The server handles GET /callback?code=... requests and sends the code
 // to the provided channel. Returns the server (for caller shutdown) and port.
-func StartCallbackServer(codeChan chan string, errChan chan error) (*http.Server, int, error) {
+func StartCallbackServer(codeChan chan string, errChan chan error, expectedState string) (*http.Server, int, error) {
 	// Try the default port first, then fall back to random
-	port := defaultCallbackPort
+	port := DefaultCallbackPort
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		// Default port taken — try random
@@ -677,6 +692,21 @@ func StartCallbackServer(codeChan chan string, errChan chan error) (*http.Server
 			errChan <- fmt.Errorf("callback missing code parameter")
 			return
 		}
+
+		// Validate state parameter to prevent stale browser tabs from
+		// hijacking the flow. If expectedState is set, only accept
+		// redirects with a matching state.
+		if expectedState != "" {
+			state := r.URL.Query().Get("state")
+			if state != expectedState {
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(`<html><body><h1>❌ Authorization Rejected</h1><p>State parameter mismatch — this redirect was from a previous auth attempt. Close this tab and use the new authorization URL.</p></body></html>`))
+				// Don't send to errChan — this is not a server error, just a stale request
+				return
+			}
+		}
+
 		// Show success page — response written synchronously,
 		// then send the code to the main flow (NOT a cleanup goroutine)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")

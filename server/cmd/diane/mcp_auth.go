@@ -52,7 +52,7 @@ func cmdMCPAuth(args []string) {
 	// check if dynamic client registration is available
 	if oauth != nil && oauth.RegistrationURL != "" && oauth.ClientID == "" {
 		fmt.Printf("🔄 Registering client with authorization server...\n")
-		clientID, err := mcpproxy.DynamicClientRegistration(oauth.RegistrationURL)
+		clientID, err := mcpproxy.DynamicClientRegistration(oauth.RegistrationURL, fmt.Sprintf("http://localhost:%d/callback", mcpproxy.DefaultCallbackPort))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "❌ Dynamic client registration failed: %v\n", err)
 			osExit(1)

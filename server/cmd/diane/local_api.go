@@ -1767,9 +1767,26 @@ func (h *apiHandlers) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 						status = "error"
 						errorMsg = fmt.Sprintf("failed to load auth tokens: %v", err)
 					}
-				} else if !tokens.ExpiresAt.IsZero() && time.Now().After(tokens.ExpiresAt) {
+			} else if !tokens.ExpiresAt.IsZero() && time.Now().After(tokens.ExpiresAt) {
+				// Token expired — try to refresh before reporting expired
+				if oauth != nil && oauth.TokenURL != "" && oauth.ClientID != "" && tokens.RefreshToken != "" {
+					newTokens, refreshErr := mcpproxy.RefreshTokens(oauth.TokenURL, oauth.ClientID, tokens.RefreshToken)
+					if refreshErr == nil {
+						log.Printf("[LOCAL-API] Auto-refreshed tokens for %s (new expiry: %s)", fullConfig.Name, newTokens.ExpiresAt.Format(time.RFC3339))
+						_ = mcpproxy.SaveTokens(fullConfig.Name, newTokens)
+						status = "running"
+					} else {
+						log.Printf("[LOCAL-API] Token refresh failed for %s: %v", fullConfig.Name, refreshErr)
+						status = "auth_expired"
+						errorMsg = fmt.Sprintf("auth tokens expired at %s — re-authenticate in companion app", tokens.ExpiresAt.Format(time.RFC3339))
+					}
+				} else {
+					log.Printf("[LOCAL-API] Token expired for %s but cannot refresh: oauth=%v hasTokenURL=%t hasClientID=%t hasRefreshToken=%t",
+						fullConfig.Name, oauth != nil, oauth != nil && oauth.TokenURL != "",
+						oauth != nil && oauth.ClientID != "", tokens.RefreshToken != "")
 					status = "auth_expired"
 					errorMsg = fmt.Sprintf("auth tokens expired at %s — re-authenticate in companion app", tokens.ExpiresAt.Format(time.RFC3339))
+				}
 				}
 			}
 			}

@@ -56,7 +56,10 @@ func startPendingAuth(serverName string, oauth *mcpproxy.OAuthConfig, callbackHo
 	}
 	if oauth.ClientID == "" {
 		if oauth.RegistrationURL != "" {
-			clientID, err := mcpproxy.DynamicClientRegistration(oauth.RegistrationURL)
+			// Register with both localhost and the remote callback host
+			// so refresh_token works regardless of which host handles the redirect.
+			regRedirectURI := fmt.Sprintf("http://%s:%d/callback", callbackHost, mcpproxy.DefaultCallbackPort)
+			clientID, err := mcpproxy.DynamicClientRegistration(oauth.RegistrationURL, regRedirectURI)
 			if err != nil {
 				return nil, fmt.Errorf("dynamic client registration failed: %w", err)
 			}
@@ -70,18 +73,20 @@ func startPendingAuth(serverName string, oauth *mcpproxy.OAuthConfig, callbackHo
 	// Generate PKCE parameters
 	verifier := mcpproxy.GenerateCodeVerifier()
 	challenge := mcpproxy.GenerateCodeChallenge(verifier)
+	// Generate a random state parameter to prevent stale redirects
+	state := mcpproxy.GenerateCodeVerifier() // reuse PKCE verifier generator for random state
 
 	// Start a local callback server
 	codeChan := make(chan string, 1)
 	errChan := make(chan error, 1)
-	callbackServer, port, err := mcpproxy.StartCallbackServer(codeChan, errChan)
+	callbackServer, port, err := mcpproxy.StartCallbackServer(codeChan, errChan, state)
 	if err != nil {
 		return nil, fmt.Errorf("cannot start callback server: %w", err)
 	}
 
 	// Build authorization URL
 	redirectURI := fmt.Sprintf("http://%s:%d/callback", callbackHost, port)
-	authURL, err := mcpproxy.BuildAuthURL(oauth.AuthorizationURL, oauth.ClientID, redirectURI, challenge, oauth.Scopes)
+	authURL, err := mcpproxy.BuildAuthURL(oauth.AuthorizationURL, oauth.ClientID, redirectURI, challenge, state, oauth.Scopes)
 	if err != nil {
 		callbackServer.Shutdown(nil)
 		return nil, fmt.Errorf("build auth URL: %w", err)
