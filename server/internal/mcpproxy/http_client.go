@@ -137,16 +137,11 @@ func (c *HTTPMCPClient) sendRequest(method string, params json.RawMessage) (json
 				method, c.Name)
 		}
 
-		// Run OAuth flow (device or auth code) interactively
-		if err := c.reauthenticate(); err != nil {
-			return nil, fmt.Errorf("%s unauthorized (401): %w", method, err)
-		}
-
-		// Save the new token
-		_ = SaveTokens(c.Name, &StoredTokens{AccessToken: c.Token})
-
-		// Retry the original request with the new token
-		return c.sendRequest(method, params)
+		// OAuth is configured but token is still rejected — don't auto-run
+		// interactive auth here. The relay subprocess would pop open a browser
+		// unprompted on macOS. User must re-authenticate via the companion app.
+		return nil, fmt.Errorf("%s unauthorized (401): token rejected for %s — re-authenticate in the companion app",
+			method, c.Name)
 	}
 
 	// Handle other HTTP-level errors
