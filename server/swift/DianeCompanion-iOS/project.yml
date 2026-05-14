@@ -1,0 +1,60 @@
+name: Diane
+options:
+  bundleIdPrefix: com.emergent-company.diane-companion
+  deploymentTarget:
+    iOS: "18.0"
+  xcodeVersion: "16.0"
+  generateEmptyDirectories: true
+  indentWidth: 4
+  tabWidth: 4
+
+settings:
+    base:
+        SWIFT_VERSION: "6.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+        PRODUCT_BUNDLE_IDENTIFIER: com.emergent-company.diane-companion.ios
+        DEVELOPMENT_TEAM: ""
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "Apple Development"
+        ENABLE_HARDENED_RUNTIME: NO
+        MARKETING_VERSION: 1.0.0
+        CURRENT_PROJECT_VERSION: 1
+
+packages:
+  DianeShared:
+    path: ../Packages/DianeShared
+
+targets:
+  Diane:
+    type: application
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: Sources
+      - path: DianeCompanion/Assets.xcassets
+      - path: DianeCompanion/LaunchScreen.storyboard
+    dependencies:
+      - package: DianeShared
+        product: DianeShared
+    settings:
+      base:
+        PRODUCT_NAME: Diane
+        INFOPLIST_FILE: DianeCompanion/Info.plist
+        CODE_SIGN_ENTITLEMENTS: DianeCompanion/DianeCompanion.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+        TARGETED_DEVICE_FAMILY: "1,2"
+    info:
+      path: DianeCompanion/Info.plist
+
+  DianeTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: DianeTests
+    dependencies:
+      - target: Diane
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
