@@ -198,10 +198,35 @@ struct MCPServersView: View {
                 await loadNodes()
                 error = nil
             } catch {
-                self.error = error.localizedDescription
+                // Build a user-friendly error message
+                self.error = formatMCPError(localError, remoteError: error)
             }
         }
         isLoading = false
+    }
+
+    /// Create a user-friendly error message from MCP API failures.
+    /// Detects Memory Platform 502/500 and returns a clear message.
+    private func formatMCPError(_ local: Error, remoteError: Error) -> String {
+        // Check if the underlying issue is MP being unreachable
+        let localDesc = local.localizedDescription.lowercased()
+        let remoteDesc = remoteError.localizedDescription.lowercased()
+        let isMPDown = localDesc.contains("502") || localDesc.contains("mp returned") ||
+                       remoteDesc.contains("502") || remoteDesc.contains("bad gateway")
+
+        if isMPDown {
+            return "Memory Platform unavailable (502). Try again later."
+        }
+        return "Cannot load MCP servers: \(remoteError.localizedDescription)"
+    }
+
+    /// Format a nodes fetch error into a user-friendly message.
+    private func formatMCPNodeError(_ error: Error) -> String {
+        let desc = error.localizedDescription.lowercased()
+        if desc.contains("502") || desc.contains("mp returned") || desc.contains("bad gateway") {
+            return "Memory Platform unavailable (502). Cannot load relay nodes."
+        }
+        return "Failed to load relay nodes: \(error.localizedDescription)"
     }
 
     @MainActor
@@ -219,7 +244,7 @@ struct MCPServersView: View {
                 }
                 nodeError = nil
             } catch {
-                nodeError = error.localizedDescription
+                nodeError = formatMCPNodeError(error)
             }
         }
         isLoadingNodes = false

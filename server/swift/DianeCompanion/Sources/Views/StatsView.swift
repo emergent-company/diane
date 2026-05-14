@@ -4,6 +4,7 @@ import SwiftUI
 struct StatsView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var dianeAPI: DianeAPIClient
+    @EnvironmentObject var updateChecker: UpdateChecker
 
     @State private var stats: AgentStatsResponse? = nil
     @State private var providerStats: ProviderStatsResponse? = nil
@@ -13,6 +14,7 @@ struct StatsView: View {
     @State private var isLoading = false
     @State private var error: String? = nil
     @State private var selectedHours: Int = 168
+    @State private var dismissVersionBanner = false
 
     private let hourOptions = [(24, "24h"), (168, "7d"), (720, "30d")]
 
@@ -20,6 +22,8 @@ struct StatsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Design.Spacing.lg) {
                 timeRangePicker
+
+                versionMismatchBanner
 
                 if let status = serverStatus {
                     serverStatusBar(status)
@@ -92,6 +96,44 @@ struct StatsView: View {
         .onChange(of: selectedHours) { _, _ in
             Task { await load() }
         }
+    }
+
+    // MARK: - Version Mismatch Banner
+
+    /// Shows a warning when the CLI version differs significantly from the companion app version.
+    @ViewBuilder
+    private var versionMismatchBanner: some View {
+        if !dismissVersionBanner, let cliVer = serverStatus?.version, let appVer = updateChecker.currentVersion {
+            let cliParts = parseVersion(cliVer)
+            let appParts = parseVersion(appVer)
+            if cliParts.count >= 2 && appParts.count >= 2 {
+                let mismatch = cliParts[0] != appParts[0] || cliParts[1] != appParts[1]
+                if mismatch {
+                    HStack(spacing: Design.Spacing.sm) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text("Version mismatch: CLI **\(cliVer)** \u{2192} Companion **\(appVer)**")
+                            .font(.subheadline)
+                        Spacer()
+                        Button(action: { dismissVersionBanner = true }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, Design.Spacing.sm)
+                    .padding(.vertical, 8)
+                    .background(.orange.opacity(0.1))
+                    .cornerRadius(Design.CornerRadius.medium)
+                }
+            }
+        }
+    }
+
+    /// Parse a version string like "1.38.69" or "v1.38.69" into [1, 38, 69].
+    private func parseVersion(_ raw: String) -> [Int] {
+        let s = raw.hasPrefix("v") ? String(raw.dropFirst()) : raw
+        return s.split(separator: ".").compactMap { Int($0) }
     }
 
     // MARK: - Server Status Bar
@@ -486,5 +528,6 @@ struct StatsView: View {
     StatsView()
         .environmentObject(AppState())
         .environmentObject(DianeAPIClient())
+        .environmentObject(UpdateChecker())
         .frame(width: 800, height: 600)
 }

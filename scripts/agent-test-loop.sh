@@ -64,14 +64,20 @@ rm -rf /tmp/DianeUnitTests.xcresult
 xcodegen generate 2>&1 | tail -1
 
 # Run tests — capture exit code but don't abort (set -e), so Step 3 still runs
+# NOTE: Skip LiveAPI tests — they require cloud connectivity to memory.emergent-company.ai
+# and fail the entire suite when the cloud API is unreachable (transient DNS/network issues).
+# Use test-fast.sh --live to run these intentionally.
 set +e
 xcodebuild test -project Diane.xcodeproj -scheme Diane \
   -destination 'platform=macOS,arch=arm64' \
   -only-testing:DianeTests \
   -skip-testing:DianeUITests \
+  -skip-testing:DianeTests/DianeLiveAPITests \
+  -skip-testing:DianeTests/LiveAPIResponseShapeTests \
   -resultBundlePath /tmp/DianeUnitTests.xcresult \
   2>&1 | tee /tmp/xctest-raw-output.txt | grep -E "Test Suite|error:|failed|passed"
-XCODE_EXIT=$?
+# Use PIPESTATUS[0] to get xcodebuild's real exit code (not the pipe's)
+XCODE_EXIT=${PIPESTATUS[0]}
 set -e
 
 # Always clean up the result bundle
