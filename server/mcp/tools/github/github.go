@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Emergent-Comapny/diane/mcp/tools"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -97,6 +98,9 @@ func NewProvider() (*Provider, error) {
 	}, nil
 }
 
+// Name returns the provider name
+func (p *Provider) Name() string { return "github" }
+
 // CheckDependencies verifies GitHub App configuration exists
 func (p *Provider) CheckDependencies() error {
 	configPath := getConfigPath()
@@ -106,12 +110,8 @@ func (p *Provider) CheckDependencies() error {
 	return nil
 }
 
-// Tool represents an MCP tool definition
-type Tool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"inputSchema"`
-}
+// Tool is an alias for the canonical MCP tool definition
+type Tool = tools.Tool
 
 // Tools returns the list of GitHub bot tools
 func (p *Provider) Tools() []Tool {

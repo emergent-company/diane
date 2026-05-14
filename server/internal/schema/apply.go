@@ -230,15 +230,7 @@ func applyViaPack(
 
 	if opts.ServerURL == "" {
 		log.Println("[schema] ServerURL not set, skipping pack creation")
-		var results []Result
-		err := fmt.Errorf("ServerURL not set")
-		for _, def := range newDefs {
-			results = append(results, Result{TypeName: def.TypeName, Action: "error", Error: err})
-		}
-		for _, rel := range allRels {
-			results = append(results, Result{TypeName: rel.Name, Action: "error", Error: err})
-		}
-		return results
+		return makeErrorResults(newDefs, allRels, fmt.Errorf("ServerURL not set"))
 	}
 
 	baseURL := strings.TrimRight(opts.ServerURL, "/")
@@ -266,57 +258,26 @@ func applyViaPack(
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		var results []Result
-		err = fmt.Errorf("marshal pack: %w", err)
-		for _, def := range newDefs {
-			results = append(results, Result{TypeName: def.TypeName, Action: "error", Error: err})
-		}
-		for _, rel := range allRels {
-			results = append(results, Result{TypeName: rel.Name, Action: "error", Error: err})
-		}
-		return results
+		return makeErrorResults(newDefs, allRels, fmt.Errorf("marshal pack: %w", err))
 	}
 
 	// Post the pack
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/api/schemas", bytes.NewReader(body))
 	if err != nil {
-		var results []Result
-		err = fmt.Errorf("create pack request: %w", err)
-		for _, def := range newDefs {
-			results = append(results, Result{TypeName: def.TypeName, Action: "error", Error: err})
-		}
-		for _, rel := range allRels {
-			results = append(results, Result{TypeName: rel.Name, Action: "error", Error: err})
-		}
-		return results
+		return makeErrorResults(newDefs, allRels, fmt.Errorf("create pack request: %w", err))
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(ctx, req)
 	if err != nil {
-		var results []Result
-		err = fmt.Errorf("http post pack: %w", err)
-		for _, def := range newDefs {
-			results = append(results, Result{TypeName: def.TypeName, Action: "error", Error: err})
-		}
-		for _, rel := range allRels {
-			results = append(results, Result{TypeName: rel.Name, Action: "error", Error: err})
-		}
-		return results
+		return makeErrorResults(newDefs, allRels, fmt.Errorf("http post pack: %w", err))
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != 201 {
-		var results []Result
-		err = fmt.Errorf("create pack: HTTP %d: %s", resp.StatusCode, string(respBody))
-		for _, def := range newDefs {
-			results = append(results, Result{TypeName: def.TypeName, Action: "error", Error: err})
-		}
-		for _, rel := range allRels {
-			results = append(results, Result{TypeName: rel.Name, Action: "error", Error: err})
-		}
-		return results
+		return makeErrorResults(newDefs, allRels,
+			fmt.Errorf("create pack: HTTP %d: %s", resp.StatusCode, string(respBody)))
 	}
 
 	var packResp struct {
@@ -340,33 +301,31 @@ func applyViaPack(
 
 	assignResp, err := client.Do(ctx, assignReq)
 	if err != nil {
-		var results []Result
-		err = fmt.Errorf("assign pack: %w", err)
-		for _, def := range newDefs {
-			results = append(results, Result{TypeName: def.TypeName, Action: "error", Error: err})
-		}
-		for _, rel := range allRels {
-			results = append(results, Result{TypeName: rel.Name, Action: "error", Error: err})
-		}
-		return results
+		return makeErrorResults(newDefs, allRels, fmt.Errorf("assign pack: %w", err))
 	}
 	defer assignResp.Body.Close()
 	assignRespBody, _ := io.ReadAll(assignResp.Body)
 
 	if assignResp.StatusCode >= 400 {
-		var results []Result
-		err = fmt.Errorf("assign pack: HTTP %d: %s", assignResp.StatusCode, string(assignRespBody))
-		for _, def := range newDefs {
-			results = append(results, Result{TypeName: def.TypeName, Action: "error", Error: err})
-		}
-		for _, rel := range allRels {
-			results = append(results, Result{TypeName: rel.Name, Action: "error", Error: err})
-		}
-		return results
+		return makeErrorResults(newDefs, allRels,
+			fmt.Errorf("assign pack: HTTP %d: %s", assignResp.StatusCode, string(assignRespBody)))
 	}
 
 	log.Printf("[schema] Pack %q assigned successfully", packName)
 	return parseAssignResponse(assignRespBody, newDefs, allRels)
+}
+
+// makeErrorResults creates a Result slice with error entries for all defs and rels.
+// Used by applyViaPack to avoid repeating the same loop 7+ times.
+func makeErrorResults(newDefs []SchemaDefinition, allRels []RelationshipDefinition, err error) []Result {
+	var results []Result
+	for _, def := range newDefs {
+		results = append(results, Result{TypeName: def.TypeName, Action: "error", Error: err})
+	}
+	for _, rel := range allRels {
+		results = append(results, Result{TypeName: rel.Name, Action: "error", Error: err})
+	}
+	return results
 }
 
 func parseAssignResponse(body []byte, newDefs []SchemaDefinition, allRels []RelationshipDefinition) []Result {

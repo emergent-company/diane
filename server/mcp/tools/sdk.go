@@ -137,6 +137,16 @@ func RunCommandJSON(result interface{}, name string, args ...string) error {
 	return nil
 }
 
+// HasTool checks if a provider has a tool with the given name
+func HasTool(provider ToolProvider, name string) bool {
+	for _, tool := range provider.Tools() {
+		if tool.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // CommandExists checks if a command is available in PATH
 func CommandExists(name string) bool {
 	_, err := exec.LookPath(name)

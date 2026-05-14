@@ -9,16 +9,14 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/Emergent-Comapny/diane/mcp/tools"
 )
 
 const userAgent = "diane github.com/Emergent-Comapny/diane"
 
-// Tool represents an MCP tool definition
-type Tool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"inputSchema"`
-}
+// Tool is an alias for the canonical MCP tool definition
+type Tool = tools.Tool
 
 // Provider implements weather tools
 type Provider struct{}
@@ -27,6 +25,9 @@ type Provider struct{}
 func NewProvider() *Provider {
 	return &Provider{}
 }
+
+// Name returns the provider name
+func (p *Provider) Name() string { return "weather" }
 
 // CheckDependencies verifies weather API is accessible (no config needed)
 func (p *Provider) CheckDependencies() error {
@@ -348,13 +349,9 @@ func (p *Provider) formatTimeseries(entry interface{}) map[string]interface{} {
 
 // textContent formats result as MCP text content
 func textContent(data interface{}) map[string]interface{} {
-	jsonBytes, _ := json.MarshalIndent(data, "", "  ")
-	return map[string]interface{}{
-		"content": []map[string]interface{}{
-			{
-				"type": "text",
-				"text": string(jsonBytes),
-			},
-		},
+	result, err := tools.JSONContent(data)
+	if err != nil {
+		return tools.TextContent(fmt.Sprintf("Error: %v", err))
 	}
+	return result
 }
