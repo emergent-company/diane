@@ -80,7 +80,7 @@ func cmdProviderList() {
 	}
 	defer bridge.Close()
 
-	// Resolve org ID
+	// Resolve org ID for project-level provider listing
 	orgID := pc.OrgID
 	if orgID == "" {
 		proj, err := bridge.Client().Projects.Get(ctx, pc.ProjectID, nil)
@@ -91,19 +91,14 @@ func cmdProviderList() {
 		}
 	}
 
-	if orgID == "" {
-		fmt.Println("  ⚠️  Cannot determine org ID")
-		return
-	}
-
-	providers, err := bridge.ListOrgProviders(ctx, orgID)
+	providers, err := bridge.ListProjectProviderConfigs(ctx, orgID)
 	if err != nil {
 		fmt.Printf("  ⚠️  %v\n", err)
 		return
 	}
 
 	if len(providers) == 0 {
-		fmt.Println("  No providers configured on Memory Platform")
+		fmt.Println("  No provider configurations on Memory Platform")
 	} else {
 		for _, p := range providers {
 			model := p.GenerativeModel
@@ -218,7 +213,17 @@ func cmdProviderSet(kind string) {
 	fmt.Print("\nTest provider now? [Y/n]: ")
 	test := readLine(reader)
 	if test == "" || strings.ToLower(test) == "y" || strings.ToLower(test) == "yes" {
-		doProviderTestWithProvider(ctx, bridge, pc.OrgID, pType, kind)
+		fmt.Printf("Testing %s provider (%s)...\n", kind, pType)
+		projCtx, projCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer projCancel()
+		result, err := bridge.TestProviderByProject(projCtx, pc.ProjectID, pType)
+		if err != nil {
+			fmt.Printf("❌ Test failed: %v\n", err)
+		} else {
+			fmt.Printf("✅ %s → %s\n", result.Provider, result.Model)
+			fmt.Printf("   Reply: \"%s\"\n", truncateStr(result.Reply, 80))
+			fmt.Printf("   Latency: %dms\n", result.LatencyMs)
+		}
 	}
 }
 
@@ -260,27 +265,23 @@ func cmdProviderTest(kind string) {
 		orgID = proj.OrgID
 	}
 
-	// Look up providers from MP
-	providers, err := bridge.ListOrgProviders(ctx, orgID)
+	// Look up providers from MP (project-level)
+	providers, err := bridge.ListProjectProviderConfigs(ctx, orgID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to list providers: %v\n", err)
 		os.Exit(1)
 	}
 
 	if len(providers) == 0 {
-		fmt.Printf("⚠️  No provider configured on Memory Platform. Use 'diane provider set %s' first.\n", kind)
+		fmt.Printf("⚠️  No provider configured. Use 'diane provider set %s' first.\n", kind)
 		return
 	}
 
-	// Use the first provider (MP doesn't distinguish generative/embedding at config level)
+	// Use the first provider
 	provider := providers[0].Provider
-	doProviderTestWithProvider(ctx, bridge, orgID, provider, kind)
-}
-
-func doProviderTestWithProvider(ctx context.Context, bridge *memory.Bridge, orgID, provider, kind string) {
 	fmt.Printf("Testing %s provider (%s)...\n", kind, provider)
 
-	result, err := bridge.TestProvider(ctx, orgID, provider)
+	result, err := bridge.TestProviderByProject(ctx, pc.ProjectID, provider)
 	if err != nil {
 		fmt.Printf("❌ Test failed: %v\n", err)
 		return
