@@ -73,6 +73,8 @@ struct MainWindowView: View {
             RelayNodesView()
         case .objects:
             ObjectsBrowserView()
+        case .providers:
+            ProvidersView()
         case .permissions:
             PermissionsView()
         case .system:
