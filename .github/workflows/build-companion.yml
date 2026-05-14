@@ -74,6 +74,7 @@ jobs:
           retention-days: 14
 
       - name: Upload xcarchive
+        if: hashFiles('server/swift/DianeCompanion/build/Diane.xcarchive') != ''
         uses: actions/upload-artifact@v4
         with:
           name: diane-companion-archive-${{ steps.version.outputs.tag }}
