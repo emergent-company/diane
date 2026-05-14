@@ -3200,6 +3200,14 @@ func (h *apiHandlers) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[CHAT-STREAM] SSE scanner error: %v", err)
 	}
 
+	// ── Agent Push Notification ──────────────────────────────
+	// After a successful run, fire a goroutine to push notifications
+	// to registered phone nodes. This runs in the background so the
+	// SSE stream closes immediately.
+	if sawRunComplete && sessionID != "" {
+		go h.sendAgentNotification(sessionID, req.AgentName, tokenCount)
+	}
+
 	// Post-stream diagnostics
 	if !sawRunCreated {
 		log.Printf("[CHAT-STREAM] WARNING: stream ended without run.created event — empty or failed run (session=%s)", sessionID[:min(len(sessionID), 12)])

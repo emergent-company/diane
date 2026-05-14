@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
@@ -348,6 +349,58 @@ func (h *apiHandlers) handlePushSend(w http.ResponseWriter, r *http.Request) {
 		"total":      len(targets),
 		"apns_ready": apnsKey != "" && apnsKeyID != "" && apnsTeamID != "",
 	})
+}
+
+// ── Agent Notification Integration ───────────────────────────────────────────
+
+// sendAgentNotification is called from handleChatStream after a run completes.
+// It fires a goroutine-friendly notification to registered phone nodes.
+func (h *apiHandlers) sendAgentNotification(sessionID, agentName string, tokenCount int) {
+	ctx := context.Background()
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		log.Printf("[PUSH-NOTIFY] bridge error: %v", err)
+		return
+	}
+	defer bridge.Close()
+
+	// Fetch the session to get the title
+	session, sessErr := bridge.GetSession(ctx, sessionID)
+	if sessErr != nil {
+		log.Printf("[PUSH-NOTIFY] get session %s: %v", sessionID[:12], sessErr)
+		// Continue with just the session ID
+	}
+
+	title := ""
+	if session != nil && session.Title != "" {
+		title = session.Title
+	}
+
+	// Build notification body
+	body := fmt.Sprintf("New message from %s", agentName)
+	if title != "" {
+		body = fmt.Sprintf("%s — %s", agentName, title)
+	}
+	log.Printf("[PUSH-NOTIFY] session=%s agent=%s tokens=%d: %s", sessionID[:12], agentName, tokenCount, body)
+
+	// Call push/send via HTTP (reuses the same bridge logic)
+	// We make an internal HTTP call to the push/send endpoint
+	pushReq := map[string]any{
+		"title":      title,
+		"body":       body,
+		"session_id": sessionID,
+		"agent_name": agentName,
+	}
+	bodyJSON, _ := json.Marshal(pushReq)
+	pushURL := "http://127.0.0.1:8890/api/push/send"
+
+	resp, postErr := http.Post(pushURL, "application/json", bytes.NewReader(bodyJSON))
+	if postErr != nil {
+		log.Printf("[PUSH-NOTIFY] POST push/send failed: %v", postErr)
+		return
+	}
+	resp.Body.Close()
+	log.Printf("[PUSH-NOTIFY] notification sent for %s", sessionID[:12])
 }
 
 // ── APNs HTTP/2 Client ────────────────────────────────────────────────────────
