@@ -309,12 +309,14 @@ func runAutoUpgradeCheck() {
 		return
 	}
 
-	autoUpgrade(release.TagName, release.Assets, symlinkPath, binDir)
-
-	// On macOS, write DMG trigger for companion app
+	// On macOS, write DMG trigger for companion app BEFORE the restart,
+	// because restartServeProcess kills the current process (SIGKILL via
+	// launchctl kickstart -kp) and the lines after never execute.
 	if runtime.GOOS == "darwin" {
 		writeDMGTrigger(release.TagName)
 	}
+
+	autoUpgrade(release.TagName, release.Assets, symlinkPath, binDir)
 }
 
 // cmdServeRestart restarts the diane serve process via launchctl.
