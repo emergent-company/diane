@@ -138,9 +138,26 @@ func (c *HTTPMCPClient) sendRequest(method string, params json.RawMessage) (json
 				method, c.Name)
 		}
 
-		// OAuth is configured but token is still rejected — don't auto-run
-		// interactive auth here. The relay subprocess would pop open a browser
-		// unprompted on macOS. User must re-authenticate via the companion app.
+		// OAuth is configured but cached token was rejected — it may have been
+		// refreshed on disk by the LOCAL-API (main process) while this subprocess
+		// held the stale version. Clear the cached token, reload from disk,
+		// and retry once only if we got a different (fresh) token.
+		oldToken := c.Token
+		c.mu.Lock()
+		c.Token = ""
+		c.mu.Unlock()
+
+		if err := c.ensureAuthenticated(); err == nil && c.Token != "" {
+			if c.Token != oldToken {
+				// Token changed on disk (refreshed by LOCAL-API) — retry once
+				resp.Body.Close()
+				return c.sendRequest(method, params)
+			}
+		}
+
+		// Still no valid token or the same stale token — user must re-authenticate
+		// via the companion app. Don't auto-run interactive auth here
+		// (blocks on stdin in relay context).
 		return nil, fmt.Errorf("%s unauthorized (401): token rejected for %s — re-authenticate in the companion app",
 			method, c.Name)
 	}
