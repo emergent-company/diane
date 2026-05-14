@@ -321,6 +321,11 @@ func (b *Bridge) ListOrgProviders(ctx context.Context, orgID string) ([]sdkprovi
 	return b.client.Provider.ListOrgConfigs(ctx, orgID)
 }
 
+// ListProjectProviderConfigs returns project-level provider configs for the given org.
+func (b *Bridge) ListProjectProviderConfigs(ctx context.Context, orgID string) ([]sdkprovider.ProjectProviderConfig, error) {
+	return b.client.Provider.ListProjectConfigsByOrg(ctx, orgID)
+}
+
 // UpsertOrgProvider creates or updates an org-level provider config with credentials.
 // Runs a live credential test and syncs model catalog on success.
 func (b *Bridge) UpsertOrgProvider(ctx context.Context, orgID, providerType string, apiKey, model, baseURL string) (*sdkprovider.ProviderConfig, error) {
@@ -343,9 +348,30 @@ func (b *Bridge) UpsertProjectProvider(ctx context.Context, projectID, providerT
 	return b.client.Provider.UpsertProjectConfig(ctx, projectID, providerType, req)
 }
 
+// DeleteOrgProvider removes an org-level provider config.
+func (b *Bridge) DeleteOrgProvider(ctx context.Context, orgID, provider string) error {
+	return b.client.Provider.DeleteOrgConfig(ctx, orgID, provider)
+}
+
+// DeleteProjectProvider removes a project-level provider config.
+func (b *Bridge) DeleteProjectProvider(ctx context.Context, projectID, provider string) error {
+	return b.client.Provider.DeleteProjectConfig(ctx, projectID, provider)
+}
+
+// ListProviderModels returns the model catalog for a given provider and type.
+func (b *Bridge) ListProviderModels(ctx context.Context, provider, modelType string) ([]sdkprovider.SupportedModel, error) {
+	return b.client.Provider.ListModels(ctx, provider, modelType)
+}
+
 // TestProvider sends a live generation call to verify provider credentials work.
 func (b *Bridge) TestProvider(ctx context.Context, orgID, providerType string) (*sdkprovider.TestProviderResponse, error) {
 	return b.client.Provider.TestProvider(ctx, providerType, b.projectID, orgID)
+}
+
+// TestProviderByProject sends a live generation call scoped to a specific project.
+func (b *Bridge) TestProviderByProject(ctx context.Context, projectID, providerType string) (*sdkprovider.TestProviderResponse, error) {
+	orgID := b.projectID // fallback: pass projectID as orgID hint
+	return b.client.Provider.TestProvider(ctx, providerType, projectID, orgID)
 }
 
 // ============================================================================

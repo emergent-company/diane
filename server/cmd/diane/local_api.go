@@ -68,7 +68,13 @@ func startLocalAPI(pc *config.ProjectConfig, port int, callbackHost string, mcpP
 	mux.HandleFunc("/api/schema/objects/", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleSchemaObjects(w, r) })
 	mux.HandleFunc("/api/doctor", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleDoctor(w, r) })
 
-	expected := 20
+	// Provider CRUD routes via bridge + proxy for rest of /api/v1, /api/graph/, /api/embeddings/
+	mux.HandleFunc("/api/projects", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleProjectsProxy(w, r) })
+	mux.HandleFunc("/api/v1/", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleV1Routes(w, r) })
+	mux.HandleFunc("/api/graph/", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleMPProxy(w, r) })
+	mux.HandleFunc("/api/embeddings/", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleMPProxy(w, r) })
+
+	expected := 24
 	if registered != expected {
 		log.Printf("[LOCAL-API] WARNING: registered %d routes, expected %d — check for missing handlers", registered, expected)
 	}
@@ -3314,6 +3320,176 @@ func (h *apiHandlers) queryInstanceTools(ctx context.Context, instanceID string)
 		return nil
 	}
 	return toolsResp.Tools
+}
+
+// handleMPProxy forwards requests to the Memory Platform API with auth.
+// Used for companion app endpoints not directly handled by diane serve:
+//   /api/projects
+//   /api/v1/...
+//   /api/graph/...
+//   /api/embeddings/...
+func (h *apiHandlers) handleMPProxy(w http.ResponseWriter, r *http.Request) {
+	if h.pc.ServerURL == "" {
+		jsonError(w, http.StatusBadGateway, "Memory Platform not configured")
+		return
+	}
+
+	targetURL := strings.TrimRight(h.pc.ServerURL, "/") + r.URL.Path
+	if r.URL.RawQuery != "" {
+		targetURL += "?" + r.URL.RawQuery
+	}
+
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to create proxy request")
+		return
+	}
+
+	// Copy content-type from original request
+	if ct := r.Header.Get("Content-Type"); ct != "" {
+		req.Header.Set("Content-Type", ct)
+	}
+
+	// Auth: Bearer token from config
+	if h.pc.Token != "" {
+		if strings.HasPrefix(h.pc.Token, "emt_") {
+			req.Header.Set("Authorization", "Bearer "+h.pc.Token)
+		} else {
+			req.Header.Set("X-API-Key", h.pc.Token)
+		}
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("[LOCAL-API] MP proxy error for %s %s: %v", r.Method, targetURL, err)
+		jsonError(w, http.StatusBadGateway, "proxy request failed: "+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+
+	// Copy headers (preserve content-type and content-length)
+	for k, vv := range resp.Header {
+		for _, v := range vv {
+			w.Header().Add(k, v)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}
+
+// handleProjectsProxy returns the list of projects from the Memory Platform.
+func (h *apiHandlers) handleProjectsProxy(w http.ResponseWriter, r *http.Request) {
+	ctx := context.Background()
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		h.handleMPProxy(w, r)
+		return
+	}
+	defer bridge.Close()
+	projects, err := bridge.Client().Projects.List(ctx, nil)
+	if err != nil {
+		jsonError(w, http.StatusBadGateway, "failed to list projects: "+err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"projects": projects})
+}
+
+// handleV1Routes proxies /api/v1/... to the Memory Platform, with a few
+// hardcoded routes that need bridge-level logic (DELETE, test, models, listing).
+func (h *apiHandlers) handleV1Routes(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1")
+	path = strings.TrimPrefix(path, "/")
+	parts := strings.Split(path, "/")
+
+	// GET /api/v1/projects/{id}/providers — use bridge (MP path differs from SDK endpoint)
+	if len(parts) == 3 && parts[0] == "projects" && parts[2] == "providers" && r.Method == http.MethodGet {
+		ctx := context.Background()
+		bridge, err := h.bridge(ctx)
+		if err != nil {
+			jsonError(w, http.StatusBadGateway, "bridge error: "+err.Error())
+			return
+		}
+		defer bridge.Close()
+		// Resolve orgID from the configured project
+		orgID := h.pc.OrgID
+		if orgID == "" && h.pc.ProjectID != "" {
+			if proj, err := bridge.Client().Projects.Get(ctx, h.pc.ProjectID, nil); err == nil {
+				orgID = proj.OrgID
+			}
+		}
+		// Fallback: use the projectID from the URL path instead
+		if orgID == "" {
+			orgID = parts[1]
+		}
+		configs, err := bridge.ListProjectProviderConfigs(ctx, orgID)
+		if err != nil {
+			jsonError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		writeJSON(w, configs)
+		return
+	}
+
+	// DELETE /api/v1/projects/{id}/providers/{provider}
+	if len(parts) == 4 && parts[0] == "projects" && parts[2] == "providers" && r.Method == http.MethodDelete {
+		ctx := context.Background()
+		bridge, err := h.bridge(ctx)
+		if err != nil {
+			jsonError(w, http.StatusBadGateway, "bridge error: "+err.Error())
+			return
+		}
+		defer bridge.Close()
+		if err := bridge.DeleteProjectProvider(ctx, parts[1], parts[3]); err != nil {
+			jsonError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	// POST /api/v1/providers/{provider}/test?projectId=...
+	if len(parts) >= 3 && parts[0] == "providers" && parts[2] == "test" && r.Method == http.MethodPost {
+		projectID := r.URL.Query().Get("projectId")
+		if projectID == "" {
+			jsonError(w, http.StatusBadRequest, "missing projectId")
+			return
+		}
+		ctx := context.Background()
+		bridge, err := h.bridge(ctx)
+		if err != nil {
+			jsonError(w, http.StatusBadGateway, "bridge error: "+err.Error())
+			return
+		}
+		defer bridge.Close()
+		result, err := bridge.TestProviderByProject(ctx, projectID, parts[1])
+		if err != nil {
+			jsonError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		writeJSON(w, result)
+		return
+	}
+
+	// GET /api/v1/providers/{provider}/models?type=...
+	if len(parts) >= 3 && parts[0] == "providers" && parts[2] == "models" && r.Method == http.MethodGet {
+		ctx := context.Background()
+		bridge, err := h.bridge(ctx)
+		if err != nil {
+			jsonError(w, http.StatusBadGateway, "bridge error: "+err.Error())
+			return
+		}
+		defer bridge.Close()
+		models, err := bridge.ListProviderModels(ctx, parts[1], r.URL.Query().Get("type"))
+		if err != nil {
+			jsonError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		writeJSON(w, models)
+		return
+	}
+
+	// Everything else: proxy to Memory Platform
+	h.handleMPProxy(w, r)
 }
 
 // writeJSON marshals v as JSON and writes it to w with Content-Type header.
