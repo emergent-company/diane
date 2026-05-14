@@ -674,6 +674,24 @@ public struct TestProviderResponse: Codable, Sendable {
     }
 }
 
+// MARK: - Provider Model (from GET /api/v1/providers/{provider}/models)
+
+/// A cached model entry from the provider catalog.
+public struct ProviderModel: Identifiable, Codable, Sendable {
+    public let id: String
+    public let provider: String
+    public let modelName: String
+    public let modelType: String
+    public let displayName: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, provider
+        case modelName  = "modelName"
+        case modelType  = "modelType"
+        case displayName = "displayName"
+    }
+}
+
 /// A per-project provider policy.
 /// Decoded from GET /api/v1/projects/{projectId}/providers/policies
 public struct ProjectPolicy: Identifiable, Codable, Hashable, Sendable {
@@ -1403,11 +1421,13 @@ struct AgentDetail: Identifiable, Codable, Hashable, Sendable {
 
 struct AgentDetailModel: Codable, Hashable, Sendable {
     let name: String?
+    let provider: String?
     let temperature: Double?
     let maxTokens: Int?
 
     enum CodingKeys: String, CodingKey {
         case name
+        case provider
         case temperature
         case maxTokens = "max_tokens"
     }

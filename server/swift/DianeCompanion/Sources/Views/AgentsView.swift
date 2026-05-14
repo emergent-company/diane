@@ -34,6 +34,11 @@ struct AgentsView: View {
     @State private var error: String?
     @State private var saveStatus: String?
 
+    // Provider/model picker state
+    @State private var availableProviders: [OrgProviderConfig] = []
+    @State private var availableModels: [ProviderModel] = []
+    @State private var isLoadingProviders = false
+
     // Sheets
     @State private var showCreateSheet = false
     @State private var showCloneSheet = false
@@ -427,13 +432,47 @@ struct AgentsView: View {
                     HStack(spacing: 12) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Provider").font(.caption2).foregroundStyle(.tertiary)
-                            TextField("deepseek", text: $editModelProvider)
-                                .textFieldStyle(.roundedBorder)
+                            if isLoadingProviders || availableProviders.isEmpty {
+                                TextField("deepseek", text: $editModelProvider)
+                                    .textFieldStyle(.roundedBorder)
+                                    .disabled(isLoadingProviders)
+                            } else {
+                                Picker("", selection: $editModelProvider) {
+                                    Text("(none)").tag("")
+                                    ForEach(availableProviders) { p in
+                                        Text(providerDisplayName(p.provider)).tag(p.provider)
+                                    }
+                                }
+                                .labelsHidden()
+                                .onChange(of: editModelProvider) { _, newVal in
+                                    guard !newVal.isEmpty else {
+                                        availableModels = []
+                                        editModelName = ""
+                                        return
+                                    }
+                                    Task {
+                                        availableModels = (try? await apiClient.fetchProviderModels(provider: newVal)) ?? []
+                                        if !availableModels.contains(where: { $0.modelName == editModelName }) {
+                                            editModelName = ""
+                                        }
+                                    }
+                                }
+                            }
                         }
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Name").font(.caption2).foregroundStyle(.tertiary)
-                            TextField("deepseek-v4-flash", text: $editModelName)
-                                .textFieldStyle(.roundedBorder)
+                            if isLoadingProviders || availableModels.isEmpty {
+                                TextField("deepseek-v4-flash", text: $editModelName)
+                                    .textFieldStyle(.roundedBorder)
+                            } else {
+                                Picker("", selection: $editModelName) {
+                                    Text("(auto)").tag("")
+                                    ForEach(availableModels) { m in
+                                        Text(m.displayName ?? m.modelName).tag(m.modelName)
+                                    }
+                                }
+                                .labelsHidden()
+                            }
                         }
                     }
 
@@ -663,6 +702,19 @@ struct AgentsView: View {
         populateForm(from: agentDetail, override: overrideConfig)
         editHasChanges = false
         saveStatus = nil
+
+        // Fetch available providers from MP for picker
+        isLoadingProviders = true
+        if let orgID = appState.selectedProject?.orgId {
+            availableProviders = (try? await apiClient.fetchOrgProviderConfigs(orgID: orgID)) ?? []
+            // Fetch models for the currently selected provider
+            let currentProvider = overrideConfig?.modelProvider ?? agentDetail?.model?.provider ?? ""
+            if !currentProvider.isEmpty {
+                availableModels = (try? await apiClient.fetchProviderModels(provider: currentProvider)) ?? []
+            }
+        }
+        isLoadingProviders = false
+
         isLoadingDetail = false
     }
 
@@ -673,7 +725,7 @@ struct AgentsView: View {
         let skills = override?.skills ?? detail?.skills ?? []
         editSkills = skills.joined(separator: ", ")
 
-        editModelProvider = override?.modelProvider ?? ""
+        editModelProvider = override?.modelProvider ?? detail?.model?.provider ?? ""
         editModelName = override?.modelName ?? detail?.model?.name ?? ""
         editTemperature = override.flatMap { $0.modelTemperature.map { String($0) } } ?? ""
         editMaxTokens = override.flatMap { $0.modelMaxTokens.map { String($0) } } ?? ""
@@ -686,6 +738,16 @@ struct AgentsView: View {
 
     func parseCommaList(_ str: String) -> [String] {
         str.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+
+    private func providerDisplayName(_ provider: String) -> String {
+        switch provider {
+        case "google":          return "Google AI"
+        case "google-vertex":   return "Vertex AI"
+        case "deepseek":        return "DeepSeek"
+        case "openai-compatible": return "OpenAI Compatible"
+        default:                return provider
+        }
     }
 }
 

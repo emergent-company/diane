@@ -595,6 +595,15 @@ class EmergentAPIClient: ObservableObject {
         return try decode(TestProviderResponse.self, from: data)
     }
 
+    /// Fetch cached models for a provider from the catalog.
+    /// GET /api/v1/providers/{provider}/models?type={modelType}
+    func fetchProviderModels(provider: String, modelType: String = "generative") async throws -> [ProviderModel] {
+        let encodedProv = provider.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? provider
+        let path = "/api/v1/providers/\(encodedProv)/models?type=\(modelType)"
+        let data = try await get(path)
+        return (try? decode([ProviderModel].self, from: data)) ?? []
+    }
+
     // MARK: - Provider Project Policies
 
     func fetchProjectPolicies(projectID: String, orgID: String) async throws -> [ProjectPolicy] {
