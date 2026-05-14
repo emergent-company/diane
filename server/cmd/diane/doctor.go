@@ -151,32 +151,7 @@ func runDoctorText() {
 		}
 	}
 
-	// ── 7b. Local provider config ──
-	fmt.Print("\n📋 Provider config (local)... ")
-	if pc.GenerativeProvider == nil && pc.EmbeddingProvider == nil {
-		fmt.Println("⚠️  None configured")
-		fmt.Println("   Run 'diane provider set generative' or 'diane provider set embedding'")
-	} else {
-		fmt.Println()
-		if pc.GenerativeProvider != nil {
-			p := pc.GenerativeProvider
-			model := p.Model
-			if model == "" {
-				model = "(auto)"
-			}
-			fmt.Printf("   Generative: %s → %s\n", p.Provider, model)
-		} else {
-			fmt.Println("   Generative: not configured")
-		}
-		if pc.EmbeddingProvider != nil {
-			p := pc.EmbeddingProvider
-			fmt.Printf("   Embedding:  %s\n", p.Provider)
-		} else {
-			fmt.Println("   Embedding:  not configured")
-		}
-	}
-
-	// ── 7c. Agent Definitions ──
+	// ── 7b. Agent Definitions ──
 	remoteDefs, err := bridge.ListAgentDefs(ctx)
 	remoteNameSet := map[string]*sdkagents.AgentDefinitionSummary{}
 	if err == nil && remoteDefs != nil {
@@ -242,7 +217,7 @@ func runDoctorText() {
 		}
 	}
 
-	// ── 7e. Run stats ──
+	// ── 7c. Run stats ──
 	fmt.Print("\n📊 Run stats... ")
 	stats, err := bridge.GetProjectRunStats(ctx, nil)
 	if err != nil {

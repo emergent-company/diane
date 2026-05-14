@@ -630,6 +630,50 @@ public struct OrgCredential: Identifiable, Codable, Hashable, Sendable {
     public static func == (lhs: OrgCredential, rhs: OrgCredential) -> Bool { lhs.id == rhs.id }
 }
 
+/// An org-level provider configuration (secret-free, like OrgCredential).
+/// Decoded from GET /api/v1/organizations/{orgId}/providers
+/// Matches Go SDK ProviderConfig.
+public struct OrgProviderConfig: Identifiable, Codable, Hashable, Sendable {
+    public let id: String
+    public let provider: String
+    public let gcpProject: String?
+    public let location: String?
+    public let baseURL: String?
+    public let generativeModel: String?
+    public let embeddingModel: String?
+    public let createdAt: String?
+    public let updatedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, provider
+        case gcpProject      = "gcpProject"
+        case location        = "location"
+        case baseURL         = "baseUrl"
+        case generativeModel = "generativeModel"
+        case embeddingModel  = "embeddingModel"
+        case createdAt       = "createdAt"
+        case updatedAt       = "updatedAt"
+    }
+
+    public func hash(into hasher: inout Hasher) { hasher.combine(id) }
+    public static func == (lhs: OrgProviderConfig, rhs: OrgProviderConfig) -> Bool { lhs.id == rhs.id }
+}
+
+// MARK: - Provider Test Response
+
+/// Decoded from POST /api/v1/providers/{provider}/test
+public struct TestProviderResponse: Codable, Sendable {
+    public let provider: String
+    public let model: String
+    public let reply: String
+    public let latencyMs: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case provider, model, reply
+        case latencyMs = "latencyMs"
+    }
+}
+
 /// A per-project provider policy.
 /// Decoded from GET /api/v1/projects/{projectId}/providers/policies
 public struct ProjectPolicy: Identifiable, Codable, Hashable, Sendable {

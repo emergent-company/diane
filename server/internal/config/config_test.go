@@ -455,15 +455,6 @@ func TestComplexConfigRoundTrip(t *testing.T) {
 		SystemPrompt:      "You are a test agent.",
 		BraveAPIKey:       "brave_key_here",
 		InstanceID:        "inst-001",
-		GenerativeProvider: &config.ProviderConfig{
-			Provider: "deepseek",
-			APIKey:   "sk-deepseek",
-			Model:    "deepseek-v4-flash",
-		},
-		EmbeddingProvider: &config.ProviderConfig{
-			Provider: "deepseek",
-			APIKey:   "sk-embedding",
-		},
 		Agents: map[string]*config.AgentConfig{
 			"test-agent": {
 				Description: "Test agent",
@@ -513,15 +504,6 @@ func TestComplexConfigRoundTrip(t *testing.T) {
 	}
 	if pc.InstanceID != "inst-001" {
 		t.Errorf("InstanceID = %q", pc.InstanceID)
-	}
-	if pc.GenerativeProvider == nil {
-		t.Fatal("GenerativeProvider is nil")
-	}
-	if pc.GenerativeProvider.Provider != "deepseek" {
-		t.Errorf("GenerativeProvider.Provider = %q", pc.GenerativeProvider.Provider)
-	}
-	if pc.EmbeddingProvider == nil {
-		t.Fatal("EmbeddingProvider is nil")
 	}
 	if pc.Agents == nil || len(pc.Agents) != 1 {
 		t.Errorf("Agents count = %d, want 1", len(pc.Agents))

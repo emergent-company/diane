@@ -18,6 +18,16 @@ struct ProvidersView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var apiClient: EmergentAPIClient
 
+    // Org provider configs
+    @State private var orgProviderConfigs: [OrgProviderConfig] = []
+    @State private var providerConfigsError: String? = nil
+    @State private var showAddProviderConfig = false
+    @State private var editingProviderConfig: OrgProviderConfig? = nil
+    @State private var providerConfigToDelete: OrgProviderConfig? = nil
+    @State private var showDeleteProviderConfig = false
+    @State private var testingProvider: String? = nil  // provider ID being tested
+    @State private var testResults: [String: String] = [:]  // provider ID → result text
+
     // Org credentials
     @State private var orgCredentials: [OrgCredential] = []
     @State private var credentialsError: String? = nil
@@ -49,6 +59,13 @@ struct ProvidersView: View {
                 Section {
                     ErrorBannerView(message: "Credentials: \(err)") {
                         Task { await loadCredentials() }
+                    }
+                }
+            }
+            if let err = providerConfigsError {
+                Section {
+                    ErrorBannerView(message: "Provider configs: \(err)") {
+                        Task { await loadOrgProviderConfigs() }
                     }
                 }
             }
@@ -108,6 +125,43 @@ struct ProvidersView: View {
                         }
                         .menuStyle(.borderlessButton)
                         .fixedSize()
+                    }
+                }
+            }
+
+            // MARK: Org Provider Configs section
+            Section {
+                if appState.selectedProject?.orgId == nil {
+                    Text("Select a project to manage provider configs")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if isLoading && orgProviderConfigs.isEmpty && providerConfigsError == nil {
+                    HStack {
+                        ProgressView().controlSize(.small)
+                        Text("Loading…").font(.caption).foregroundStyle(.secondary)
+                    }
+                } else if orgProviderConfigs.isEmpty && providerConfigsError == nil {
+                    Text("No provider configs configured")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(orgProviderConfigs) { config in
+                        providerConfigRow(config)
+                    }
+                }
+            } header: {
+                HStack {
+                    Text("Org Provider Configs")
+                    Spacer()
+                    if appState.selectedProject?.orgId != nil {
+                        Button {
+                            editingProviderConfig = nil
+                            showAddProviderConfig = true
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -208,6 +262,18 @@ struct ProvidersView: View {
                 .environmentObject(apiClient)
             }
         }
+        .sheet(isPresented: $showAddProviderConfig) {
+            if let orgID = appState.selectedProject?.orgId {
+                AddOrgProviderConfigSheet(
+                    isPresented: $showAddProviderConfig,
+                    orgID: orgID,
+                    editing: editingProviderConfig
+                ) {
+                    await loadOrgProviderConfigs()
+                }
+                .environmentObject(apiClient)
+            }
+        }
         .sheet(isPresented: $showSetPolicySheet) {
             if let ctx = selectedPolicyForEdit,
                let projectID = appState.selectedProject?.id,
@@ -237,6 +303,20 @@ struct ProvidersView: View {
             Button("Cancel", role: .cancel) { credentialToDelete = nil }
         } message: {
             Text("This will permanently remove the credential for \(credentialToDelete?.provider ?? "this provider").")
+        }
+        .confirmationDialog(
+            "Delete \(providerConfigToDelete?.provider ?? "provider config")?",
+            isPresented: $showDeleteProviderConfig,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let config = providerConfigToDelete, let orgID = appState.selectedProject?.orgId {
+                    Task { await performDeleteProviderConfig(orgID: orgID, config: config) }
+                }
+            }
+            Button("Cancel", role: .cancel) { providerConfigToDelete = nil }
+        } message: {
+            Text("This will permanently remove the provider configuration for \(providerConfigToDelete?.provider ?? "this provider").")
         }
     }
 
@@ -268,6 +348,78 @@ struct ProvidersView: View {
                     .foregroundStyle(.red)
             }
             .buttonStyle(.plain)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func providerConfigRow(_ config: OrgProviderConfig) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(providerDisplayName(config.provider))
+                    .font(.subheadline)
+                if let model = config.generativeModel {
+                    Text("Model: \(model)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                if let url = config.baseURL, !url.isEmpty {
+                    Text(url)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                if let gcp = config.gcpProject {
+                    Text("GCP: \(gcp)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                if let loc = config.location {
+                    Text("Location: \(loc)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            VStack(alignment: .trailing, spacing: 4) {
+                HStack(spacing: 8) {
+                    if testingProvider == config.id {
+                        ProgressView()
+                            .controlSize(.small)
+                            .scaleEffect(0.8)
+                    } else {
+                        Button("Test") {
+                            Task { await performTestProvider(config: config) }
+                        }
+                        .font(.caption)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.blue)
+                    }
+                    Button {
+                        editingProviderConfig = config
+                        showAddProviderConfig = true
+                    } label: {
+                        Image(systemName: "pencil")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    Button(role: .destructive) {
+                        providerConfigToDelete = config
+                        showDeleteProviderConfig = true
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                    .buttonStyle(.plain)
+                }
+                if let result = testResults[config.id] {
+                    Text(result)
+                        .font(.caption2)
+                        .foregroundStyle(result.hasPrefix("✅") ? .green : .red)
+                        .lineLimit(2)
+                }
+            }
         }
         .padding(.vertical, 2)
     }
@@ -353,9 +505,13 @@ struct ProvidersView: View {
 
     func providerDisplayName(_ provider: String) -> String {
         switch provider {
-        case "google-ai":  return "Google AI"
-        case "vertex-ai":  return "Vertex AI"
-        default:           return provider
+        case "google-ai":        return "Google AI"
+        case "vertex-ai":        return "Vertex AI"
+        case "google":           return "Google"
+        case "google-vertex":    return "Google Vertex"
+        case "deepseek":         return "DeepSeek"
+        case "openai-compatible": return "OpenAI Compatible"
+        default:                 return provider
         }
     }
 
@@ -373,11 +529,12 @@ struct ProvidersView: View {
     @MainActor
     private func loadAll() async {
         isLoading = true
-        async let a: Void = loadCredentials()
-        async let b: Void = loadProjectPolicies()
-        async let c: Void = loadStatus()
-        async let d: Void = loadPolicies()
-        _ = await (a, b, c, d)
+        async let a: Void = loadOrgProviderConfigs()
+        async let b: Void = loadCredentials()
+        async let c: Void = loadProjectPolicies()
+        async let d: Void = loadStatus()
+        async let e: Void = loadPolicies()
+        _ = await (a, b, c, d, e)
         isLoading = false
     }
 
@@ -393,6 +550,21 @@ struct ProvidersView: View {
             credentialsError = nil
         } catch {
             credentialsError = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func loadOrgProviderConfigs() async {
+        guard let orgID = appState.selectedProject?.orgId else {
+            orgProviderConfigs = []
+            providerConfigsError = nil
+            return
+        }
+        do {
+            orgProviderConfigs = try await apiClient.fetchOrgProviderConfigs(orgID: orgID)
+            providerConfigsError = nil
+        } catch {
+            providerConfigsError = error.localizedDescription
         }
     }
 
@@ -446,6 +618,35 @@ struct ProvidersView: View {
         } catch {
             credentialsError = error.localizedDescription
         }
+    }
+
+    @MainActor
+    private func performDeleteProviderConfig(orgID: String, config: OrgProviderConfig) async {
+        do {
+            try await apiClient.deleteOrgProviderConfig(orgID: orgID, provider: config.provider)
+            providerConfigToDelete = nil
+            await loadOrgProviderConfigs()
+        } catch {
+            providerConfigsError = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func performTestProvider(config: OrgProviderConfig) async {
+        guard let orgID = appState.selectedProject?.orgId else { return }
+        testingProvider = config.id
+        testResults[config.id] = nil
+        do {
+            let result = try await apiClient.testOrgProvider(
+                orgID: orgID,
+                provider: config.provider,
+                projectID: appState.selectedProject?.id
+            )
+            testResults[config.id] = "✅ \(result.model) — \(result.latencyMs)ms"
+        } catch {
+            testResults[config.id] = "❌ \(error.localizedDescription)"
+        }
+        testingProvider = nil
     }
 }
 
@@ -718,6 +919,193 @@ struct SetProjectPolicySheet: View {
                 policy: selectedPolicy,
                 embeddingModel: selectedPolicy == "project" ? emb : nil,
                 generativeModel: selectedPolicy == "project" ? gen : nil
+            )
+            isPresented = false
+            await onSave()
+        } catch {
+            saveError = error.localizedDescription
+        }
+        isSaving = false
+    }
+}
+
+// MARK: - AddOrgProviderConfigSheet
+
+/// Sheet for adding or editing an org-level provider config.
+/// API: PUT /api/v1/organizations/{orgId}/providers/{provider}
+struct AddOrgProviderConfigSheet: View {
+    @Binding var isPresented: Bool
+    let orgID: String
+    let editing: OrgProviderConfig?
+    let onSave: () async -> Void
+
+    @EnvironmentObject var apiClient: EmergentAPIClient
+
+    private let providerOptions: [(String, String)] = [
+        ("deepseek",          "DeepSeek"),
+        ("openai-compatible", "OpenAI Compatible"),
+        ("google",            "Google"),
+        ("google-vertex",     "Google Vertex"),
+    ]
+
+    @State private var selectedProvider = "deepseek"
+    @State private var apiKey = ""
+    @State private var baseURL = ""
+    @State private var model = ""
+    @State private var gcpProject = ""
+    @State private var location = ""
+    @State private var serviceAccountJSON = ""
+    @State private var isSaving = false
+    @State private var saveError: String? = nil
+
+    private var isEditing: Bool { editing != nil }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(isEditing ? "Edit Provider Config" : "Add Provider Config")
+                .font(.headline)
+
+            if !isEditing {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Provider")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Picker("Provider", selection: $selectedProvider) {
+                        ForEach(providerOptions, id: \.0) { value, label in
+                            Text(label).tag(value)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+            } else {
+                // Show provider name when editing (read-only)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Provider")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(providerLabel(editing!.provider))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            // API Key (always shown — secrets only sent on PUT)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(isEditing ? "API Key (leave blank to keep existing)" : "API Key")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                SecureField("Enter API key", text: $apiKey)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            // Model name (generativeModel)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Generative Model")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField("e.g. deepseek-chat, gpt-4o, gemini-1.5-pro", text: $model)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            // Base URL (for openai-compatible / deepseek)
+            if selectedProvider == "openai-compatible" || selectedProvider == "deepseek" || (editing?.baseURL?.isEmpty == false) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Base URL")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField("e.g. https://api.deepseek.com", text: $baseURL)
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+
+            // GCP fields (for google / google-vertex)
+            if selectedProvider == "google" || selectedProvider == "google-vertex" || (editing?.gcpProject != nil) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("GCP Project")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField("e.g. my-gcp-project", text: $gcpProject)
+                        .textFieldStyle(.roundedBorder)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Location")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField("e.g. us-central1", text: $location)
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+
+            // Service Account JSON (for google-vertex)
+            if selectedProvider == "google-vertex" || editing?.provider == "google-vertex" {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Service Account JSON")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextEditor(text: $serviceAccountJSON)
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(minHeight: 100)
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3), lineWidth: 1))
+                }
+            }
+
+            if let err = saveError {
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") { isPresented = false }
+                    .keyboardShortcut(.escape)
+                Button(isEditing ? "Save Changes" : "Add") {
+                    Task { await save() }
+                }
+                .keyboardShortcut(.return)
+                .disabled(isSaving)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 420)
+        .onAppear { populateFromExisting() }
+    }
+
+    private func providerLabel(_ p: String) -> String {
+        providerOptions.first(where: { $0.0 == p })?.1 ?? p
+    }
+
+    private func populateFromExisting() {
+        guard let cfg = editing else { return }
+        selectedProvider = cfg.provider
+        baseURL = cfg.baseURL ?? ""
+        model = cfg.generativeModel ?? ""
+        gcpProject = cfg.gcpProject ?? ""
+        location = cfg.location ?? ""
+        // apiKey and serviceAccountJSON are NOT returned by GET — leave blank
+    }
+
+    @MainActor
+    private func save() async {
+        isSaving = true
+        saveError = nil
+        let provider = isEditing ? editing!.provider : selectedProvider
+        let apiKeyVal = apiKey.trimmingCharacters(in: .whitespaces).isEmpty ? nil : apiKey.trimmingCharacters(in: .whitespaces)
+        let baseURLVal = baseURL.trimmingCharacters(in: .whitespaces).isEmpty ? nil : baseURL.trimmingCharacters(in: .whitespaces)
+        let modelVal = model.trimmingCharacters(in: .whitespaces).isEmpty ? nil : model.trimmingCharacters(in: .whitespaces)
+        let gcpVal = gcpProject.trimmingCharacters(in: .whitespaces).isEmpty ? nil : gcpProject.trimmingCharacters(in: .whitespaces)
+        let locVal = location.trimmingCharacters(in: .whitespaces).isEmpty ? nil : location.trimmingCharacters(in: .whitespaces)
+        let saVal = serviceAccountJSON.trimmingCharacters(in: .whitespaces).isEmpty ? nil : serviceAccountJSON.trimmingCharacters(in: .whitespaces)
+        do {
+            try await apiClient.saveOrgProviderConfig(
+                orgID: orgID,
+                provider: provider,
+                apiKey: apiKeyVal,
+                baseURL: baseURLVal,
+                generativeModel: modelVal,
+                serviceAccountJSON: saVal,
+                gcpProject: gcpVal,
+                location: locVal
             )
             isPresented = false
             await onSave()

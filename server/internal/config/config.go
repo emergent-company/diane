@@ -40,10 +40,6 @@ type ProjectConfig struct {
 	DiscordChannelIDs       []string `yaml:"discord_channel_ids,omitempty"`
 	DiscordThreadChannelIDs []string `yaml:"discord_thread_channel_ids,omitempty"`
 
-	// LLM Providers (optional, synced to Memory Platform)
-	GenerativeProvider *ProviderConfig `yaml:"generative_provider,omitempty"`
-	EmbeddingProvider  *ProviderConfig `yaml:"embedding_provider,omitempty"`
-
 	// Tool API Keys (stored in config, not in graph — used by MCP tools)
 	BraveAPIKey string `yaml:"brave_api_key,omitempty"`
 

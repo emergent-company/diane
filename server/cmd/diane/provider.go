@@ -17,15 +17,13 @@ func cmdProvider(args []string) {
 		fmt.Println("Usage: diane provider <command>")
 		fmt.Println("")
 		fmt.Println("Commands:")
-		fmt.Println("  list          List configured providers (local + remote)")
+		fmt.Println("  list          List configured providers on Memory Platform")
 		fmt.Println("  set           Configure a provider (generative or embedding)")
 		fmt.Println("  test          Test a provider via Memory Platform")
-		fmt.Println("  sync          Push local provider configs to Memory Platform")
 		fmt.Println("")
 		fmt.Println("Examples:")
 		fmt.Println("  diane provider set generative")
 		fmt.Println("  diane provider test generative")
-		fmt.Println("  diane provider sync")
 		return
 	}
 
@@ -44,8 +42,6 @@ func cmdProvider(args []string) {
 			return
 		}
 		cmdProviderTest(args[1])
-	case "sync":
-		cmdProviderSync()
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown provider command: %s\n", args[0])
 		os.Exit(1)
@@ -70,30 +66,8 @@ func cmdProviderList() {
 	fmt.Printf("Project: %s (%s)\n", cfg.Default, pc.ProjectID)
 	fmt.Println()
 
-	// ── Local config ──
-	fmt.Println("📋 Local config:")
-	gen := pc.GenerativeProvider
-	emb := pc.EmbeddingProvider
-
-	if gen != nil {
-		model := gen.Model
-		if model == "" {
-			model = "(auto)"
-		}
-		fmt.Printf("  Generative: %s → %s\n", gen.Provider, model)
-	} else {
-		fmt.Println("  Generative: not configured")
-	}
-
-	if emb != nil {
-		fmt.Printf("  Embedding:  %s\n", emb.Provider)
-	} else {
-		fmt.Println("  Embedding:  not configured")
-	}
-	fmt.Println()
-
 	// ── Remote (Memory Platform) ──
-	fmt.Println("🌐 Memory Platform (synced):")
+	fmt.Println("🌐 Memory Platform:")
 	bridge, err := memory.New(memory.Config{
 		ServerURL: pc.ServerURL,
 		APIKey:    pc.Token,
@@ -141,7 +115,6 @@ func cmdProviderList() {
 	}
 	fmt.Println()
 	fmt.Println("Run 'diane provider set generative' or 'diane provider set embedding' to configure.")
-	fmt.Println("Run 'diane provider sync' to push local config to Memory Platform.")
 }
 
 func cmdProviderSet(kind string) {
@@ -217,40 +190,46 @@ func cmdProviderSet(kind string) {
 		}
 	}
 
-	// Build provider config
-	providerCfg := &config.ProviderConfig{
-		Provider: pType,
-		APIKey:   apiKey,
-		BaseURL:  baseURL,
-		Model:    model,
-	}
+	// Write directly to Memory Platform
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-	// Save to local config
-	if kind == "generative" {
-		pc.GenerativeProvider = providerCfg
-	} else {
-		pc.EmbeddingProvider = providerCfg
-	}
-
-	if err := cfg.Save(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to save config: %v\n", err)
+	bridge, err := memory.New(memory.Config{
+		ServerURL: pc.ServerURL,
+		APIKey:    pc.Token,
+		ProjectID: pc.ProjectID,
+		OrgID:     pc.OrgID,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to connect to Memory Platform: %v\n", err)
 		os.Exit(1)
 	}
+	defer bridge.Close()
 
-	fmt.Printf("\n✅ Saved to %s\n", config.Path())
-
-	// Offer to push to Memory Platform
-	fmt.Print("\nSync to Memory Platform now? [Y/n]: ")
-	sync := readLine(reader)
-	if sync == "" || strings.ToLower(sync) == "y" || strings.ToLower(sync) == "yes" {
-		doProviderSync(cfg, pc)
+	// Resolve org ID
+	orgID := pc.OrgID
+	if orgID == "" {
+		proj, err := bridge.Client().Projects.Get(ctx, pc.ProjectID, nil)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Cannot fetch org ID: %v\n", err)
+			os.Exit(1)
+		}
+		orgID = proj.OrgID
 	}
+
+	fmt.Printf("\nWriting to Memory Platform... ")
+	_, err = bridge.UpsertOrgProvider(ctx, orgID, pType, apiKey, model, baseURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("✅")
 
 	// Offer to test
 	fmt.Print("\nTest provider now? [Y/n]: ")
 	test := readLine(reader)
 	if test == "" || strings.ToLower(test) == "y" || strings.ToLower(test) == "yes" {
-		doProviderTest(kind, pc)
+		doProviderTestWithProvider(ctx, bridge, orgID, pType, kind)
 	}
 }
 
@@ -266,26 +245,8 @@ func cmdProviderTest(kind string) {
 		os.Exit(1)
 	}
 
-	doProviderTest(kind, pc)
-}
-
-func doProviderTest(kind string, pc *config.ProjectConfig) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-
-	var providerCfg *config.ProviderConfig
-	if kind == "generative" {
-		providerCfg = pc.GenerativeProvider
-	} else {
-		providerCfg = pc.EmbeddingProvider
-	}
-
-	if providerCfg == nil {
-		fmt.Printf("⚠️  %s provider not configured locally. Use 'diane provider set %s' first.\n", kind, kind)
-		return
-	}
-
-	fmt.Printf("Testing %s provider (%s)...\n", kind, providerCfg.Provider)
 
 	bridge, err := memory.New(memory.Config{
 		ServerURL: pc.ServerURL,
@@ -294,73 +255,8 @@ func doProviderTest(kind string, pc *config.ProjectConfig) {
 		OrgID:     pc.OrgID,
 	})
 	if err != nil {
-		fmt.Printf("❌ Connection failed: %v\n", err)
-		return
-	}
-	defer bridge.Close()
-
-	// Ensure provider is synced before testing
-	orgID := pc.OrgID
-	if orgID == "" {
-		proj, err := bridge.Client().Projects.Get(ctx, pc.ProjectID, nil)
-		if err != nil {
-			fmt.Printf("❌ Cannot fetch org ID: %v\n", err)
-			return
-		}
-		orgID = proj.OrgID
-	}
-
-	// First upsert to ensure credentials are on MP
-	_, err = bridge.UpsertOrgProvider(ctx, orgID, providerCfg.Provider, providerCfg.APIKey, providerCfg.Model, providerCfg.BaseURL)
-	if err != nil {
-		fmt.Printf("❌ Sync failed: %v\n", err)
-		fmt.Println("   Ensure API key is valid and Memory Platform can reach the provider.")
-		return
-	}
-
-	// Now test
-	result, err := bridge.TestProvider(ctx, orgID, providerCfg.Provider)
-	if err != nil {
-		fmt.Printf("❌ Test failed: %v\n", err)
-		return
-	}
-
-	fmt.Printf("✅ %s → %s\n", result.Provider, result.Model)
-	fmt.Printf("   Reply: \"%s\"\n", truncateStr(result.Reply, 80))
-	fmt.Printf("   Latency: %dms\n", result.LatencyMs)
-}
-
-func cmdProviderSync() {
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to connect to Memory Platform: %v\n", err)
 		os.Exit(1)
-	}
-	pc := cfg.Active()
-	if pc == nil {
-		fmt.Fprintf(os.Stderr, "No project configured. Run 'diane init' first.\n")
-		os.Exit(1)
-	}
-
-	doProviderSync(cfg, pc)
-}
-
-func doProviderSync(cfg *config.Config, pc *config.ProjectConfig) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	fmt.Println("═══ Sync Providers → Memory Platform ═══")
-	fmt.Println()
-
-	bridge, err := memory.New(memory.Config{
-		ServerURL: pc.ServerURL,
-		APIKey:    pc.Token,
-		ProjectID: pc.ProjectID,
-		OrgID:     pc.OrgID,
-	})
-	if err != nil {
-		fmt.Printf("❌ Connection failed: %v\n", err)
-		return
 	}
 	defer bridge.Close()
 
@@ -369,41 +265,39 @@ func doProviderSync(cfg *config.Config, pc *config.ProjectConfig) {
 	if orgID == "" {
 		proj, err := bridge.Client().Projects.Get(ctx, pc.ProjectID, nil)
 		if err != nil {
-			fmt.Printf("❌ Cannot fetch org ID: %v\n", err)
-			return
+			fmt.Fprintf(os.Stderr, "Cannot fetch org ID: %v\n", err)
+			os.Exit(1)
 		}
 		orgID = proj.OrgID
 	}
 
-	synced := 0
-
-	if pc.GenerativeProvider != nil {
-		p := pc.GenerativeProvider
-		fmt.Printf("Syncing generative (%s → %s)... ", p.Provider, p.Model)
-		_, err := bridge.UpsertOrgProvider(ctx, orgID, p.Provider, p.APIKey, p.Model, p.BaseURL)
-		if err != nil {
-			fmt.Printf("❌ %v\n", err)
-		} else {
-			fmt.Println("✅")
-			synced++
-		}
+	// Look up providers from MP
+	providers, err := bridge.ListOrgProviders(ctx, orgID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to list providers: %v\n", err)
+		os.Exit(1)
 	}
 
-	if pc.EmbeddingProvider != nil {
-		p := pc.EmbeddingProvider
-		fmt.Printf("Syncing embedding (%s)... ", p.Provider)
-		_, err := bridge.UpsertOrgProvider(ctx, orgID, p.Provider, p.APIKey, p.Model, p.BaseURL)
-		if err != nil {
-			fmt.Printf("❌ %v\n", err)
-		} else {
-			fmt.Println("✅")
-			synced++
-		}
+	if len(providers) == 0 {
+		fmt.Printf("⚠️  No provider configured on Memory Platform. Use 'diane provider set %s' first.\n", kind)
+		return
 	}
 
-	if synced == 0 {
-		fmt.Println("\n⚠️  No providers to sync. Configure with 'diane provider set' first.")
-	} else {
-		fmt.Printf("\n✅ Synced %d provider(s) to Memory Platform\n", synced)
+	// Use the first provider (MP doesn't distinguish generative/embedding at config level)
+	provider := providers[0].Provider
+	doProviderTestWithProvider(ctx, bridge, orgID, provider, kind)
+}
+
+func doProviderTestWithProvider(ctx context.Context, bridge *memory.Bridge, orgID, provider, kind string) {
+	fmt.Printf("Testing %s provider (%s)...\n", kind, provider)
+
+	result, err := bridge.TestProvider(ctx, orgID, provider)
+	if err != nil {
+		fmt.Printf("❌ Test failed: %v\n", err)
+		return
 	}
+
+	fmt.Printf("✅ %s → %s\n", result.Provider, result.Model)
+	fmt.Printf("   Reply: \"%s\"\n", truncateStr(result.Reply, 80))
+	fmt.Printf("   Latency: %dms\n", result.LatencyMs)
 }

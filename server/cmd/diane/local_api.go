@@ -2371,22 +2371,42 @@ func (h *apiHandlers) handleNodeTools(w http.ResponseWriter, r *http.Request, in
 	writeJSON(w, map[string]any{"tools": result.Tools})
 }
 
-// handleProviders returns configured LLM providers from the project config.
+// handleProviders returns configured LLM providers from the Memory Platform.
 func (h *apiHandlers) handleProviders(w http.ResponseWriter, r *http.Request) {
 	providers := make([]map[string]any, 0, 2)
 
-	if gp := h.pc.GenerativeProvider; gp != nil {
-		providers = append(providers, map[string]any{
-			"provider":        gp.Provider,
-			"baseUrl":         gp.BaseURL,
-			"generativeModel": gp.Model,
-		})
+	// Fetch from Memory Platform
+	ctx := context.Background()
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		// No bridge — return empty list
+		writeJSON(w, map[string]any{"providers": providers})
+		return
 	}
-	if ep := h.pc.EmbeddingProvider; ep != nil {
+	defer bridge.Close()
+
+	orgID := h.pc.OrgID
+	if orgID == "" {
+		proj, err := bridge.Client().Projects.Get(ctx, h.pc.ProjectID, nil)
+		if err != nil {
+			writeJSON(w, map[string]any{"providers": providers})
+			return
+		}
+		orgID = proj.OrgID
+	}
+
+	mpProviders, err := bridge.ListOrgProviders(ctx, orgID)
+	if err != nil {
+		writeJSON(w, map[string]any{"providers": providers})
+		return
+	}
+
+	for _, p := range mpProviders {
+		model := p.GenerativeModel
 		providers = append(providers, map[string]any{
-			"provider":        ep.Provider,
-			"baseUrl":         ep.BaseURL,
-			"generativeModel": ep.Model,
+			"provider":        p.Provider,
+			"baseUrl":         p.BaseURL,
+			"generativeModel": model,
 		})
 	}
 
