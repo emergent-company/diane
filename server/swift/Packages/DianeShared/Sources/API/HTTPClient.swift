@@ -84,7 +84,7 @@ public final class HTTPClient: @unchecked Sendable {
                         continuation.finish(throwing: HTTPError.network("No HTTP response"))
                         return
                     }
-                    guard http.statusCode == 200 else {
+                    guard (200...299).contains(http.statusCode) else {
                         continuation.finish(throwing: HTTPError.httpError(http.statusCode, nil))
                         return
                     }

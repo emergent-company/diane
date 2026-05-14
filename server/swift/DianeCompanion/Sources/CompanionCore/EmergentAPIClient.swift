@@ -58,7 +58,7 @@ class EmergentAPIClient: ObservableObject {
         guard let http = response as? HTTPURLResponse else {
             throw EmergentAPIError.network("No HTTP response")
         }
-        guard http.statusCode == 200 else {
+        guard (200...299).contains(http.statusCode) else {
             let body = String(data: data, encoding: .utf8) ?? ""
             logError("ACP: create session failed (\(http.statusCode)): \(body)", category: "ACP")
             throw EmergentAPIError.httpError(http.statusCode)
@@ -119,7 +119,7 @@ class EmergentAPIClient: ObservableObject {
                         continuation.finish(throwing: EmergentAPIError.network("No HTTP response"))
                         return
                     }
-                    guard http.statusCode == 200 else {
+                    guard (200...299).contains(http.statusCode) else {
                         let bodyStr = try? await String(data: Data(Array(try await URLSession.shared.data(for: request).0)), encoding: .utf8)
                         continuation.finish(throwing: EmergentAPIError.httpError(http.statusCode))
                         return
