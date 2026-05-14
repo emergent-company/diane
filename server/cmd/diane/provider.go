@@ -206,19 +206,8 @@ func cmdProviderSet(kind string) {
 	}
 	defer bridge.Close()
 
-	// Resolve org ID
-	orgID := pc.OrgID
-	if orgID == "" {
-		proj, err := bridge.Client().Projects.Get(ctx, pc.ProjectID, nil)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Cannot fetch org ID: %v\n", err)
-			os.Exit(1)
-		}
-		orgID = proj.OrgID
-	}
-
 	fmt.Printf("\nWriting to Memory Platform... ")
-	_, err = bridge.UpsertOrgProvider(ctx, orgID, pType, apiKey, model, baseURL)
+	_, err = bridge.UpsertProjectProvider(ctx, pc.ProjectID, pType, apiKey, model, baseURL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed: %v\n", err)
 		os.Exit(1)
@@ -229,7 +218,7 @@ func cmdProviderSet(kind string) {
 	fmt.Print("\nTest provider now? [Y/n]: ")
 	test := readLine(reader)
 	if test == "" || strings.ToLower(test) == "y" || strings.ToLower(test) == "yes" {
-		doProviderTestWithProvider(ctx, bridge, orgID, pType, kind)
+		doProviderTestWithProvider(ctx, bridge, pc.OrgID, pType, kind)
 	}
 }
 

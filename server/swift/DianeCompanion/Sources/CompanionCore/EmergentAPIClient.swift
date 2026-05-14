@@ -530,28 +530,28 @@ class EmergentAPIClient: ObservableObject {
         _ = try await delete("/api/v1/organizations/\(encodedOrg)/providers/\(encodedProv)/credentials", orgID: orgID)
     }
 
-    // MARK: - Org Provider Configs (org-level provider CRUD)
+    // MARK: - Project Provider Configs (project-level provider CRUD)
 
-    /// Fetch all org-level provider configs.
-    /// GET /api/v1/organizations/{orgId}/providers
-    func fetchOrgProviderConfigs(orgID: String) async throws -> [OrgProviderConfig] {
-        let encoded = orgID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? orgID
-        let data = try await get("/api/v1/organizations/\(encoded)/providers", orgID: orgID)
+    /// Fetch all project-level provider configs.
+    /// GET /api/v1/projects/{projectId}/providers
+    func fetchProjectProviderConfigs(projectID: String) async throws -> [OrgProviderConfig] {
+        let encoded = projectID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? projectID
+        let data = try await get("/api/v1/projects/\(encoded)/providers", projectID: projectID)
         return (try? decode([OrgProviderConfig].self, from: data)) ?? []
     }
 
-    /// Upsert an org-level provider config.
-    /// PUT /api/v1/organizations/{orgId}/providers/{provider}
+    /// Upsert a project-level provider config.
+    /// PUT /api/v1/projects/{projectId}/providers/{provider}
     /// Body fields: apiKey, baseUrl, generativeModel, serviceAccountJson, gcpProject, location, embeddingModel
-    func saveOrgProviderConfig(orgID: String, provider: String,
-                                apiKey: String? = nil,
-                                baseURL: String? = nil,
-                                generativeModel: String? = nil,
-                                serviceAccountJSON: String? = nil,
-                                gcpProject: String? = nil,
-                                location: String? = nil,
-                                embeddingModel: String? = nil) async throws {
-        let encodedOrg = orgID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? orgID
+    func saveProjectProviderConfig(projectID: String, provider: String,
+                                   apiKey: String? = nil,
+                                   baseURL: String? = nil,
+                                   generativeModel: String? = nil,
+                                   serviceAccountJSON: String? = nil,
+                                   gcpProject: String? = nil,
+                                   location: String? = nil,
+                                   embeddingModel: String? = nil) async throws {
+        let encodedProj = projectID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? projectID
         let encodedProv = provider.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? provider
         struct Req: Encodable {
             let apiKey: String?
@@ -571,27 +571,24 @@ class EmergentAPIClient: ObservableObject {
             location: location,
             embeddingModel: embeddingModel
         ))
-        _ = try await put("/api/v1/organizations/\(encodedOrg)/providers/\(encodedProv)", body: body, orgID: orgID)
+        _ = try await put("/api/v1/projects/\(encodedProj)/providers/\(encodedProv)", body: body)
     }
 
-    /// Delete an org-level provider config.
-    /// DELETE /api/v1/organizations/{orgId}/providers/{provider}
-    func deleteOrgProviderConfig(orgID: String, provider: String) async throws {
-        let encodedOrg = orgID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? orgID
+    /// Delete a project-level provider config.
+    /// DELETE /api/v1/projects/{projectId}/providers/{provider}
+    func deleteProjectProviderConfig(projectID: String, provider: String) async throws {
+        let encodedProj = projectID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? projectID
         let encodedProv = provider.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? provider
-        _ = try await delete("/api/v1/organizations/\(encodedOrg)/providers/\(encodedProv)", orgID: orgID)
+        _ = try await delete("/api/v1/projects/\(encodedProj)/providers/\(encodedProv)")
     }
 
-    /// Test an org-level provider via a live generate call.
-    /// POST /api/v1/providers/{provider}/test?orgId=...
-    func testOrgProvider(orgID: String, provider: String, projectID: String?) async throws -> TestProviderResponse {
+    /// Test a project-level provider via a live generate call.
+    /// POST /api/v1/providers/{provider}/test?projectId=...
+    func testProjectProvider(projectID: String, provider: String) async throws -> TestProviderResponse {
         let encodedProv = provider.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? provider
-        var path = "/api/v1/providers/\(encodedProv)/test?orgId=\(orgID)"
-        if let pid = projectID {
-            let encodedPID = pid.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? pid
-            path += "&projectId=\(encodedPID)"
-        }
-        let data = try await post(path, body: Data(), orgID: orgID)
+        let encodedPID = projectID.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? projectID
+        let path = "/api/v1/providers/\(encodedProv)/test?projectId=\(encodedPID)"
+        let data = try await post(path, body: Data(), projectID: projectID)
         return try decode(TestProviderResponse.self, from: data)
     }
 

@@ -705,8 +705,8 @@ struct AgentsView: View {
 
         // Fetch available providers from MP for picker
         isLoadingProviders = true
-        if let orgID = appState.selectedProject?.orgId {
-            availableProviders = (try? await apiClient.fetchOrgProviderConfigs(orgID: orgID)) ?? []
+        if let projectID = appState.selectedProject?.id {
+            availableProviders = (try? await apiClient.fetchProjectProviderConfigs(projectID: projectID)) ?? []
             // Fetch models for the currently selected provider
             let currentProvider = overrideConfig?.modelProvider ?? agentDetail?.model?.provider ?? ""
             if !currentProvider.isEmpty {

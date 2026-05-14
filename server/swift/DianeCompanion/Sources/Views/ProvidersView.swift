@@ -25,8 +25,8 @@ struct ProvidersView: View {
     @State private var editingProviderConfig: OrgProviderConfig? = nil
     @State private var providerConfigToDelete: OrgProviderConfig? = nil
     @State private var showDeleteProviderConfig = false
-    @State private var testingProvider: String? = nil  // provider ID being tested
-    @State private var testResults: [String: String] = [:]  // provider ID → result text
+    @State private var testingProvider: String? = nil
+    @State private var testResults: [String: String] = [:]
 
     // Org credentials
     @State private var orgCredentials: [OrgCredential] = []
@@ -65,7 +65,7 @@ struct ProvidersView: View {
             if let err = providerConfigsError {
                 Section {
                     ErrorBannerView(message: "Provider configs: \(err)") {
-                        Task { await loadOrgProviderConfigs() }
+                        Task { await loadProjectProviderConfigs() }
                     }
                 }
             }
@@ -263,13 +263,13 @@ struct ProvidersView: View {
             }
         }
         .sheet(isPresented: $showAddProviderConfig) {
-            if let orgID = appState.selectedProject?.orgId {
+            if let projectID = appState.selectedProject?.id {
                 AddOrgProviderConfigSheet(
                     isPresented: $showAddProviderConfig,
-                    orgID: orgID,
+                    orgID: projectID,
                     editing: editingProviderConfig
                 ) {
-                    await loadOrgProviderConfigs()
+                    await loadProjectProviderConfigs()
                 }
                 .environmentObject(apiClient)
             }
@@ -310,8 +310,8 @@ struct ProvidersView: View {
             titleVisibility: .visible
         ) {
             Button("Delete", role: .destructive) {
-                if let config = providerConfigToDelete, let orgID = appState.selectedProject?.orgId {
-                    Task { await performDeleteProviderConfig(orgID: orgID, config: config) }
+                if let config = providerConfigToDelete, let projectID = appState.selectedProject?.id {
+                    Task { await performDeleteProviderConfig(projectID: projectID, config: config) }
                 }
             }
             Button("Cancel", role: .cancel) { providerConfigToDelete = nil }
@@ -528,12 +528,18 @@ struct ProvidersView: View {
 
     @MainActor
     private func loadAll() async {
+        // Auto-select first project if none selected or missing orgId
+        if appState.selectedProject?.orgId == nil {
+            if let projects = try? await apiClient.fetchProjects(), let first = projects.first, first.orgId != nil {
+                appState.selectedProject = ProjectInfo(id: first.id, name: first.name, orgId: first.orgId)
+            }
+        }
         isLoading = true
-        async let a: Void = loadOrgProviderConfigs()
-        async let b: Void = loadCredentials()
-        async let c: Void = loadProjectPolicies()
-        async let d: Void = loadStatus()
-        async let e: Void = loadPolicies()
+        async let a: Void = loadCredentials()
+        async let b: Void = loadProjectPolicies()
+        async let c: Void = loadStatus()
+        async let d: Void = loadPolicies()
+        async let e: Void = loadProjectProviderConfigs()
         _ = await (a, b, c, d, e)
         isLoading = false
     }
@@ -554,14 +560,14 @@ struct ProvidersView: View {
     }
 
     @MainActor
-    private func loadOrgProviderConfigs() async {
-        guard let orgID = appState.selectedProject?.orgId else {
+    private func loadProjectProviderConfigs() async {
+        guard let projectID = appState.selectedProject?.id else {
             orgProviderConfigs = []
             providerConfigsError = nil
             return
         }
         do {
-            orgProviderConfigs = try await apiClient.fetchOrgProviderConfigs(orgID: orgID)
+            orgProviderConfigs = try await apiClient.fetchProjectProviderConfigs(projectID: projectID)
             providerConfigsError = nil
         } catch {
             providerConfigsError = error.localizedDescription
@@ -621,11 +627,11 @@ struct ProvidersView: View {
     }
 
     @MainActor
-    private func performDeleteProviderConfig(orgID: String, config: OrgProviderConfig) async {
+    private func performDeleteProviderConfig(projectID: String, config: OrgProviderConfig) async {
         do {
-            try await apiClient.deleteOrgProviderConfig(orgID: orgID, provider: config.provider)
+            try await apiClient.deleteProjectProviderConfig(projectID: projectID, provider: config.provider)
             providerConfigToDelete = nil
-            await loadOrgProviderConfigs()
+            await loadProjectProviderConfigs()
         } catch {
             providerConfigsError = error.localizedDescription
         }
@@ -633,14 +639,13 @@ struct ProvidersView: View {
 
     @MainActor
     private func performTestProvider(config: OrgProviderConfig) async {
-        guard let orgID = appState.selectedProject?.orgId else { return }
+        guard let projectID = appState.selectedProject?.id else { return }
         testingProvider = config.id
         testResults[config.id] = nil
         do {
-            let result = try await apiClient.testOrgProvider(
-                orgID: orgID,
-                provider: config.provider,
-                projectID: appState.selectedProject?.id
+            let result = try await apiClient.testProjectProvider(
+                projectID: projectID,
+                provider: config.provider
             )
             testResults[config.id] = "✅ \(result.model) — \(result.latencyMs)ms"
         } catch {
@@ -1097,8 +1102,8 @@ struct AddOrgProviderConfigSheet: View {
         let locVal = location.trimmingCharacters(in: .whitespaces).isEmpty ? nil : location.trimmingCharacters(in: .whitespaces)
         let saVal = serviceAccountJSON.trimmingCharacters(in: .whitespaces).isEmpty ? nil : serviceAccountJSON.trimmingCharacters(in: .whitespaces)
         do {
-            try await apiClient.saveOrgProviderConfig(
-                orgID: orgID,
+            try await apiClient.saveProjectProviderConfig(
+                projectID: orgID,
                 provider: provider,
                 apiKey: apiKeyVal,
                 baseURL: baseURLVal,
