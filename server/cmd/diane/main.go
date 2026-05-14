@@ -120,6 +120,8 @@ func main() {
 			runMCPRelay(os.Args[3:])
 		case "serve":
 			cmdMCPServe()
+		case "logs":
+			cmdMCPLogs(os.Args[3:])
 		default:
 			fmt.Fprintf(os.Stderr, "Unknown mcp command: %s\n", os.Args[2])
 			os.Exit(1)

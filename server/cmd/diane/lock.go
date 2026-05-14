@@ -39,7 +39,7 @@ func acquirePIDLock(path string) {
 
 	// Try to acquire exclusive lock, non-blocking
 	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		// Another instance holds the lock
+		// Another instance holds the lock — but verify the PID is actually alive
 		lockFile.Close()
 		lockFile = nil
 
@@ -47,6 +47,25 @@ func acquirePIDLock(path string) {
 		existing := "unknown"
 		if data, readErr := os.ReadFile(path); readErr == nil {
 			existing = strings.TrimSpace(string(data))
+		}
+
+		// Check if the owning PID is actually alive (prevents stale locks after crash)
+		if existing != "unknown" {
+			existingPID := 0
+			if _, scanErr := fmt.Sscanf(existing, "%d", &existingPID); scanErr == nil && existingPID > 0 {
+				// Try signaling PID 0 to check if alive
+				if proc, findErr := os.FindProcess(existingPID); findErr == nil {
+					if signalErr := proc.Signal(syscall.Signal(0)); signalErr != nil {
+						// Process is dead — remove stale lock and retry
+						log.Printf("[LOCK] Stale lock from dead PID %d, removing and retrying...", existingPID)
+						os.Remove(path)
+						lockFile.Close() // close the fd we opened
+						lockFile = nil
+						acquirePIDLock(path) // recursive retry
+						return
+					}
+				}
+			}
 		}
 
 		log.Fatalf(
