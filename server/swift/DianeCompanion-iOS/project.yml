@@ -23,6 +23,11 @@ settings:
 packages:
   DianeShared:
     path: ../Packages/DianeShared
+  Textual:
+    url: https://github.com/gonzalezreal/textual
+    version: 0.3.1
+  ExyteChat:
+    path: ../Packages/ExyteChat
 
 targets:
   Diane:
@@ -36,6 +41,10 @@ targets:
     dependencies:
       - package: DianeShared
         product: DianeShared
+      - package: Textual
+        product: Textual
+      - package: ExyteChat
+        product: ExyteChat
     settings:
       base:
         PRODUCT_NAME: Diane

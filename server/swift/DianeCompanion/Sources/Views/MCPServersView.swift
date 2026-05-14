@@ -191,16 +191,19 @@ struct MCPServersView: View {
             await loadNodes()
             error = nil
         } catch let localError {
-            // Fall back to remote API if local fails
-            logWarning("Local API failed: \(localError.localizedDescription), trying remote...", category: "MCPView")
+            // Retry once after brief delay — local diane serve may still be starting
+            logWarning("Local API failed: \(localError.localizedDescription), retrying in 2s...", category: "MCPView")
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
             do {
-                servers = try await apiClient.fetchMCPServers(projectID: serverConfig.projectID)
-                await loadNodes()
+                servers = try await dianeAPI.fetchMCPServers()
                 error = nil
             } catch {
-                // Build a user-friendly error message
-                self.error = formatMCPError(localError, remoteError: error)
+                // MCP servers are local-only configuration — remote fallback won't work
+                // (the remote /api/admin/mcp-servers endpoint requires admin:read scope
+                // which client tokens don't have)
+                self.error = "Cannot load MCP servers: local diane serve not reachable. Try restarting the app."
             }
+            await loadNodes()
         }
         isLoading = false
     }

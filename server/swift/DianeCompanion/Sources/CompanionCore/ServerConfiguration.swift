@@ -80,7 +80,8 @@ final class ServerConfiguration: ObservableObject {
                 switch key {
                 case "server_url":  discoveredURL     = value
                 case "project_id":  discoveredProject = value
-                case "api_key", "token": discoveredKey = value
+                case "token":       discoveredKey     = value  // emt_* token from projects.local
+                case "api_key":     if discoveredKey == nil { discoveredKey = value }  // only if no token yet
                 default: break
                 }
             }

@@ -8,18 +8,24 @@ public struct DianeMessage: Identifiable, Codable, Sendable, Hashable {
     public let toolCalls: [ToolCall]?
     public let reasoningContent: String?
 
+    /// Optional content type hint. One of: "html", "markdown", "text", or nil for auto-detect.
+    public let contentType: String?
+
     enum CodingKeys: String, CodingKey {
         case id, role, content
         case createdAt = "created_at"
         case toolCalls = "tool_calls"
         case reasoningContent = "reasoning_content"
+        case contentType = "content_type"
     }
 
     public init(id: String, role: String, content: String, createdAt: String? = nil,
-                toolCalls: [ToolCall]? = nil, reasoningContent: String? = nil) {
+                toolCalls: [ToolCall]? = nil, reasoningContent: String? = nil,
+                contentType: String? = nil) {
         self.id = id; self.role = role; self.content = content
         self.createdAt = createdAt; self.toolCalls = toolCalls
         self.reasoningContent = reasoningContent
+        self.contentType = contentType
     }
 
     public struct ToolCall: Codable, Sendable, Hashable {
