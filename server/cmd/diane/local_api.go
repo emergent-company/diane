@@ -60,6 +60,7 @@ func startLocalAPI(pc *config.ProjectConfig, port int, callbackHost string, mcpP
 	mux.HandleFunc("/api/mcp-servers/", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleMCPServerSubRoutes(w, r) })
 	mux.HandleFunc("/api/nodes", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleNodes(w, r) })
 	mux.HandleFunc("/api/nodes/", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleNodeSubRoutes(w, r) })
+	mux.HandleFunc("/api/push/send", func(w http.ResponseWriter, r *http.Request) { registered++; api.handlePushSend(w, r) })
 	mux.HandleFunc("/api/providers", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleProviders(w, r) })
 	mux.HandleFunc("/api/agents", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleAgents(w, r) })
 	mux.HandleFunc("/api/agents/", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleAgentSubRoutes(w, r) })
@@ -2099,7 +2100,14 @@ func (h *apiHandlers) handleMCPServerTools(w http.ResponseWriter, r *http.Reques
 }
 
 // handleNodes returns connected relay nodes from the Memory Platform.
+// GET: lists relay sessions + registered phone nodes
+// POST: registers a phone node (iOS push-enabled device)
 func (h *apiHandlers) handleNodes(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		h.handlePhoneNodeRegister(w, r)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
@@ -2274,7 +2282,10 @@ func (h *apiHandlers) handleNodes(w http.ResponseWriter, r *http.Request) {
 // handleNodeSubRoutes dispatches sub-resource requests under /api/nodes/.
 // Paths handled:
 //
-//	/api/nodes/{instanceID}/tools — GET: list tools for a relay node
+//	/api/nodes/{instanceID}/tools    — GET: list tools for a relay node
+//	/api/nodes/{instanceID}/heartbeat — PUT: update node heartbeat
+//	/api/nodes/{instanceID}           — PUT: update node (push token)
+//	                                 — DELETE: de-register node
 func (h *apiHandlers) handleNodeSubRoutes(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/nodes/")
 	parts := strings.SplitN(path, "/", 2)
@@ -2291,6 +2302,25 @@ func (h *apiHandlers) handleNodeSubRoutes(w http.ResponseWriter, r *http.Request
 		}
 		h.handleNodeTools(w, r, instanceID)
 		return
+	}
+
+	if len(parts) == 2 && parts[1] == "heartbeat" {
+		h.handleNodeHeartbeat(w, r, instanceID)
+		return
+	}
+
+	if len(parts) == 1 {
+		switch r.Method {
+		case http.MethodPut:
+			h.handleNodeUpdate(w, r, instanceID)
+			return
+		case http.MethodDelete:
+			h.handleNodeDeregister(w, r, instanceID)
+			return
+		default:
+			jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
 	}
 
 	jsonError(w, http.StatusNotFound, "not found")
