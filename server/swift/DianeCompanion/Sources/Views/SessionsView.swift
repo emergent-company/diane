@@ -1128,6 +1128,7 @@ struct SessionsView: View {
         messages = []
         inputText = ""
         error = nil
+        acpSessionID = nil
     }
 
     /// Close the current session via the API.
@@ -1142,6 +1143,7 @@ struct SessionsView: View {
                 sessionDetail = nil
                 messages = []
                 inputText = ""
+                acpSessionID = nil
                 await load()
             } catch {
                 self.error = "Failed to close session: \(error.localizedDescription)"

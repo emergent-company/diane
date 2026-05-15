@@ -887,6 +887,8 @@ public struct ProjectProviderInfo: Codable, Hashable, Sendable, Identifiable {
     public let baseUrl: String?
     public let generativeModel: String?
     public let embeddingModel: String?
+    public let availableGenerativeModels: [String]?
+    public let availableEmbeddingModels: [String]?
 
     public var id: String { provider }
 
@@ -895,6 +897,8 @@ public struct ProjectProviderInfo: Codable, Hashable, Sendable, Identifiable {
         case baseUrl
         case generativeModel
         case embeddingModel
+        case availableGenerativeModels
+        case availableEmbeddingModels
     }
 }
 

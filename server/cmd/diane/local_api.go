@@ -25,6 +25,7 @@ import (
 	sdkagents "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agentdefinitions"
 	sdkagentrun "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/agents"
 	"github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/graph"
+	sdkprovider "github.com/emergent-company/emergent.memory/apps/server/pkg/sdk/provider"
 )
 
 // localAPIServer serves the local companion API on 127.0.0.1.
@@ -2408,15 +2409,35 @@ func (h *apiHandlers) handleProviders(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, p := range mpProviders {
+		// Fetch available model catalog for each provider (best-effort; errors are silent)
+		genModels := fetchProviderModelNames(ctx, bridge, p.Provider, sdkprovider.ModelTypeGenerative)
+		embModels := fetchProviderModelNames(ctx, bridge, p.Provider, sdkprovider.ModelTypeEmbedding)
+
 		providers = append(providers, map[string]any{
-			"provider":        p.Provider,
-			"baseUrl":         p.BaseURL,
-			"generativeModel": p.GenerativeModel,
-			"embeddingModel":  p.EmbeddingModel,
+			"provider":                  p.Provider,
+			"baseUrl":                   p.BaseURL,
+			"generativeModel":           p.GenerativeModel,
+			"embeddingModel":            p.EmbeddingModel,
+			"availableGenerativeModels": genModels,
+			"availableEmbeddingModels":  embModels,
 		})
 	}
 
 	writeJSON(w, map[string]any{"providers": providers})
+}
+
+// fetchProviderModelNames queries the Memory Platform model catalog and returns model IDs.
+// Errors are silently swallowed — the caller gets an empty slice on failure.
+func fetchProviderModelNames(ctx context.Context, bridge *memory.Bridge, provider, modelType string) []string {
+	models, err := bridge.ListProviderModels(ctx, provider, modelType)
+	if err != nil || len(models) == 0 {
+		return nil
+	}
+	names := make([]string, len(models))
+	for i, m := range models {
+		names[i] = m.ModelName
+	}
+	return names
 }
 
 // GET /api/stats — agent run statistics from the Memory Platform.
