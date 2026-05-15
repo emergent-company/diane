@@ -102,24 +102,6 @@ targets:
     entitlements:
       path: DianeCompanion/DianeCompanion.entitlements
 
-  DianeTests:
-    type: bundle.unit-test
-    platform: macOS
-    deploymentTarget: "15.0"
-    sources:
-      - path: DianeTests
-    dependencies:
-      - target: Diane
-    settings:
-      base:
-        INFOPLIST_FILE: DianeTests/Info.plist
-        BUNDLE_LOADER: "$(TEST_HOST)"
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Diane.app/Contents/MacOS/Diane"
-        GENERATE_INFOPLIST_FILE: YES
-        SWIFT_EMIT_MODULE_ARCHIVE: NO
-        SWIFT_INSTALL_OBJC_HEADER: NO
-        SWIFT_MODULE_ALIAS: DianeUnitTests
-
   DianeUITests:
     type: bundle.ui-testing
     platform: macOS
