@@ -1185,9 +1185,17 @@ struct SessionsView: View {
         messages.append(assistantMessage)
         isSending = true
 
-        let currentID = selectedSession?.id
-        var streamSessionID: String? = currentID
         var toolCallsBuffer: [ToolCall] = []
+
+        // Ensure we have a local Diane session for persistence
+        if selectedSession?.id == nil {
+            do {
+                let newSession = try await dianeAPI.createSession(title: "Chat")
+                selectedSession = newSession
+            } catch {
+                logDebug("SessionsView: failed to create local session: \(error.localizedDescription)", category: "Sessions")
+            }
+        }
 
         do {
             // Direct ACP: create session if needed
@@ -1261,7 +1269,6 @@ struct SessionsView: View {
                     }
 
                 case "done":
-                    streamSessionID = event.sessionID ?? currentID
                     // Fallback: ensure there's visible content, but only if
                     // there are no tool calls (tool-call-only responses are
                     // already displayed via the toolCalls section above).
@@ -1304,12 +1311,19 @@ struct SessionsView: View {
                 }
             }
 
-            // Update session selection if this was a new session
-            if selectedSession == nil, let sid = streamSessionID {
-                await load()
-                if let newSession = sessions.first(where: { $0.id == sid }) {
-                    selectedSession = newSession
+            // Persist messages to local Diane session and update sidebar
+            if let sessionID = selectedSession?.id {
+                do {
+                    try await dianeAPI.appendSessionMessage(sessionID: sessionID, role: "user", content: text)
+                    if let assistantMsg = messages.last(where: { $0.id == assistantID }),
+                       !assistantMsg.content.isEmpty {
+                        try await dianeAPI.appendSessionMessage(sessionID: sessionID, role: "assistant", content: assistantMsg.content)
+                    }
+                } catch {
+                    logDebug("SessionsView: failed to persist messages: \(error.localizedDescription)", category: "Sessions")
                 }
+                // Reload sessions list to show updated session in sidebar
+                await load()
             }
 
         } catch {
