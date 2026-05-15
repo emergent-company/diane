@@ -51,7 +51,9 @@ func main() {
 		fmt.Println("  tool            Test MCP tools through the proxy (test)")
 		fmt.Println("  ask             List and respond to pending agent questions")
 		fmt.Println("  schema apply    Apply embedded schema definitions to Memory Platform")
+		fmt.Println("  chat            Send a message to an agent via streaming (ACP)")
 		fmt.Println("  serve           Start bot, relay, and local companion API (--api-port 0 to disable)")
+
 		fmt.Println()
 		os.Exit(0)
 	}
@@ -98,6 +100,8 @@ func main() {
 		cmdServe()
 	case "upgrade":
 		cmdUpgrade(os.Args[2:])
+	case "chat":
+		cmdChat(os.Args[2:])
 	case "ask":
 		cmdAsk(os.Args[2:])
 	case "service":
