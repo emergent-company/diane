@@ -331,6 +331,56 @@ final class DianeAPIClient: ObservableObject {
         throw DianeAPIError.decodingError("providers")
     }
 
+    // MARK: - Provider Config CRUD
+
+    /// Upsert a project-level provider config.
+    /// PUT /api/v1/projects/{projectId}/providers/{provider}
+    func saveProviderConfig(projectID: String, provider: String,
+                            apiKey: String? = nil,
+                            baseURL: String? = nil,
+                            generativeModel: String? = nil,
+                            embeddingModel: String? = nil) async throws {
+        struct Req: Encodable {
+            let apiKey: String?
+            let baseUrl: String?
+            let generativeModel: String?
+            let embeddingModel: String?
+        }
+        let body = try JSONEncoder().encode(Req(
+            apiKey: apiKey,
+            baseUrl: baseURL,
+            generativeModel: generativeModel,
+            embeddingModel: embeddingModel
+        ))
+        let projPath = projectID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? projectID
+        let provPath = provider.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? provider
+        _ = try await put("/api/v1/projects/\(projPath)/providers/\(provPath)", body: body)
+    }
+
+    /// Delete a project-level provider config.
+    /// DELETE /api/v1/projects/{projectId}/providers/{provider}
+    func deleteProviderConfig(projectID: String, provider: String) async throws {
+        let projPath = projectID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? projectID
+        let provPath = provider.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? provider
+        _ = try await delete("/api/v1/projects/\(projPath)/providers/\(provPath)")
+    }
+
+    /// Fetches projects from the local API proxy.
+    /// GET /api/projects
+    func fetchProjects() async throws -> [Project] {
+        let data = try await get("/api/projects")
+        struct Response: Decodable { let projects: [Project]? }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.projects {
+            return list
+        }
+        if let list = try? JSONDecoder().decode([Project].self, from: data) {
+            return list
+        }
+        let body = String(data: data, encoding: .utf8) ?? "(raw)"
+        logError("fetchProjects: decode failure: \(body)", category: "APIClient")
+        throw DianeAPIError.decodingError("projects")
+    }
+
     func fetchGraphObjectStats() async throws -> GraphObjectStatsResponse {
         let data = try await get("/api/stats/objects")
         return try JSONDecoder().decode(GraphObjectStatsResponse.self, from: data)
@@ -527,7 +577,7 @@ final class DianeAPIClient: ObservableObject {
         return data
     }
 
-    private func post(_ path: String, body: Data?, timeout: TimeInterval? = nil) async throws -> Data {
+    func post(_ path: String, body: Data?, timeout: TimeInterval? = nil) async throws -> Data {
         guard let url = URL(string: "\(baseURL)\(path)") else {
             throw DianeAPIError.invalidURL(path)
         }

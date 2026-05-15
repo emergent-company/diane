@@ -882,7 +882,7 @@ public struct GraphObjectStatsResponse: Codable, Sendable {
 
 // MARK: - Project-Level Providers (from GET /api/providers)
 
-public struct ProjectProviderInfo: Codable, Sendable, Identifiable {
+public struct ProjectProviderInfo: Codable, Hashable, Sendable, Identifiable {
     public let provider: String
     public let baseUrl: String?
     public let generativeModel: String?
