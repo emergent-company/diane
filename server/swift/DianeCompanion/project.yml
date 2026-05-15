@@ -114,6 +114,7 @@ targets:
       base:
         CODE_SIGN_STYLE: Automatic
         PRODUCT_BUNDLE_IDENTIFIER: com.emergent-company.diane-companion.uitests
+        PRODUCT_MODULE_NAME: DianeUITests
         USES_XCTRUNNER: YES
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_EMIT_MODULE_ARCHIVE: NO
