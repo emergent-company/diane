@@ -15,7 +15,7 @@ settings:
         PRODUCT_BUNDLE_IDENTIFIER: com.emergent-company.diane-companion
         DEVELOPMENT_TEAM: "74LC88G9SC"
         CODE_SIGN_STYLE: Automatic
-        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_IDENTITY: "-"
         ENABLE_HARDENED_RUNTIME: YES
         OTHER_LDFLAGS: "-Wl,-w"
         OTHER_SWIFT_FLAGS: "-Xlinker -w"
