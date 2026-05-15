@@ -21,7 +21,14 @@ import (
 )
 
 // configPath is where diane stores its YAML config.
-const configPath = "/root/.config/diane.yml"
+// On Linux CI: /root/.config/diane.yml
+// On macOS (mcj-mini): /Users/mcj/.config/diane.yml
+var configPath = func() string {
+	if home := os.Getenv("HOME"); home != "" {
+		return home + "/.config/diane.yml"
+	}
+	return "/root/.config/diane.yml"
+}()
 
 // findDianeBinary locates the diane CLI binary. It checks, in order:
 //  1. /root/.diane/bin/diane (the canonical install path)
@@ -30,8 +37,11 @@ const configPath = "/root/.config/diane.yml"
 func findDianeBinary(t *testing.T) string {
 	t.Helper()
 
-	// First check the canonical install path
+	// First check the canonical install paths
+	// On macOS: ~/.diane/bin/diane
+	// On Linux CI: /root/.diane/bin/diane
 	candidates := []string{
+		"/Users/mcj/.diane/bin/diane",
 		"/root/.diane/bin/diane",
 	}
 	for _, c := range candidates {

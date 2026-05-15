@@ -51,20 +51,32 @@ final class SystemViewFriendlyDateTests: XCTestCase {
 final class ProvidersViewDisplayNameTests: XCTestCase {
     let sut = ProvidersView()
 
-    func testGoogleAIName() { XCTAssertEqual(sut.providerDisplayName("google-ai"), "Google AI") }
-    func testVertexAIName() { XCTAssertEqual(sut.providerDisplayName("vertex-ai"), "Vertex AI") }
-    func testOtherNameReturnsRaw() { XCTAssertEqual(sut.providerDisplayName("openai"), "openai") }
+    func testOpenAIName() { XCTAssertEqual(sut.providerDisplayName("openai"), "OpenAI") }
+    func testAnthropicName() { XCTAssertEqual(sut.providerDisplayName("anthropic"), "Anthropic") }
+    func testGoogleName() { XCTAssertEqual(sut.providerDisplayName("google"), "Google Vertex") }
+    func testDeepseekName() { XCTAssertEqual(sut.providerDisplayName("deepseek"), "DeepSeek") }
+    func testUnknownNameReturnsRaw() { XCTAssertEqual(sut.providerDisplayName("custom"), "custom") }
     func testEmptyNameReturnsEmpty() { XCTAssertEqual(sut.providerDisplayName(""), "") }
 }
 
 @MainActor
-final class ProvidersViewPolicyLabelTests: XCTestCase {
+final class ProvidersViewIconTests: XCTestCase {
     let sut = ProvidersView()
 
-    func testNonePolicy() { XCTAssertEqual(sut.policyDisplayLabel("none"), "None") }
-    func testOrganizationPolicy() { XCTAssertEqual(sut.policyDisplayLabel("organization"), "Organization") }
-    func testProjectPolicy() { XCTAssertEqual(sut.policyDisplayLabel("project"), "Project-specific") }
-    func testUnknownPolicyReturnsRaw() { XCTAssertEqual(sut.policyDisplayLabel("custom"), "custom") }
+    func testOpenAIIcon() { XCTAssertEqual(sut.providerIcon("openai"), "sparkles.square") }
+    func testAnthropicIcon() { XCTAssertEqual(sut.providerIcon("anthropic"), "brain") }
+    func testDeepseekIcon() { XCTAssertEqual(sut.providerIcon("deepseek"), "magnifyingglass") }
+    func testUnknownIcon() { XCTAssertEqual(sut.providerIcon("unknown"), "globe") }
+}
+
+@MainActor
+final class ProvidersViewColorTests: XCTestCase {
+    let sut = ProvidersView()
+
+    func testOpenAIColor() { XCTAssertEqual(sut.providerColor("openai"), .green) }
+    func testAnthropicColor() { XCTAssertEqual(sut.providerColor("anthropic"), .purple) }
+    func testDeepseekColor() { XCTAssertEqual(sut.providerColor("deepseek"), .red) }
+    func testUnknownColor() { XCTAssertEqual(sut.providerColor("unknown"), .secondary) }
 }
 
 // MARK: - SchemaTypeDetailView

@@ -388,4 +388,56 @@ final class EdgeCaseDecodingTests: XCTestCase {
         // Very small value — should not throw
         XCTAssertFalse(result.isEmpty)
     }
+
+    // MARK: - Provider Model Decoding
+
+    func testProjectProviderInfoDecoding() throws {
+        // Must match the local API response shape (camelCase keys)
+        let json = """
+        [
+            {
+                "provider": "deepseek",
+                "baseUrl": "https://api.deepseek.com",
+                "generativeModel": "deepseek-chat",
+                "embeddingModel": "gemini-embedding-2-preview"
+            },
+            {
+                "provider": "google",
+                "baseUrl": null,
+                "generativeModel": "gemini-3.1-flash-lite-preview",
+                "embeddingModel": null
+            }
+        ]
+        """.data(using: .utf8)!
+        let providers = try decoder.decode([ProjectProviderInfo].self, from: json)
+        XCTAssertEqual(providers.count, 2)
+        XCTAssertEqual(providers[0].provider, "deepseek")
+        XCTAssertEqual(providers[0].baseUrl, "https://api.deepseek.com")
+        XCTAssertEqual(providers[0].generativeModel, "deepseek-chat")
+        XCTAssertEqual(providers[0].embeddingModel, "gemini-embedding-2-preview")
+        XCTAssertEqual(providers[1].provider, "google")
+        XCTAssertNil(providers[1].baseUrl)
+        XCTAssertEqual(providers[1].generativeModel, "gemini-3.1-flash-lite-preview")
+        XCTAssertNil(providers[1].embeddingModel)
+    }
+
+    func testProjectProviderInfoDecodingWrapped() throws {
+        // Must match the local API's /api/providers response: {"providers": [...]}
+        let json = """
+        {
+            "providers": [
+                {
+                    "provider": "deepseek",
+                    "baseUrl": "https://api.deepseek.com",
+                    "generativeModel": "deepseek-chat",
+                    "embeddingModel": "gemini-embedding-2-preview"
+                }
+            ]
+        }
+        """.data(using: .utf8)!
+        struct Response: Decodable { let providers: [ProjectProviderInfo]? }
+        let resp = try decoder.decode(Response.self, from: json)
+        XCTAssertNotNil(resp.providers)
+        XCTAssertEqual(resp.providers?.count, 1)
+    }
 }

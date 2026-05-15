@@ -322,7 +322,13 @@ final class DianeAPIClient: ObservableObject {
         if let resp = try? JSONDecoder().decode(Response.self, from: data), let list = resp.providers {
             return list
         }
-        return []
+        if let list = try? JSONDecoder().decode([ProjectProviderInfo].self, from: data) {
+            return list
+        }
+        // Both decode attempts failed — this is a protocol mismatch bug
+        let body = String(data: data, encoding: .utf8) ?? "(non-UTF8)"
+        logError("fetchProjectProviders: failed to decode response: \(body)", category: "APIClient")
+        throw DianeAPIError.decodingError("providers")
     }
 
     func fetchGraphObjectStats() async throws -> GraphObjectStatsResponse {
@@ -617,6 +623,7 @@ enum DianeAPIError: Error, LocalizedError {
     case network(String)
     case httpError(Int, String)
     case serverError(String)
+    case decodingError(String)
 
     var errorDescription: String? {
         switch self {
@@ -624,6 +631,7 @@ enum DianeAPIError: Error, LocalizedError {
         case .network(let msg):  return "Network error: \(msg)"
         case .httpError(let c, let b): return "HTTP \(c): \(b)"
         case .serverError(let msg): return "Server error: \(msg)"
+        case .decodingError(let target): return "Decoding failed: \(target)"
         }
     }
 }

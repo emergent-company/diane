@@ -2408,11 +2408,11 @@ func (h *apiHandlers) handleProviders(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, p := range mpProviders {
-		model := p.GenerativeModel
 		providers = append(providers, map[string]any{
 			"provider":        p.Provider,
 			"baseUrl":         p.BaseURL,
-			"generativeModel": model,
+			"generativeModel": p.GenerativeModel,
+			"embeddingModel":  p.EmbeddingModel,
 		})
 	}
 

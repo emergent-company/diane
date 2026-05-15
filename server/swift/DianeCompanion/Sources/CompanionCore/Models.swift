@@ -891,10 +891,10 @@ public struct ProjectProviderInfo: Codable, Sendable, Identifiable {
     public var id: String { provider }
 
     enum CodingKeys: String, CodingKey {
-        case provider        = "provider"
-        case baseUrl         = "base_url"
-        case generativeModel = "generative_model"
-        case embeddingModel  = "embedding_model"
+        case provider
+        case baseUrl
+        case generativeModel
+        case embeddingModel
     }
 }
 
