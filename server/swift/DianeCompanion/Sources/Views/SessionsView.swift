@@ -351,50 +351,10 @@ struct SessionsView: View {
         .background(Design.Surface.cardBackground)
     }
 
-    /// Session metadata row — full session ID with click-to-copy and visual feedback.
+    /// Session metadata row — agent name badges only (session ID shown in right panel).
     @ViewBuilder
     private func sessionMetaRow(_ session: DianeSession) -> some View {
         HStack(spacing: 12) {
-            // Session ID — full ID displayed, click to copy
-            HStack(spacing: Design.Spacing.xs) {
-                Image(systemName: "number")
-                    .font(.system(size: Design.IconSize.tiny))
-                    .foregroundStyle(.tertiary)
-                if sessionIDCopied {
-                    Text("✓ Copied")
-                        .font(.system(size: 10, design: .monospaced))
-                        .fontWeight(.medium)
-                        .foregroundStyle(.green)
-                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                } else {
-                    Text(session.id)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .onTapGesture {
-                            copySessionID(session.id)
-                        }
-                }
-                Button {
-                    copySessionID(session.id)
-                } label: {
-                    if sessionIDCopied {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 9))
-                            .foregroundStyle(.green)
-                    } else {
-                        Image(systemName: "doc.on.doc")
-                            .font(.system(size: 9))
-                            .foregroundStyle(.tertiary)
-                            .opacity(0.6)
-                    }
-                }
-                .buttonStyle(.plain)
-                .help("Copy session ID")
-                .keyboardShortcut("c", modifiers: [.command, .shift])
-            }
-
             // Agent name from run aggregates
             if let detail = sessionDetail, let names = detail.aggregates?.agentNames, !names.isEmpty {
                 HStack(spacing: Design.Spacing.xs) {
@@ -504,7 +464,47 @@ struct SessionsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            metadataRow(label: "ID", value: session.id, monospaced: true)
+            // Session ID — full ID, click to copy with visual feedback
+            HStack(alignment: .center, spacing: Design.Spacing.xs) {
+                Text("ID")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 56, alignment: .leading)
+                if sessionIDCopied {
+                    Text("✓ Copied")
+                        .font(.system(size: 10, design: .monospaced))
+                        .fontWeight(.medium)
+                        .foregroundStyle(.green)
+                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                } else {
+                    Text(session.id)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                        .textSelection(.enabled)
+                        .onTapGesture {
+                            copySessionID(session.id)
+                        }
+                }
+                Spacer()
+                Button {
+                    copySessionID(session.id)
+                } label: {
+                    if sessionIDCopied {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.green)
+                    } else {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.tertiary)
+                            .opacity(0.6)
+                    }
+                }
+                .buttonStyle(.plain)
+                .help("Copy session ID")
+            }
+            .padding(.vertical, 1)
             if let key = session.key, !key.isEmpty {
                 metadataRow(label: "Key", value: key, monospaced: true)
             }
@@ -711,11 +711,6 @@ struct SessionsView: View {
                 sessionIDCopied = false
             }
         }
-    }
-
-    private func shortID(_ id: String) -> String {
-        if id.count <= 8 { return id }
-        return String(id.suffix(8))
     }
 
     private func metadataRow(label: String, value: String, monospaced: Bool = false) -> some View {

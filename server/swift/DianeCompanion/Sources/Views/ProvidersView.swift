@@ -200,8 +200,6 @@ struct ProviderEditPanel: View {
     @State private var showDeleteConfirm = false
     @State private var showTestResult: String? = nil
     @State private var isTesting = false
-    @State private var showCustomGenModel = false
-    @State private var showCustomEmbModel = false
 
     var body: some View {
         ScrollView {
@@ -227,70 +225,24 @@ struct ProviderEditPanel: View {
                     labeledField("Base URL", value: baseURL.isEmpty ? "(not set)" : baseURL, readOnly: true)
 
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Generative Model")
+                        Text("Default Generative Model")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        TextField("e.g. deepseek-chat", text: $generativeModel)
+                            .textFieldStyle(.roundedBorder)
                         if let models = provider.availableGenerativeModels, !models.isEmpty {
-                            if showCustomGenModel {
-                                HStack(spacing: 6) {
-                                    TextField("Custom model name", text: $generativeModel)
-                                        .textFieldStyle(.roundedBorder)
-                                    Button("Pick") { showCustomGenModel = false }
-                                        .buttonStyle(.bordered)
-                                }
-                            } else {
-                                Picker("Generative Model", selection: $generativeModel) {
-                                    ForEach(models, id: \.self) { model in
-                                        Text(model).tag(model)
-                                    }
-                                    Divider()
-                                    Text("Custom…").tag("__custom__")
-                                }
-                                .pickerStyle(.menu)
-                                .onChange(of: generativeModel) { _, newVal in
-                                    if newVal == "__custom__" {
-                                        generativeModel = ""
-                                        showCustomGenModel = true
-                                    }
-                                }
-                            }
-                        } else {
-                            TextField("e.g. deepseek-chat", text: $generativeModel)
-                                .textFieldStyle(.roundedBorder)
+                            modelTagList(models, current: generativeModel)
                         }
                     }
 
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Embedding Model")
+                        Text("Default Embedding Model")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        TextField("e.g. text-embedding-004", text: $embeddingModel)
+                            .textFieldStyle(.roundedBorder)
                         if let models = provider.availableEmbeddingModels, !models.isEmpty {
-                            if showCustomEmbModel {
-                                HStack(spacing: 6) {
-                                    TextField("Custom model name", text: $embeddingModel)
-                                        .textFieldStyle(.roundedBorder)
-                                    Button("Pick") { showCustomEmbModel = false }
-                                        .buttonStyle(.bordered)
-                                }
-                            } else {
-                                Picker("Embedding Model", selection: $embeddingModel) {
-                                    ForEach(models, id: \.self) { model in
-                                        Text(model).tag(model)
-                                    }
-                                    Divider()
-                                    Text("Custom…").tag("__custom__")
-                                }
-                                .pickerStyle(.menu)
-                                .onChange(of: embeddingModel) { _, newVal in
-                                    if newVal == "__custom__" {
-                                        embeddingModel = ""
-                                        showCustomEmbModel = true
-                                    }
-                                }
-                            }
-                        } else {
-                            TextField("e.g. text-embedding-004", text: $embeddingModel)
-                                .textFieldStyle(.roundedBorder)
+                            modelTagList(models, current: embeddingModel)
                         }
                     }
 
@@ -381,16 +333,6 @@ struct ProviderEditPanel: View {
         baseURL = provider.baseUrl ?? ""
         generativeModel = provider.generativeModel ?? ""
         embeddingModel = provider.embeddingModel ?? ""
-
-        // If the current model value isn't in the available list, show the custom text field
-        if let genModels = provider.availableGenerativeModels, !genModels.isEmpty,
-           !generativeModel.isEmpty, !genModels.contains(generativeModel) {
-            showCustomGenModel = true
-        }
-        if let embModels = provider.availableEmbeddingModels, !embModels.isEmpty,
-           !embeddingModel.isEmpty, !embModels.contains(embeddingModel) {
-            showCustomEmbModel = true
-        }
     }
 
     @MainActor
@@ -492,6 +434,27 @@ struct ProviderEditPanel: View {
             Text(value)
                 .font(.subheadline)
                 .foregroundStyle(readOnly ? .secondary : .primary)
+        }
+    }
+
+    /// Compact reference list of available model names shown below the TextField.
+    @ViewBuilder
+    private func modelTagList(_ models: [String], current: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("Available")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            ForEach(models, id: \.self) { model in
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(model == current ? Color.accentColor : Color.secondary.opacity(0.3))
+                        .frame(width: 4, height: 4)
+                    Text(model)
+                        .font(.caption)
+                        .foregroundStyle(model == current ? Color.accentColor : .secondary)
+                }
+                .padding(.vertical, 1)
+            }
         }
     }
 }

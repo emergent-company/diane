@@ -13,6 +13,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"sync"
 	"strings"
 	"time"
 
@@ -47,7 +48,12 @@ type localAPIServer struct {
 func startLocalAPI(pc *config.ProjectConfig, port int, callbackHost string, mcpProxy *mcpproxy.Proxy) (*localAPIServer, error) {
 	mux := http.NewServeMux()
 
-	api := &apiHandlers{pc: pc, callbackHost: callbackHost, mcpProxy: mcpProxy}
+	api := &apiHandlers{
+		pc:                  pc,
+		callbackHost:        callbackHost,
+		mcpProxy:            mcpProxy,
+		providerAPIKeyCache: make(map[string]string),
+	}
 	registered := 0
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleStatus(w, r) })
 	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleStats(w, r) })
@@ -112,6 +118,12 @@ type apiHandlers struct {
 	pc           *config.ProjectConfig
 	callbackHost string             // hostname for OAuth redirect URI ("localhost" = local machine)
 	mcpProxy     *mcpproxy.Proxy    // optional reference for log/status queries (may be nil)
+
+	// providerAPIKeyCache caches API keys sent via PUT so subsequent updates
+	// without an apiKey can re-use the stored one (the MP never returns secrets).
+	// Keyed by "projectID/providerType".
+	providerAPIKeyCache map[string]string
+	mu                  sync.Mutex
 }
 
 // bridge creates and returns a memory bridge from the project config.
@@ -3506,6 +3518,57 @@ func (h *apiHandlers) handleV1Routes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, models)
+		return
+	}
+
+	// PUT /api/v1/projects/{id}/providers/{provider} — use bridge SDK client
+	// directly for upsert, with API key caching so the user doesn't need to
+	// re-enter the key on every model/baseURL update.
+	if len(parts) == 4 && parts[0] == "projects" && parts[2] == "providers" && r.Method == http.MethodPut {
+		var body struct {
+			APIKey          string `json:"apiKey"`
+			BaseURL         string `json:"baseUrl"`
+			GenerativeModel string `json:"generativeModel"`
+			EmbeddingModel  string `json:"embeddingModel"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+			return
+		}
+
+		cacheKey := parts[1] + "/" + parts[3]
+		h.mu.Lock()
+		if body.APIKey == "" {
+			// No API key provided — look up from cache
+			if cached, ok := h.providerAPIKeyCache[cacheKey]; ok {
+				body.APIKey = cached
+			}
+		} else {
+			// New API key provided — cache it
+			h.providerAPIKeyCache[cacheKey] = body.APIKey
+		}
+		h.mu.Unlock()
+
+		ctx := context.Background()
+		bridge, err := h.bridge(ctx)
+		if err != nil {
+			jsonError(w, http.StatusBadGateway, "bridge error: "+err.Error())
+			return
+		}
+		defer bridge.Close()
+
+		req := &sdkprovider.UpsertProviderConfigRequest{
+			APIKey:          body.APIKey,
+			BaseURL:         body.BaseURL,
+			GenerativeModel: body.GenerativeModel,
+			EmbeddingModel:  body.EmbeddingModel,
+		}
+		result, err := bridge.Client().Provider.UpsertProjectConfig(ctx, parts[1], parts[3], req)
+		if err != nil {
+			jsonError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		writeJSON(w, result)
 		return
 	}
 
