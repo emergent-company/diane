@@ -433,19 +433,26 @@ struct QuestionsView: View {
     private func formattedDate(_ iso: String) -> String? {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: iso) {
+        guard let date = formatter.date(from: iso) ?? {
+            formatter.formatOptions = [.withInternetDateTime]
+            return formatter.date(from: iso)
+        }() else { return nil }
+
+        let elapsed = Date().timeIntervalSince(date)
+        if elapsed < 3600 { // < 1 hour
             let rel = RelativeDateTimeFormatter()
-            rel.unitsStyle = .abbreviated
+            rel.unitsStyle = .full
             return rel.localizedString(for: date, relativeTo: Date())
-        }
-        // Try without fractional seconds
-        formatter.formatOptions = [.withInternetDateTime]
-        if let date = formatter.date(from: iso) {
+        } else if elapsed < 86400 * 7 { // < 1 week
             let rel = RelativeDateTimeFormatter()
-            rel.unitsStyle = .abbreviated
+            rel.unitsStyle = .full
             return rel.localizedString(for: date, relativeTo: Date())
+        } else {
+            // Absolute date for older items
+            let df = DateFormatter()
+            df.dateFormat = "MMM d"
+            return df.string(from: date)
         }
-        return nil
     }
 }
 
@@ -504,18 +511,22 @@ private struct QuestionRowView: View {
     private func formattedDate(iso: String) -> String? {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: iso) {
+        guard let date = formatter.date(from: iso) ?? {
+            formatter.formatOptions = [.withInternetDateTime]
+            return formatter.date(from: iso)
+        }() else { return nil }
+
+        let elapsed = Date().timeIntervalSince(date)
+        if elapsed < 86400 * 7 { // < 1 week
             let rel = RelativeDateTimeFormatter()
-            rel.unitsStyle = .abbreviated
+            rel.unitsStyle = .full
             return rel.localizedString(for: date, relativeTo: Date())
+        } else {
+            // Absolute date for older items
+            let df = DateFormatter()
+            df.dateFormat = "MMM d"
+            return df.string(from: date)
         }
-        formatter.formatOptions = [.withInternetDateTime]
-        if let date = formatter.date(from: iso) {
-            let rel = RelativeDateTimeFormatter()
-            rel.unitsStyle = .abbreviated
-            return rel.localizedString(for: date, relativeTo: Date())
-        }
-        return nil
     }
 }
 

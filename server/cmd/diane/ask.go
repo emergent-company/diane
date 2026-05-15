@@ -409,14 +409,17 @@ func relTime(iso string) string {
 		}
 	}
 	diff := time.Since(t)
-	switch {
-	case diff < time.Minute:
-		return "just now"
-	case diff < time.Hour:
-		return fmt.Sprintf("%dm ago", int(diff.Minutes()))
-	case diff < 24*time.Hour:
-		return fmt.Sprintf("%dh ago", int(diff.Hours()))
-	default:
-		return fmt.Sprintf("%dd ago", int(diff.Hours()/24))
+	if diff < 7*24*time.Hour {
+		switch {
+		case diff < time.Minute:
+			return "just now"
+		case diff < time.Hour:
+			return fmt.Sprintf("%dm ago", int(diff.Minutes()))
+		case diff < 24*time.Hour:
+			return fmt.Sprintf("%dh ago", int(diff.Hours()))
+		default:
+			return fmt.Sprintf("%dd ago", int(diff.Hours()/24))
+		}
 	}
+	return t.Format("Jan 2")
 }
