@@ -2392,17 +2392,8 @@ func (h *apiHandlers) handleProviders(w http.ResponseWriter, r *http.Request) {
 	}
 	defer bridge.Close()
 
-	orgID := h.pc.OrgID
-	if orgID == "" {
-		proj, err := bridge.Client().Projects.Get(ctx, h.pc.ProjectID, nil)
-		if err != nil {
-			writeJSON(w, map[string]any{"providers": providers})
-			return
-		}
-		orgID = proj.OrgID
-	}
-
-	mpProviders, err := bridge.ListOrgProviders(ctx, orgID)
+	// Fetch project-level provider configs directly (no org-level management)
+	mpProviders, err := bridge.Client().Provider.ListProjectConfigs(ctx, h.pc.ProjectID)
 	if err != nil {
 		writeJSON(w, map[string]any{"providers": providers})
 		return
