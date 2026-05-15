@@ -121,16 +121,3 @@ targets:
         SWIFT_EMIT_MODULE_ARCHIVE: NO
         SWIFT_INSTALL_OBJC_HEADER: NO
         CODE_SIGNING_ALLOWED: NO
-    postbuildScripts:
-      - script: |
-          # Re-sign the entire XCUITest runner with consistent ad-hoc identity
-          RUNNER="${TARGET_BUILD_DIR}/DianeUITests-Runner.app"
-          if [ -d "$RUNNER" ]; then
-            # Sign runner app first, then all nested plugins
-            codesign --force --sign - --preserve-metadata=identifier,entitlements \
-              "${RUNNER}/Contents/PlugIns/DianeUITests.xctest" 2>/dev/null || true
-            codesign --force --sign - --preserve-metadata=identifier,entitlements \
-              --deep "$RUNNER"
-            echo "Re-signed XCUITest runner + plugins with consistent ad-hoc identity"
-          fi
-        name: "Re-sign XCUITest bundle identically"
