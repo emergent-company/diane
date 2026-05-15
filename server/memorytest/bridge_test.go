@@ -10,6 +10,7 @@ package memorytest
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"testing"
@@ -207,6 +208,90 @@ func TestBridge_FullFlow(t *testing.T) {
 	t.Logf("6️⃣ Session status: %s, messages: %d", s2.Status, s2.MessageCount)
 
 	t.Log("✅ Full flow completed successfully")
+}
+
+// TestBridge_ToolCalls verifies that tool calls are properly stored and
+// retrievable from the graph when appending a message via the bridge.
+func TestBridge_ToolCalls(t *testing.T) {
+	b := setupBridge(t)
+	ctx := context.Background()
+	prefix := fmt.Sprintf("t-tc-%d", os.Getpid())
+
+	session, err := b.CreateSession(ctx, prefix+"-tc-test")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	defer func() { _ = b.CloseSession(ctx, session.ID) }()
+	t.Logf("Session: %s", session.ID[:12])
+
+	// Append a user message
+	_, err = b.AppendMessage(ctx, session.ID, "user", prefix+": What's the weather?", 0, "")
+	if err != nil {
+		t.Fatalf("AppendMessage user: %v", err)
+	}
+	t.Log("User message stored")
+
+	// Append an assistant message with tool calls
+	tcJSON := `[{"id":"call_1","name":"get_weather","arguments":"{\"city\":\"Warsaw\"}"}]`
+	_, err = b.AppendMessage(ctx, session.ID, "assistant", prefix+": Let me check the weather.", 0, tcJSON)
+	if err != nil {
+		t.Fatalf("AppendMessage assistant with tool calls: %v", err)
+	}
+	t.Log("Assistant message with tool calls stored")
+
+	// Read back raw graph objects to verify tool calls
+	resp, err := b.Client().Graph.ListMessages(ctx, session.ID, 10, "")
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+
+	var foundToolCalls bool
+	for _, obj := range resp.Items {
+		role, _ := obj.Properties["role"].(string)
+		content, _ := obj.Properties["content"].(string)
+		t.Logf("  message: role=%s content=%s", role, truncate(content, 60))
+		if role == "assistant" {
+			tcRaw, ok := obj.Properties["tool_calls_json"]
+			if !ok || tcRaw == nil {
+				t.Errorf("assistant message has no tool_calls_json in properties")
+				continue
+			}
+			foundToolCalls = true
+			tcStr, ok := tcRaw.(string)
+			if !ok {
+				t.Errorf("tool_calls_json is not a string, got %T", tcRaw)
+				continue
+			}
+			t.Logf("  tool_calls_json: %s", tcStr)
+
+			// Parse and verify
+			var tcList []any
+			if err := json.Unmarshal([]byte(tcStr), &tcList); err != nil {
+				t.Errorf("failed to parse tool_calls_json: %v", err)
+				continue
+			}
+			if len(tcList) != 1 {
+				t.Errorf("toolCalls has %d entries, want 1", len(tcList))
+				continue
+			}
+			tc, ok := tcList[0].(map[string]any)
+			if !ok {
+				t.Errorf("toolCall[0] is not a map, got %T", tcList[0])
+				continue
+			}
+			if tc["name"] != "get_weather" {
+				t.Errorf("toolCall name=%v, want get_weather", tc["name"])
+			}
+			if tc["id"] != "call_1" {
+				t.Errorf("toolCall id=%v, want call_1", tc["id"])
+			}
+			t.Logf("✅ Tool calls verified: name=%s id=%s", tc["name"], tc["id"])
+		}
+	}
+
+	if !foundToolCalls {
+		t.Error("no assistant message with tool calls found in session")
+	}
 }
 
 // TestBridge_ListSessions verifies we can list all sessions.

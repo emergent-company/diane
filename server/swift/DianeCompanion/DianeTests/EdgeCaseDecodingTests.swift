@@ -440,4 +440,56 @@ final class EdgeCaseDecodingTests: XCTestCase {
         XCTAssertNotNil(resp.providers)
         XCTAssertEqual(resp.providers?.count, 1)
     }
+
+    // MARK: - Tool Calls in Graph Properties
+
+    func testMessageWithToolCallsInGraphProperties() throws {
+        // Simulates the graph properties format returned by GET /api/sessions/{id}/messages
+        // when an assistant message has tool_calls_json stored via ExtraProps.
+        let json = """
+        {
+            "entity_id": "msg-tc-1",
+            "type": "message",
+            "properties": {
+                "role": "assistant",
+                "content": "Let me check the weather.",
+                "tool_calls_json": "[{\\"id\\":\\"call_1\\",\\"name\\":\\"get_weather\\",\\"arguments\\":\\"{\\\\\\"city\\\\\\":\\\\\\"Warsaw\\\\\\"}\\"}]"
+            }
+        }
+        """.data(using: .utf8)!
+        let msg = try decoder.decode(DianeMessage.self, from: json)
+        XCTAssertEqual(msg.role, "assistant")
+        XCTAssertEqual(msg.content, "Let me check the weather.")
+        XCTAssertNotNil(msg.toolCalls, "Tool calls should be decoded from tool_calls_json")
+        XCTAssertEqual(msg.toolCalls?.count, 1, "Should have 1 tool call")
+        XCTAssertEqual(msg.toolCalls?.first?.name, "get_weather")
+        XCTAssertEqual(msg.toolCalls?.first?.id, "call_1")
+    }
+
+    func testMessageWithToolCallsAsInlineArray() throws {
+        // Simulates flat JSON format where toolCalls is a direct key
+        let json = """
+        {
+            "id": "msg-tc-2",
+            "role": "assistant",
+            "content": "Here are the results.",
+            "toolCalls": [
+                {"id": "call_2", "name": "search_docs", "arguments": "{\\"query\\":\\"weather\\"}"}
+            ]
+        }
+        """.data(using: .utf8)!
+        let msg = try decoder.decode(DianeMessage.self, from: json)
+        XCTAssertEqual(msg.role, "assistant")
+        XCTAssertNotNil(msg.toolCalls)
+        XCTAssertEqual(msg.toolCalls?.count, 1)
+        XCTAssertEqual(msg.toolCalls?.first?.name, "search_docs")
+    }
+
+    func testMessageWithoutToolCalls() throws {
+        let json = """
+        {"id":"msg-tc-3","role":"user","content":"Hello"}
+        """.data(using: .utf8)!
+        let msg = try decoder.decode(DianeMessage.self, from: json)
+        XCTAssertNil(msg.toolCalls, "User message should have nil toolCalls")
+    }
 }

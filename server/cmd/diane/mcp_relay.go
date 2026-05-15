@@ -506,12 +506,11 @@ func (s *MCPSession) doRegister(data []byte) {
 		}
 	}
 
-	// Prefix tool names with instance ID for multi-node dedup.
-	// This prevents collisions when multiple nodes register the same
-	// MCP server (e.g., github). The agent definition glob pattern
-	// (*github*) still matches because * matches any substring.
-	toolsData = prefixToolsInData(toolsData, s.cfg.InstanceID+"_")
-
+	// Instance prefixing is handled by the MP ToolPool and relaySessionTools,
+	// which prepend sess.InstanceID when building the tool cache and tool listing.
+	// The relay sends raw unprefixed tool names to avoid double prefixing.
+	// See: toolpool.go (prefixedName := sess.InstanceID + "_" + rt.Name)
+	//      service.go (prefix := sess.InstanceID + "_")
 	// Send register frame to relay
 	hostname, _ := os.Hostname()
 	reg := RegisterFrame{

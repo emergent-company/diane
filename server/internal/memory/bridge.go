@@ -207,9 +207,10 @@ func (b *Bridge) AppendMessage(ctx context.Context, sessionID, role, content str
 		req.TokenCount = &tokenCount
 	}
 	if toolCallsJSON != "" {
-		var tcs []any
-		if err := json.Unmarshal([]byte(toolCallsJSON), &tcs); err == nil {
-			req.ToolCalls = tcs
+		// Store tool calls as a JSON string in ExtraProps so they're
+		// accessible as a regular graph property on the message object.
+		req.ExtraProps = map[string]any{
+			"tool_calls_json": toolCallsJSON,
 		}
 	}
 	obj, err := b.client.Graph.AppendMessage(ctx, sessionID, req)

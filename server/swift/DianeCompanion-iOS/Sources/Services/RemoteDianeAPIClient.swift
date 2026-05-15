@@ -85,7 +85,7 @@ public final class RemoteDianeAPIClient: @unchecked Sendable {
                     }
 
                     let (bytes, response) = try await URLSession.shared.bytes(for: request)
-                    guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                    guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
                         throw HTTPError.httpError((response as? HTTPURLResponse)?.statusCode ?? 0, nil)
                     }
 

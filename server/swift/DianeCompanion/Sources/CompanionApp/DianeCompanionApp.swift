@@ -75,6 +75,17 @@ struct DianeCompanionApp: App {
         guard !hasStarted else { return }
         hasStarted = true
 
+        // In uitesting mode, skip startup and just bring window to front for XCUITest
+        if CommandLine.arguments.contains("--uitesting") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                NSApp.activate(ignoringOtherApps: true)
+                if let window = NSApp.windows.first(where: { $0.title == "Diane" }) {
+                    window.makeKeyAndOrderFront(nil)
+                }
+            }
+            return
+        }
+
         AppLogger.shared.info("App startup sequence beginning", category: "App")
 
         // Send any crash reports from previous sessions

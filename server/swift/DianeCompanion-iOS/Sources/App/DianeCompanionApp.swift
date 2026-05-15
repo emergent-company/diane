@@ -37,7 +37,7 @@ struct DianeCompanionApp: App {
         cloudClient.configure(baseURL: MemoryPlatform.defaultURL, apiKey: config.apiKey)
 
         // 2. If no API key, show config sheet
-        if !config.isConfigured {
+        if !config.isConfigured && !CommandLine.arguments.contains("UITesting") {
             showConfigSheet = true
             return
         }

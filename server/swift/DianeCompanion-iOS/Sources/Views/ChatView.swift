@@ -129,8 +129,10 @@ struct MessageBubble: View {
 
             VStack(alignment: isUser ? .trailing : .leading, spacing: DesignTokens.spacingXS) {
                 // Content
-                MessageContentView(content: message.content, isUser: isUser)
+                Text(message.content)
+                    .font(.body)
                     .foregroundColor(textColor)
+                    .textSelection(.enabled)
 
                 // Streaming cursor
                 if isStreaming {

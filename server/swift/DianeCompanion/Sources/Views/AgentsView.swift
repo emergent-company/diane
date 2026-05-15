@@ -18,7 +18,6 @@ struct AgentsView: View {
     @State private var editSystemPrompt: String = ""
     @State private var editSkills: String = ""
     @State private var editModelName: String = ""
-    @State private var editModelProvider: String = ""
     @State private var editTemperature: String = ""
     @State private var editMaxTokens: String = ""
     @State private var editMaxSteps: String = ""
@@ -34,10 +33,9 @@ struct AgentsView: View {
     @State private var error: String?
     @State private var saveStatus: String?
 
-    // Provider/model picker state
-    @State private var availableProviders: [OrgProviderConfig] = []
-    @State private var availableModels: [ProviderModel] = []
-    @State private var isLoadingProviders = false
+    // Combined provider/model picker state — all providers/models as "provider/model" entries
+    @State private var allCombinedModels: [CombinedModelEntry] = []
+    @State private var isLoadingModels = false
 
     // Sheets
     @State private var showCreateSheet = false
@@ -429,50 +427,19 @@ struct AgentsView: View {
                     Text("Model")
                         .font(.caption).foregroundStyle(.secondary)
 
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Provider").font(.caption2).foregroundStyle(.tertiary)
-                            if isLoadingProviders || availableProviders.isEmpty {
-                                TextField("deepseek", text: $editModelProvider)
-                                    .textFieldStyle(.roundedBorder)
-                                    .disabled(isLoadingProviders)
-                            } else {
-                                Picker("", selection: $editModelProvider) {
-                                    Text("(none)").tag("")
-                                    ForEach(availableProviders) { p in
-                                        Text(providerDisplayName(p.provider)).tag(p.provider)
-                                    }
-                                }
-                                .labelsHidden()
-                                .onChange(of: editModelProvider) { _, newVal in
-                                    guard !newVal.isEmpty else {
-                                        availableModels = []
-                                        editModelName = ""
-                                        return
-                                    }
-                                    Task {
-                                        availableModels = (try? await apiClient.fetchProviderModels(provider: newVal)) ?? []
-                                        if !availableModels.contains(where: { $0.modelName == editModelName }) {
-                                            editModelName = ""
-                                        }
-                                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Provider / Model").font(.caption2).foregroundStyle(.tertiary)
+                        if isLoadingModels || allCombinedModels.isEmpty {
+                            TextField("deepseek/deepseek-v4-flash", text: $editModelName)
+                                .textFieldStyle(.roundedBorder)
+                        } else {
+                            Picker("", selection: $editModelName) {
+                                Text("(auto)").tag("")
+                                ForEach(allCombinedModels) { entry in
+                                    Text(entry.displayName).tag(entry.combined)
                                 }
                             }
-                        }
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Name").font(.caption2).foregroundStyle(.tertiary)
-                            if isLoadingProviders || availableModels.isEmpty {
-                                TextField("deepseek-v4-flash", text: $editModelName)
-                                    .textFieldStyle(.roundedBorder)
-                            } else {
-                                Picker("", selection: $editModelName) {
-                                    Text("(auto)").tag("")
-                                    ForEach(availableModels) { m in
-                                        Text(m.displayName ?? m.modelName).tag(m.modelName)
-                                    }
-                                }
-                                .labelsHidden()
-                            }
+                            .labelsHidden()
                         }
                     }
 
@@ -619,8 +586,12 @@ struct AgentsView: View {
         if !editSystemPrompt.isEmpty { oc.systemPrompt = editSystemPrompt }
         let skillList = parseCommaList(editSkills)
         if !skillList.isEmpty { oc.skills = skillList }
-        if !editModelProvider.isEmpty { oc.modelProvider = editModelProvider }
-        if !editModelName.isEmpty { oc.modelName = editModelName }
+        // Save combined "provider/model" format — split for override config
+        if !editModelName.isEmpty {
+            let parts = editModelName.split(separator: "/", maxSplits: 1)
+            oc.modelProvider = String(parts[0])
+            oc.modelName = parts.count > 1 ? String(parts[1]) : String(parts[0])
+        }
         if let t = Double(editTemperature), t != 0 { oc.modelTemperature = t }
         if let mt = Int(editMaxTokens), mt > 0 { oc.modelMaxTokens = mt }
         if let ms = Int(editMaxSteps), ms > 0 { oc.maxSteps = ms }
@@ -703,20 +674,29 @@ struct AgentsView: View {
         editHasChanges = false
         saveStatus = nil
 
-        // Fetch available providers from MP for picker
-        isLoadingProviders = true
+        // Fetch combined model list from all project providers
+        isLoadingModels = true
         let projectID = serverConfig.projectID.isEmpty
             ? (appState.selectedProject?.id ?? "")
             : serverConfig.projectID
         if !projectID.isEmpty {
-            availableProviders = (try? await apiClient.fetchProjectProviderConfigs(projectID: projectID)) ?? []
-            // Fetch models for the currently selected provider
-            let currentProvider = overrideConfig?.modelProvider ?? agentDetail?.model?.provider ?? ""
-            if !currentProvider.isEmpty {
-                availableModels = (try? await apiClient.fetchProviderModels(provider: currentProvider)) ?? []
+            let providers = (try? await apiClient.fetchProjectProviderConfigs(projectID: projectID)) ?? []
+            var combined: [CombinedModelEntry] = []
+            for p in providers {
+                if let models = try? await apiClient.fetchProviderModels(provider: p.provider) {
+                    for m in models {
+                        combined.append(CombinedModelEntry(
+                            provider: p.provider,
+                            modelName: m.modelName,
+                            displayName: m.displayName
+                        ))
+                    }
+                }
             }
+            combined.sort { $0.combined < $1.combined }
+            allCombinedModels = combined
         }
-        isLoadingProviders = false
+        isLoadingModels = false
 
         isLoadingDetail = false
     }
@@ -728,8 +708,15 @@ struct AgentsView: View {
         let skills = override?.skills ?? detail?.skills ?? []
         editSkills = skills.joined(separator: ", ")
 
-        editModelProvider = override?.modelProvider ?? detail?.model?.provider ?? ""
-        editModelName = override?.modelName ?? detail?.model?.name ?? ""
+        let provider = override?.modelProvider ?? detail?.model?.provider ?? ""
+        let model = override?.modelName ?? detail?.model?.name ?? ""
+        if !provider.isEmpty && !model.isEmpty {
+            editModelName = "\(provider)/\(model)"
+        } else if !model.isEmpty {
+            editModelName = model
+        } else {
+            editModelName = ""
+        }
         editTemperature = override.flatMap { $0.modelTemperature.map { String($0) } } ?? ""
         editMaxTokens = override.flatMap { $0.modelMaxTokens.map { String($0) } } ?? ""
         editMaxSteps = override.flatMap { $0.maxSteps.map { String($0) } } ?? detail.flatMap { $0.maxSteps.map { String($0) } } ?? ""
@@ -742,15 +729,23 @@ struct AgentsView: View {
     func parseCommaList(_ str: String) -> [String] {
         str.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
+}
 
-    private func providerDisplayName(_ provider: String) -> String {
-        switch provider {
-        case "google":          return "Google AI"
-        case "google-vertex":   return "Vertex AI"
-        case "deepseek":        return "DeepSeek"
-        case "openai-compatible": return "OpenAI Compatible"
-        default:                return provider
-        }
+// MARK: - CombinedModelEntry
+
+/// A model entry from a specific provider, displayed as "provider/model" in a single dropdown.
+struct CombinedModelEntry: Identifiable, Sendable {
+    let provider: String
+    let modelName: String
+    let displayName: String
+
+    var combined: String { "\(provider)/\(modelName)" }
+    var id: String { combined }
+
+    init(provider: String, modelName: String, displayName: String? = nil) {
+        self.provider = provider
+        self.modelName = modelName
+        self.displayName = displayName ?? modelName
     }
 }
 

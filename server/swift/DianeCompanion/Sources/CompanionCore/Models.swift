@@ -1302,6 +1302,10 @@ public struct DianeMessage: Identifiable, Codable, Sendable {
             self.toolCalls = flatTCs.isEmpty ? nil : flatTCs
         } else if let rawTCs = props?["toolCalls"] {
             self.toolCalls = Self.decodeToolCalls(from: rawTCs)
+        } else if let tcJSONStr = props?["tool_calls_json"]?.stringValue,
+                  let tcData = tcJSONStr.data(using: .utf8),
+                  let tcArray = try? JSONSerialization.jsonObject(with: tcData) as? [[String: Any]] {
+            self.toolCalls = Self.toolCalls(fromRaw: tcArray)
         } else {
             self.toolCalls = nil
         }
