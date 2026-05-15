@@ -115,6 +115,8 @@ targets:
         BUNDLE_LOADER: "$(TEST_HOST)"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Diane.app/Contents/MacOS/Diane"
         GENERATE_INFOPLIST_FILE: YES
+        SWIFT_EMIT_MODULE_ARCHIVE: NO
+        SWIFT_INSTALL_OBJC_HEADER: NO
 
   DianeUITests:
     type: bundle.ui-testing
@@ -130,6 +132,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.emergent-company.diane-companion.uitests
         USES_XCTRUNNER: YES
         GENERATE_INFOPLIST_FILE: YES
+        SWIFT_EMIT_MODULE_ARCHIVE: NO
+        SWIFT_INSTALL_OBJC_HEADER: NO
         CODE_SIGNING_ALLOWED: NO
     postbuildScripts:
       - script: |

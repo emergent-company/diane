@@ -12,14 +12,12 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/gonzalezreal/textual", from: "0.3.1"),
-        .package(path: "../ExyteChat"),
     ],
     targets: [
         .target(
             name: "DianeShared",
             dependencies: [
                 .product(name: "Textual", package: "textual", condition: .when(platforms: [.macOS, .iOS])),
-                .product(name: "ExyteChat", package: "ExyteChat", condition: .when(platforms: [.iOS])),
             ]
         ),
         .testTarget(
