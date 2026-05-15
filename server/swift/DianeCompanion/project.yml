@@ -118,6 +118,7 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_EMIT_MODULE_ARCHIVE: NO
         SWIFT_INSTALL_OBJC_HEADER: NO
+        SWIFT_MODULE_ALIAS: DianeUnitTests
 
   DianeUITests:
     type: bundle.ui-testing
