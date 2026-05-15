@@ -1074,11 +1074,12 @@ private struct ListResponse<T: Decodable>: Decodable {
 }
 
 /// Type-erased value for decoding mixed-type JSON properties.
-private enum AnyValue: Decodable {
+private enum AnyValue: Decodable, @unchecked Sendable {
     case string(String)
     case int(Int)
     case double(Double)
     case bool(Bool)
+    case array([Any])
     case null
     
     init(from decoder: Decoder) throws {
@@ -1091,6 +1092,8 @@ private enum AnyValue: Decodable {
             self = .double(d)
         } else if let b = try? container.decode(Bool.self) {
             self = .bool(b)
+        } else if let arr = try? container.decode([AnyValue].self) {
+            self = .array(arr.map { $0.rawValue })
         } else if container.decodeNil() {
             self = .null
         } else {
@@ -1104,6 +1107,18 @@ private enum AnyValue: Decodable {
     
     var intValue: Int? {
         switch self { case .int(let i): return i; case .double(let d): return Int(d); default: return nil }
+    }
+
+    /// Convert AnyValue back to a raw JSON-compatible value.
+    private var rawValue: Any {
+        switch self {
+        case .string(let s): return s
+        case .int(let i): return i
+        case .double(let d): return d
+        case .bool(let b): return b
+        case .null: return NSNull()
+        case .array(let arr): return arr
+        }
     }
 }
 
@@ -1306,10 +1321,13 @@ public struct DianeMessage: Identifiable, Codable, Sendable {
     
     /// Decode tool calls from the graph properties `toolCalls` field, which is stored as an array of dictionaries.
     private static func decodeToolCalls(from raw: AnyValue?) -> [ToolCall]? {
-        guard raw != nil else { return nil }
-        // The toolCalls property is stored as a JSON array in graph properties
-        // It might come through as a JSON string or as nested values
-        return nil // Handled below via the Array-typed properties
+        guard let raw = raw else { return nil }
+        switch raw {
+        case .array(let arr):
+            return toolCalls(fromRaw: arr)
+        default:
+            return nil
+        }
     }
 }
 

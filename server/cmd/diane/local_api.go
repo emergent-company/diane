@@ -1308,8 +1308,9 @@ func (h *apiHandlers) handleGetSessionMessages(w http.ResponseWriter, r *http.Re
 // handleAppendSessionMessage appends a message to a session.
 func (h *apiHandlers) handleAppendSessionMessage(w http.ResponseWriter, r *http.Request, sessionID string) {
 	var req struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
+		Role       string `json:"role"`
+		Content    string `json:"content"`
+		ToolCalls  string `json:"tool_calls,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
@@ -1330,7 +1331,7 @@ func (h *apiHandlers) handleAppendSessionMessage(w http.ResponseWriter, r *http.
 	}
 	defer bridge.Close()
 
-	msg, err := bridge.AppendMessage(ctx, sessionID, req.Role, req.Content, 0)
+	msg, err := bridge.AppendMessage(ctx, sessionID, req.Role, req.Content, 0, req.ToolCalls)
 	if err != nil {
 		writeJSON(w, map[string]any{"error": err.Error()})
 		return
@@ -1498,7 +1499,7 @@ func (h *apiHandlers) handleChatSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Append user message to session
-	_, err = bridge.AppendMessage(ctx, sessionID, "user", req.Content, 0)
+	_, err = bridge.AppendMessage(ctx, sessionID, "user", req.Content, 0, "")
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "append message: "+err.Error())
 		return
@@ -1677,7 +1678,7 @@ pollLoop:
 		go func() {
 			storeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			bridge.AppendMessage(storeCtx, sessionID, "assistant", assistantText, 0)
+			bridge.AppendMessage(storeCtx, sessionID, "assistant", assistantText, 0, "")
 		}()
 	}
 

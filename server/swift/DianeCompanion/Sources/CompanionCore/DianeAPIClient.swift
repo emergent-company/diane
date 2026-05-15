@@ -158,9 +158,12 @@ final class DianeAPIClient: ObservableObject {
 
     /// Append a message to a session's message history.
     /// POST /api/sessions/{id}/messages
-    func appendSessionMessage(sessionID: String, role: String, content: String) async throws -> String? {
+    func appendSessionMessage(sessionID: String, role: String, content: String, toolCallsJSON: String? = nil) async throws -> String? {
         let encoded = sessionID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionID
-        let body: [String: String] = ["role": role, "content": content]
+        var body: [String: String] = ["role": role, "content": content]
+        if let tc = toolCallsJSON, !tc.isEmpty {
+            body["tool_calls"] = tc
+        }
         let jsonData = try JSONEncoder().encode(body)
         let data = try await post("/api/sessions/\(encoded)/messages", body: jsonData)
         struct Response: Decodable { let ok: Bool?; let id: String? }

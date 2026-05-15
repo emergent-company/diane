@@ -198,13 +198,19 @@ func (b *Bridge) ListSessions(ctx context.Context, status string) ([]Session, er
 // AppendMessage appends a message to a session and returns the created message.
 // If tokenCount > 0, it's included in the request so the server can auto-maintain
 // the session's total_tokens counter. Pass 0 to skip token counting.
-func (b *Bridge) AppendMessage(ctx context.Context, sessionID, role, content string, tokenCount int) (*Message, error) {
+func (b *Bridge) AppendMessage(ctx context.Context, sessionID, role, content string, tokenCount int, toolCallsJSON string) (*Message, error) {
 	req := &graph.AppendMessageRequest{
 		Role:    role,
 		Content: content,
 	}
 	if tokenCount > 0 {
 		req.TokenCount = &tokenCount
+	}
+	if toolCallsJSON != "" {
+		var tcs []any
+		if err := json.Unmarshal([]byte(toolCallsJSON), &tcs); err == nil {
+			req.ToolCalls = tcs
+		}
 	}
 	obj, err := b.client.Graph.AppendMessage(ctx, sessionID, req)
 	if err != nil {

@@ -63,7 +63,7 @@ func TestBridge_CreateSession(t *testing.T) {
 		{"user", prefix + ": And in Krakow?"},
 	}
 	for i, m := range msgs {
-		msg, err := b.AppendMessage(ctx, session.ID, m.role, m.content, 0)
+		msg, err := b.AppendMessage(ctx, session.ID, m.role, m.content, 0, "")
 		if err != nil {
 			t.Fatalf("AppendMessage[%d]: %v", i, err)
 		}
@@ -85,7 +85,7 @@ func TestBridge_GetMessages(t *testing.T) {
 	defer func() { _ = b.CloseSession(ctx, session.ID) }()
 
 	for i := 1; i <= 3; i++ {
-		_, err := b.AppendMessage(ctx, session.ID, "user", fmt.Sprintf("%s: message %d", prefix, i), 0)
+		_, err := b.AppendMessage(ctx, session.ID, "user", fmt.Sprintf("%s: message %d", prefix, i), 0, "")
 		if err != nil {
 			t.Fatalf("AppendMessage[%d]: %v", i, err)
 		}
@@ -116,11 +116,11 @@ func TestBridge_SearchMemory(t *testing.T) {
 	}
 	defer func() { _ = b.CloseSession(ctx, session.ID) }()
 
-	_, err = b.AppendMessage(ctx, session.ID, "user", prefix+": I like PostgreSQL for databases", 0)
+	_, err = b.AppendMessage(ctx, session.ID, "user", prefix+": I like PostgreSQL for databases", 0, "")
 	if err != nil {
 		t.Fatalf("AppendMessage: %v", err)
 	}
-	_, err = b.AppendMessage(ctx, session.ID, "assistant", prefix+": PostgreSQL is great for relational data, ACID compliance, and complex queries", 0)
+	_, err = b.AppendMessage(ctx, session.ID, "assistant", prefix+": PostgreSQL is great for relational data, ACID compliance, and complex queries", 0, "")
 	if err != nil {
 		t.Fatalf("AppendMessage: %v", err)
 	}
@@ -169,14 +169,14 @@ func TestBridge_FullFlow(t *testing.T) {
 	t.Logf("1️⃣ Session created: %s", session.ID[:12])
 
 	// 2. Store user message
-	_, err = b.AppendMessage(ctx, session.ID, "user", prefix+": What's the capital of France?", 0)
+	_, err = b.AppendMessage(ctx, session.ID, "user", prefix+": What's the capital of France?", 0, "")
 	if err != nil {
 		t.Fatalf("AppendMessage user: %v", err)
 	}
 	t.Log("2️⃣ User message stored")
 
 	// 3. Store assistant message (simulated)
-	_, err = b.AppendMessage(ctx, session.ID, "assistant", prefix+": The capital of France is Paris.", 0)
+	_, err = b.AppendMessage(ctx, session.ID, "assistant", prefix+": The capital of France is Paris.", 0, "")
 	if err != nil {
 		t.Fatalf("AppendMessage assistant: %v", err)
 	}

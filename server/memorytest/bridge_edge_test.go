@@ -98,7 +98,7 @@ func TestBridge_SessionIsolation(t *testing.T) {
 	t.Logf("Session B: %s", sessionB.ID[:12])
 
 	// Store a message in A only
-	msgA, err := b.AppendMessage(ctx, sessionA.ID, "user", prefix+": This message belongs to session A", 0)
+	msgA, err := b.AppendMessage(ctx, sessionA.ID, "user", prefix+": This message belongs to session A", 0, "")
 	if err != nil {
 		t.Fatalf("AppendMessage A: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestBridge_MessageWithTokenCount(t *testing.T) {
 
 	// Append message with explicit token count
 	tokenCount := 42
-	msg, err := b.AppendMessage(ctx, session.ID, "user", prefix+": message with token count", tokenCount)
+	msg, err := b.AppendMessage(ctx, session.ID, "user", prefix+": message with token count", tokenCount, "")
 	if err != nil {
 		t.Fatalf("AppendMessage: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestBridge_MessageWithTokenCount(t *testing.T) {
 	}
 
 	// Append another without token count
-	msg2, err := b.AppendMessage(ctx, session.ID, "assistant", prefix+": response without token count", 0)
+	msg2, err := b.AppendMessage(ctx, session.ID, "assistant", prefix+": response without token count", 0, "")
 	if err != nil {
 		t.Fatalf("AppendMessage 2: %v", err)
 	}
@@ -298,7 +298,7 @@ func TestBridge_AppendMessageToNonExistentSession(t *testing.T) {
 	defer cancel()
 
 	fakeID := "00000000-0000-0000-0000-000000000000"
-	_, err := b.AppendMessage(ctx, fakeID, "user", "test message", 0)
+	_, err := b.AppendMessage(ctx, fakeID, "user", "test message", 0, "")
 
 	if err == nil {
 		t.Error("AppendMessage with fake session ID returned nil error")

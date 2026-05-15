@@ -270,7 +270,7 @@ func runDoctorText() {
 	}
 	fmt.Print("✅ created ")
 
-	_, err = bridge.AppendMessage(ctx, session.ID, "user", "doctor test message", 0)
+	_, err = bridge.AppendMessage(ctx, session.ID, "user", "doctor test message", 0, "")
 	if err != nil {
 		fmt.Printf("❌ AppendMessage: %v\n", err)
 		_ = bridge.CloseSession(ctx, session.ID)
@@ -467,7 +467,7 @@ func runDoctorJSON() {
 		emitJSON(checks)
 		return
 	}
-	_, err = bridge.AppendMessage(ctx, session.ID, "user", "doctor test message", 0)
+	_, err = bridge.AppendMessage(ctx, session.ID, "user", "doctor test message", 0, "")
 	if err != nil {
 		add("Session CRUD", "fail", fmt.Sprintf("AppendMessage: %v", err))
 		_ = bridge.CloseSession(ctx, session.ID)

@@ -1670,8 +1670,8 @@ pollLoop:
 		go func() {
 			storeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			globalBridge.AppendMessage(storeCtx, cs.SessionID, "user", userMsg, 0)
-			globalBridge.AppendMessage(storeCtx, cs.SessionID, "assistant", responseText, 0)
+			globalBridge.AppendMessage(storeCtx, cs.SessionID, "user", userMsg, 0, "")
+			globalBridge.AppendMessage(storeCtx, cs.SessionID, "assistant", responseText, 0, "")
 		}()
 	}
 

@@ -1314,10 +1314,18 @@ struct SessionsView: View {
             // Persist messages to local Diane session and update sidebar
             if let sessionID = selectedSession?.id {
                 do {
+                    // Encode tool calls as JSON for persistence
+                    let toolCallsData = try? JSONEncoder().encode(toolCallsBuffer)
+                    let toolCallsStr = toolCallsData.flatMap { String(data: $0, encoding: .utf8) }
+
                     try await dianeAPI.appendSessionMessage(sessionID: sessionID, role: "user", content: text)
                     if let assistantMsg = messages.last(where: { $0.id == assistantID }),
                        !assistantMsg.content.isEmpty {
-                        try await dianeAPI.appendSessionMessage(sessionID: sessionID, role: "assistant", content: assistantMsg.content)
+                        try await dianeAPI.appendSessionMessage(
+                            sessionID: sessionID, role: "assistant",
+                            content: assistantMsg.content,
+                            toolCallsJSON: toolCallsStr
+                        )
                     }
                 } catch {
                     logDebug("SessionsView: failed to persist messages: \(error.localizedDescription)", category: "Sessions")
