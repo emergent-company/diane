@@ -112,6 +112,7 @@ targets:
       - target: Diane
     settings:
       base:
+        PRODUCT_NAME: DianeUITests
         CODE_SIGN_STYLE: Automatic
         PRODUCT_BUNDLE_IDENTIFIER: com.emergent-company.diane-companion.uitests
         PRODUCT_MODULE_NAME: DianeUITests
