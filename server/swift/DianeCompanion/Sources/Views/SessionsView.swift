@@ -26,6 +26,9 @@ struct SessionsView: View {
     @State private var agentDefs: [AgentDef] = []
     @State private var selectedAgent: String = "diane-default"
 
+    // Session copy feedback
+    @State private var sessionIDCopied = false
+
     // Session metadata panel state
     @State private var sessionRuns: [SessionRunSummary] = []
     @State private var sessionTodos: [SessionTodoItem] = []
@@ -348,29 +351,48 @@ struct SessionsView: View {
         .background(Design.Surface.cardBackground)
     }
 
-    /// Session metadata row — truncated session ID and agent name badges.
+    /// Session metadata row — full session ID with click-to-copy and visual feedback.
     @ViewBuilder
     private func sessionMetaRow(_ session: DianeSession) -> some View {
         HStack(spacing: 12) {
-            // Session ID — short form with copy button, full ID in tooltip
+            // Session ID — full ID displayed, click to copy
             HStack(spacing: Design.Spacing.xs) {
                 Image(systemName: "number")
                     .font(.system(size: Design.IconSize.tiny))
                     .foregroundStyle(.tertiary)
-                Text(sessionIDShortForm(session.id))
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-                    .help(session.id)
+                if sessionIDCopied {
+                    Text("✓ Copied")
+                        .font(.system(size: 10, design: .monospaced))
+                        .fontWeight(.medium)
+                        .foregroundStyle(.green)
+                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                } else {
+                    Text(session.id)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .onTapGesture {
+                            copySessionID(session.id)
+                        }
+                }
                 Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(session.id, forType: .string)
+                    copySessionID(session.id)
                 } label: {
-                    Image(systemName: "doc.on.doc")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.tertiary.opacity(0.6))
+                    if sessionIDCopied {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.green)
+                    } else {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.tertiary)
+                            .opacity(0.6)
+                    }
                 }
                 .buttonStyle(.plain)
                 .help("Copy session ID")
+                .keyboardShortcut("c", modifiers: [.command, .shift])
             }
 
             // Agent name from run aggregates
@@ -482,7 +504,7 @@ struct SessionsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            metadataRow(label: "ID", value: shortID(session.id), monospaced: true)
+            metadataRow(label: "ID", value: session.id, monospaced: true)
             if let key = session.key, !key.isEmpty {
                 metadataRow(label: "Key", value: key, monospaced: true)
             }
@@ -677,6 +699,19 @@ struct SessionsView: View {
     }
 
     // MARK: - Helpers
+
+    private func copySessionID(_ id: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(id, forType: .string)
+        withAnimation(.easeInOut(duration: 0.15)) {
+            sessionIDCopied = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                sessionIDCopied = false
+            }
+        }
+    }
 
     private func shortID(_ id: String) -> String {
         if id.count <= 8 { return id }
@@ -1230,20 +1265,25 @@ struct SessionsView: View {
 
                 case "done":
                     streamSessionID = event.sessionID ?? currentID
-                    // Fallback: ensure there's content
+                    // Fallback: ensure there's visible content, but only if
+                    // there are no tool calls (tool-call-only responses are
+                    // already displayed via the toolCalls section above).
                     if let idx = messages.lastIndex(where: { $0.id == assistantID }),
                        messages[idx].content.isEmpty {
                         let current = messages[idx]
-                        messages[idx] = DianeMessage(
-                            id: current.id,
-                            role: current.role,
-                            content: "✓ Done",
-                            sequenceNumber: current.sequenceNumber,
-                            tokenCount: current.tokenCount,
-                            toolCalls: current.toolCalls,
-                            reasoningContent: current.reasoningContent,
-                            createdAt: current.createdAt
-                        )
+                        let hasToolCalls = current.toolCalls != nil && !current.toolCalls!.isEmpty
+                        if !hasToolCalls {
+                            messages[idx] = DianeMessage(
+                                id: current.id,
+                                role: current.role,
+                                content: "✓ Done",
+                                sequenceNumber: current.sequenceNumber,
+                                tokenCount: current.tokenCount,
+                                toolCalls: current.toolCalls,
+                                reasoningContent: current.reasoningContent,
+                                createdAt: current.createdAt
+                            )
+                        }
                     }
 
                 case "error":
