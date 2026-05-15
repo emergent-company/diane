@@ -17,6 +17,7 @@ settings:
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: "-"
         ENABLE_HARDENED_RUNTIME: YES
+        SWIFT_EMIT_MODULE_ARCHIVE: NO
         OTHER_LDFLAGS: "-Wl,-w"
         OTHER_SWIFT_FLAGS: "-Xlinker -w"
 
