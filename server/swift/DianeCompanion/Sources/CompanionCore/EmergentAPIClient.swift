@@ -716,7 +716,28 @@ class EmergentAPIClient: ObservableObject {
         return (try? JSONDecoder().decode([DianeMessage].self, from: data)) ?? []
     }
 
-    // MARK: - Document Upload
+    // MARK: - Agent Questions
+
+    /// Fetch agent questions for a project, optionally filtered by status.
+    /// GET /api/projects/{projectId}/agent-questions?status={status}
+    func fetchAgentQuestions(projectID: String, status: AgentQuestionStatus? = nil) async throws -> [AgentQuestion] {
+        var path = "/api/projects/\(projectID)/agent-questions"
+        if let s = status {
+            path += "?status=\(s.rawValue)"
+        }
+        let data = try await get(path, projectID: projectID)
+        return (try? decode(AgentQuestionListResponse.self, from: data).data) ?? []
+    }
+
+    /// Respond to a pending agent question and resume the agent run.
+    /// POST /api/projects/{projectId}/agent-questions/{questionId}/respond
+    func respondToAgentQuestion(projectID: String, questionID: String, response: String) async throws {
+        let path = "/api/projects/\(projectID)/agent-questions/\(questionID)/respond"
+        let body = try JSONEncoder().encode(RespondToQuestionRequest(response: response))
+        _ = try await post(path, body: body, projectID: projectID)
+    }
+
+    // MARK: - Upload Document
 
     /// Upload a file to the Emergent platform. The upload endpoint returns `name` instead of
     /// `filename`, so we decode via a separate response type and map it to the standard Document.

@@ -1653,3 +1653,82 @@ struct CreateAgentRequest: Codable {
 struct CloneAgentRequest: Codable {
     let name: String
 }
+
+// MARK: - Agent Questions
+
+/// Status of an agent question: pending, answered, expired, or cancelled.
+enum AgentQuestionStatus: String, Codable, Sendable {
+    case pending    = "pending"
+    case answered   = "answered"
+    case expired    = "expired"
+    case cancelled  = "cancelled"
+
+    var displayLabel: String {
+        switch self {
+        case .pending:   return "Pending"
+        case .answered:  return "Answered"
+        case .expired:   return "Expired"
+        case .cancelled: return "Cancelled"
+        }
+    }
+}
+
+/// How a question should be rendered: buttons, select, multi_select, or text.
+enum AgentQuestionInteractionType: String, Codable, Sendable {
+    case buttons      = "buttons"
+    case select       = "select"
+    case multiSelect  = "multi_select"
+    case text         = "text"
+}
+
+/// A single option in an ask_user question.
+struct AgentQuestionOption: Codable, Hashable, Sendable {
+    let label: String
+    let value: String
+    let description: String?
+}
+
+/// A question posed by an agent to the user during execution.
+/// Mapped from the server's AgentQuestionDTO JSON.
+struct AgentQuestion: Identifiable, Codable, Hashable, Sendable {
+    let id: String
+    let runId: String
+    let agentId: String
+    let projectId: String
+    let question: String
+    let options: [AgentQuestionOption]?
+    let interactionType: AgentQuestionInteractionType
+    let placeholder: String?
+    let maxLength: Int?
+    let response: String?
+    let respondedBy: String?
+    let respondedAt: String?
+    let status: AgentQuestionStatus
+    let notificationId: String?
+    let createdAt: String
+    let updatedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, question, options, placeholder, response, status
+        case runId           = "runId"
+        case agentId         = "agentId"
+        case projectId       = "projectId"
+        case interactionType = "interactionType"
+        case maxLength       = "maxLength"
+        case respondedBy     = "respondedBy"
+        case respondedAt     = "respondedAt"
+        case notificationId  = "notificationId"
+        case createdAt       = "createdAt"
+        case updatedAt       = "updatedAt"
+    }
+}
+
+/// Request body for responding to an agent question.
+struct RespondToQuestionRequest: Codable {
+    let response: String
+}
+
+/// Wrapper for list questions response.
+struct AgentQuestionListResponse: Decodable {
+    let data: [AgentQuestion]?
+}

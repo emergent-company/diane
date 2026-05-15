@@ -49,6 +49,7 @@ func main() {
 		fmt.Println("  service         Manage the MCP relay as a service (start|stop|status|restart)")
 		fmt.Println("  mcp             Manage MCP servers (list, relay)")
 		fmt.Println("  tool            Test MCP tools through the proxy (test)")
+		fmt.Println("  ask             List and respond to pending agent questions")
 		fmt.Println("  schema apply    Apply embedded schema definitions to Memory Platform")
 		fmt.Println("  serve           Start bot, relay, and local companion API (--api-port 0 to disable)")
 		fmt.Println()
@@ -97,6 +98,8 @@ func main() {
 		cmdServe()
 	case "upgrade":
 		cmdUpgrade(os.Args[2:])
+	case "ask":
+		cmdAsk(os.Args[2:])
 	case "service":
 		cmdService(os.Args[2:])
 	case "schema":

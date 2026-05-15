@@ -67,6 +67,8 @@ struct MainWindowView: View {
             AgentsView()
         case .schema:
             SchemaView()
+        case .ask:
+            QuestionsView()
         case .mcpServers:
             MCPServersView()
         case .nodes:
