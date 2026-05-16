@@ -17,37 +17,17 @@ public struct DianeContentDetector: Sendable {
         "<footer", "<section", "<article", "<nav", "<main", "<aside",
     ]
 
-    private static let htmlTagRegex: String = "<[a-zA-Z/][^>]*>"
-
-    // Heuristics for markdown detection
-    private static let markdownPatterns: [String] = [
-        "^#{1,6} ",                    // Headers: # ## ### etc.
-        "^\\*{3,}$",                   // HR: ***
-        "^\\-{3,}$",                   // HR: ---
-        "^_{3,}$",                     // HR: ___
-        "^[*-] .+",                    // Unordered lists
-        "^\\d+\\. .+",                 // Ordered lists
-        "\\*\\*[^*]+\\*\\*",          // Bold
-        "__[^_]+__",                   // Bold (underscore)
-        "\\*[^*]+\\*",                 // Italic
-        "_[^_]+_",                     // Italic (underscore)
-        "`[^`]+`",                     // Inline code
-        "```",                         // Code blocks
-        "\\[.+\\]\\(.+?\\)",          // Links
-        "!\\[.+\\]\\(.+?\\)",         // Images
-        "^> .+",                       // Blockquotes
-        "\\|.+\\|.+\\|",              // Tables
-    ]
-
     /// Detect the content type of a string.
     /// - If it looks like HTML, returns `.html`
-    /// - If it looks like markdown, returns `.markdown`
-    /// - Otherwise returns `.plain`
+    /// - Everything else defaults to `.markdown` — plain text is a valid
+    ///   subset of markdown and renders identically through the markdown pipeline.
+    ///   The server rarely sets explicit `contentType`, so client-side detection
+    ///   must be permissive rather than conservative.
     public static func detect(_ content: String) -> DianeContentType {
         if isEmptyHTML(content) { return .plain }
         if isHTML(content) { return .html }
-        if isMarkdown(content) { return .markdown }
-        return .plain
+        // Default to markdown — plain text is a valid subset of markdown
+        return .markdown
     }
 
     private static func isEmptyHTML(_ content: String) -> Bool {
@@ -96,62 +76,14 @@ public struct DianeContentDetector: Sendable {
 
         return false
     }
-
-    private static func isMarkdown(_ content: String) -> Bool {
-        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count > 5 else { return false }
-
-        let lines = trimmed.components(separatedBy: .newlines)
-
-        // Check line-by-line patterns
-        var patternMatches = 0
-        let maxPatternChecks = min(lines.count, 5)
-
-        for line in lines.prefix(maxPatternChecks) {
-            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
-            for pattern in markdownPatterns {
-                // Use non-throwing NSRegularExpression directly to avoid warning
-                let regex = try? NSRegularExpression(pattern: pattern, options: [])
-                if regex?.firstMatch(in: trimmedLine, range: NSRange(trimmedLine.startIndex..., in: trimmedLine)) != nil {
-                    patternMatches += 1
-                    break // Only count one pattern per line
-                }
-            }
-        }
-
-        // If 2+ lines match markdown patterns, it's likely markdown
-        if patternMatches >= 2 {
-            return true
-        }
-
-        // Check for inline patterns (even in single-line content)
-        // More aggressive: if content has multiple inline formatting marks
-        var inlineMarkers = 0
-
-        // Code blocks
-        if trimmed.contains("```") { inlineMarkers += 2 }
-
-        // Inline code
-        let backtickCount = trimmed.filter { $0 == "`" }.count
-        if backtickCount >= 2 { inlineMarkers += 1 }
-
-        // Bold/italic markers
-        let starCount = trimmed.filter { $0 == "*" }.count
-        if starCount >= 4 { inlineMarkers += 1 }
-
-        // Link
-        if trimmed.contains("](") { inlineMarkers += 1 }
-
-        return inlineMarkers >= 2
-    }
 }
 
 // MARK: - Markdown to AttributedString
 
 extension String {
-    /// Convert markdown to an AttributedString, returning nil if the string isn't valid markdown.
+    /// Convert markdown to an AttributedString.
+    /// Apple's parser is very lenient — it will succeed for plain text too.
     public func toMarkdownAttributed() -> AttributedString? {
-        // Apple's native AttributedString markdown parser works well for most cases
         try? AttributedString(
             markdown: self,
             options: .init(
