@@ -127,17 +127,28 @@ TEMP_DIR="${EXPORT_PATH}/_temp_resign"
 mkdir -p "${TEMP_DIR}"
 
 # Extract the IPA to a temp location
-unzip -qo "${APP_PATH}" -d "${TEMP_DIR}" 2>/dev/null
-APP_BUNDLE=$(find "${TEMP_DIR}/Payload" -name "*.app" -type d | head -1)
+unzip -qo "${APP_PATH}" -d "${TEMP_DIR}" 2>/dev/null || echo "⚠️  IPA extraction had warnings"
+ls -la "${TEMP_DIR}/Payload/" 2>/dev/null || echo "   (no Payload directory)"
+APP_BUNDLE=$(find "${TEMP_DIR}/Payload" -type d -name "*.app" -maxdepth 2 | head -1)
+echo "   App bundle: ${APP_BUNDLE:-<not found>}"
 
 if [ -n "$APP_BUNDLE" ] && [ -d "${APP_BUNDLE}/Frameworks/Sentry.framework" ]; then
-    # Get the signing identity from the main app
+    # Get the signing identity from the main app (if signed)
+    SIGN_IDENTITY=""
     SIGN_INFO=$(codesign -d -v "${APP_BUNDLE}" 2>&1 || true)
-    echo "   Main app signing:"
-    echo "${SIGN_INFO}" | grep "Authority=" | head -3
+    echo "   Main app signing: ${SIGN_INFO:-<none>}"
     
-    # Get the canonical signing identity (e.g. "Apple Distribution: Team Name (XXXXXXXXX)")
-    SIGN_IDENTITY=$(echo "${SIGN_INFO}" | grep "^Authority=" | head -1 | sed 's/^Authority=//')
+    # Try to extract the identity from the existing app signature
+    SIGN_IDENTITY=$(echo "${SIGN_INFO}" | grep "^Authority=" | head -1 | sed 's/^Authority=//' || true)
+    
+    # If no identity from app, search for any available distribution identity
+    if [ -z "$SIGN_IDENTITY" ]; then
+        echo "   Searching for available distribution identity..."
+        SIGN_IDENTITY=$(security find-identity -v -p basic 2>/dev/null | grep "Apple Distribution" | head -1 | sed 's/.*"\(.*\)".*/\1/' || true)
+        if [ -n "$SIGN_IDENTITY" ]; then
+            echo "   Found distribution identity: ${SIGN_IDENTITY}"
+        fi
+    fi
     
     if [ -n "$SIGN_IDENTITY" ]; then
         echo "==> Signing Sentry.framework with identity: ${SIGN_IDENTITY}"
@@ -145,7 +156,7 @@ if [ -n "$APP_BUNDLE" ] && [ -d "${APP_BUNDLE}/Frameworks/Sentry.framework" ]; t
             --verbose \
             "${APP_BUNDLE}/Frameworks/Sentry.framework" 2>&1 || echo "⚠️  Sentry.framework re-sign failed (non-fatal)"
     else
-        echo "⚠️  Could not determine signing identity, trying ad-hoc..."
+        echo "⚠️  No distribution identity found — trying ad-hoc..."
         codesign --force --sign - \
             --verbose \
             "${APP_BUNDLE}/Frameworks/Sentry.framework" 2>&1 || true
@@ -156,9 +167,14 @@ if [ -n "$APP_BUNDLE" ] && [ -d "${APP_BUNDLE}/Frameworks/Sentry.framework" ]; t
     cd "${TEMP_DIR}"
     zip -qr "${APP_PATH}" Payload/ 2>/dev/null
     cd - > /dev/null
+    RESULT=$?
     echo "✓ Re-packaged: ${APP_PATH} ($(du -sh "${APP_PATH}" | cut -f1))"
 else
     echo "   No Sentry.framework found or no payload extracted — skipping re-sign"
+    if [ -n "$APP_BUNDLE" ]; then
+        echo "   Frameworks in app:" 
+        ls -d "${APP_BUNDLE}/Frameworks/"* 2>/dev/null || echo "   (no frameworks directory)"
+    fi
 fi
 
 # Clean up temp
