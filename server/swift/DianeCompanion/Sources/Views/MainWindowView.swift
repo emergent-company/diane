@@ -54,39 +54,44 @@ struct MainWindowView: View {
 
     // MARK: - Content column
 
-    @ViewBuilder
-    private var contentView: some View {
+    /// Returns the appropriate content view wrapped in `AnyView` to collapse the
+    /// deeply nested `_ConditionalContent` type that @ViewBuilder with 12 branches
+    /// would otherwise create. This prevents a main-thread hang during
+    /// NavigationSplitView + List initialization, where Swift's generic metadata
+    /// resolution (`__swift_instantiateGenericMetadata`) stalls resolving the
+    /// complex type hierarchy.
+    private var contentView: AnyView {
         switch appState.selectedSidebarItem {
         case .dashboard:
-            StatsView()
+            AnyView(StatsView())
         case .sessions:
-            SessionsView()
+            AnyView(SessionsView())
         case .documents:
-            DocumentsView()
+            AnyView(DocumentsView())
         case .agents:
-            AgentsView()
+            AnyView(AgentsView())
         case .schema:
-            SchemaView()
+            AnyView(SchemaView())
         case .ask:
-            QuestionsView()
+            AnyView(QuestionsView())
         case .mcpServers:
-            MCPServersView()
+            AnyView(MCPServersView())
         case .nodes:
-            RelayNodesView()
+            AnyView(RelayNodesView())
         case .objects:
-            ObjectsBrowserView()
+            AnyView(ObjectsBrowserView())
         case .providers:
-            ProvidersView()
+            AnyView(ProvidersView())
         case .permissions:
-            PermissionsView()
+            AnyView(PermissionsView())
         case .system:
-            SystemView()
+            AnyView(SystemView())
         case .none:
-            EmptyStateView(
+            AnyView(EmptyStateView(
                 title: "Select a Section",
                 icon: "sidebar.left",
                 description: "Choose a section from the sidebar to get started."
-            )
+            ))
         }
     }
 
