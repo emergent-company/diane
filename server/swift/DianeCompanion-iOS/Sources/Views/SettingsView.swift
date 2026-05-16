@@ -62,7 +62,6 @@ struct SettingsView: View {
         }
         .onAppear {
             serverURL = config.serverURL
-            dianeServerURL = config.dianeServerURL
             apiKey = config.apiKey
             projectID = config.projectID
         }

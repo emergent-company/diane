@@ -3,9 +3,9 @@ import DianeShared
 
 struct SystemView: View {
     @Environment(\.cloudClient) private var cloudClient
+    @Environment(\.config) private var config
 
     @State private var sessions: [DianeSession] = []
-    @State private var servers: [MCPServer] = []
     @State private var agents: [AgentDef] = []
     @State private var health: String?
     @State private var isLoading = true
@@ -76,12 +76,6 @@ struct SystemView: View {
                             label: "Agents",
                             count: agents.count
                         )
-                        StatRow(
-                            icon: "server.rack",
-                            iconColor: .orange,
-                            label: "MCP Servers",
-                            count: servers.count
-                        )
                     }
 
                     // Device Info Section
@@ -130,15 +124,15 @@ struct SystemView: View {
         isLoading = true
         error = nil
         do {
-            // Fetch counts in parallel
-            async let sessionsTask = cloudClient.fetchSessions()
-            async let agentsTask = cloudClient.fetchAgentDefs()
-
-            (sessions, agents) = try await (
-                sessionsTask,
-                agentsTask
-            )
+            // Run diagnostics to verify connectivity
+            let _ = try await cloudClient.fetchDiagnostics()
             health = "ok"
+            
+            // Fetch agent definitions with project ID
+            agents = try await cloudClient.fetchAgentDefs(projectID: config.projectID)
+            
+            // Load sessions from local cache
+            sessions = SessionCache.shared.loadCachedSessions()
         } catch {
             self.error = error.localizedDescription
         }

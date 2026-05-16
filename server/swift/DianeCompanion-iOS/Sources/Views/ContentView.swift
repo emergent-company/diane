@@ -203,7 +203,7 @@ struct SessionListiPadView: View {
     private func createNewSession() async {
         do {
             let acpID = try await cloudClient.createACPSession(agentName: "diane-default")
-            let session = DianeSession(id: acpID, title: "New Chat", agentName: "diane-default", createdAt: ISO8601DateFormatter().string(from: Date()))
+            let session = DianeSession(id: acpID, title: "New Chat", createdAt: ISO8601DateFormatter().string(from: Date()), agentName: "diane-default")
             sessions.insert(session, at: 0)
             selectedSession = session
             SessionCache.shared.cacheSessions(sessions)
