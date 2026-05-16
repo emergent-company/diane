@@ -49,6 +49,17 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
         TARGETED_DEVICE_FAMILY: "1,2"
+    postbuildScripts:
+      - name: "Ad-hoc sign embedded frameworks (archive workaround)"
+        script: |
+          # Sentry.framework is unsigned when CODE_SIGNING_ALLOWED=NO.
+          # Give it an ad-hoc signature so xcodebuild -exportArchive can
+          # re-sign it with the distribution cert for App Store upload.
+          FW="$CODESIGNING_FOLDER_PATH/Frameworks/Sentry.framework"
+          if [ -d "$FW" ]; then
+            codesign --force --sign - --verbose "$FW"
+          fi
+        basedOnDependencyAnalysis: NO
     info:
       path: DianeCompanion/Info.plist
       properties:

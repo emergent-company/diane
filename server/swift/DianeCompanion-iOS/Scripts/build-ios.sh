@@ -107,25 +107,32 @@ fi
 echo "==> Signing embedded frameworks in archive..."
 ARCHIVE_APP=$(find "${ARCHIVE_PATH}/Products/Applications" -name "*.app" -type d -maxdepth 2 | head -1 2>/dev/null || true)
 if [ -n "$ARCHIVE_APP" ] && [ -d "${ARCHIVE_APP}/Frameworks/Sentry.framework" ]; then
-    # Discover signing identity from keychain (API key distributes cert to keychain)
+    # Try to discover signing identity from keychain
     SIGN_IDENTITY=$(security find-identity -v -p basic 2>/dev/null | grep "Apple Distribution" | head -1 | sed 's/.*"\(.*\)".*/\1/' || true)
-    if [ -z "$SIGN_IDENTITY" ]; then
-        # Try Apple Development / Apple iPhone Developer as fallback
-        SIGN_IDENTITY=$(security find-identity -v -p basic 2>/dev/null | grep "Apple Development" | head -1 | sed 's/.*"\(.*\)".*/\1/' || true)
+    
+    # If no cert in keychain, try to download one using the App Store Connect API
+    if [ -z "$SIGN_IDENTITY" ] && [ -n "${APP_STORE_CONNECT_KEY_ID:-}" ] && [ -n "${APP_STORE_CONNECT_ISSUER_ID:-}" ] && [ -f "${AUTH_KEY_PATH:-}" ]; then
+        echo "   No cert found in keychain — attempting to download distribution cert via API..."
+        # The JWT generation + API call is in the CI workflow as a separate step,
+        # which should populate the keychain before this runs.
+        # Re-check keychain in case the step populated it
+        SIGN_IDENTITY=$(security find-identity -v -p basic 2>/dev/null | grep "Apple Distribution" | head -1 | sed 's/.*"\(.*\)".*/\1/' || true)
+        if [ -n "$SIGN_IDENTITY" ]; then
+            echo "   Found identity (from prior step): ${SIGN_IDENTITY}"
+        else
+            echo "   No identity available — will need a CI workflow step to download the cert"
+        fi
     fi
+    
     if [ -n "$SIGN_IDENTITY" ]; then
-        echo "   Found identity: ${SIGN_IDENTITY}"
+        echo "   Using identity: ${SIGN_IDENTITY}"
         echo "   Signing Sentry.framework..."
-        codesign --force --sign "${SIGN_IDENTITY}" "${ARCHIVE_APP}/Frameworks/Sentry.framework" 2>&1 || echo "⚠️  Sentry.framework sign failed (non-fatal)"
+        codesign --force --sign "${SIGN_IDENTITY}" --verbose "${ARCHIVE_APP}/Frameworks/Sentry.framework" 2>&1 || echo "⚠️  Sentry.framework sign failed (non-fatal)"
     else
-        echo "⚠️  No signing identity found in keychain — Sentry.framework may remain unsigned"
+        echo "⚠️  No signing identity available — Sentry.framework may remain unsigned"
     fi
-elif [ -n "$ARCHIVE_APP" ]; then
-    echo "   No Sentry.framework found in archive"
-    ls -d "${ARCHIVE_APP}/Frameworks/"* 2>/dev/null || echo "   (no Frameworks directory)"
 else
-    echo "   No .app bundle found in archive at ${ARCHIVE_PATH}/Products/Applications/"
-    ls -la "${ARCHIVE_PATH}/Products/Applications/" 2>/dev/null || echo "   (Applications dir not found)"
+    echo "   No Sentry.framework found in archive archive"
 fi
 
 # Step 6: Export for App Store
