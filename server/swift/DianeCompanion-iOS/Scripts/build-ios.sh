@@ -51,6 +51,7 @@ XCODEBUILD_ARGS=(
     -configuration "${CONFIGURATION}"
     -archivePath "${ARCHIVE_PATH}"
     -derivedDataPath "${DERIVED_DATA}"
+    -destination 'generic/platform=iOS'
     DEVELOPMENT_TEAM="74LC88G9SC"
     CODE_SIGN_STYLE="Automatic"
     MARKETING_VERSION="${MARKETING_VERSION}"
@@ -58,9 +59,9 @@ XCODEBUILD_ARGS=(
 )
 
 if command -v xcpretty &>/dev/null; then
-    xcodebuild archive "${XCODEBUILD_ARGS[@]}" 2>&1 | xcpretty
+    xcodebuild archive "${XCODEBUILD_ARGS[@]}" -allowProvisioningUpdates 2>&1 | xcpretty
 else
-    xcodebuild archive "${XCODEBUILD_ARGS[@]}"
+    xcodebuild archive "${XCODEBUILD_ARGS[@]}" -allowProvisioningUpdates
 fi
 
 # Step 4: Export for App Store
