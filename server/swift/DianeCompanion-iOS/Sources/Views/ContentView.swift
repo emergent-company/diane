@@ -27,10 +27,12 @@ struct ContentView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
-        if sizeClass == .regular {
-            iPadLayout()
-        } else {
-            iPhoneLayout()
+        Group {
+            if sizeClass == .regular {
+                iPadLayout()
+            } else {
+                iPhoneLayout()
+            }
         }
         .sentryView("ContentView")
     }
