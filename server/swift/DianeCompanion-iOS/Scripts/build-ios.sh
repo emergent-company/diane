@@ -90,6 +90,7 @@ XCODEBUILD_ARGS=(
     -destination 'generic/platform=iOS'
     DEVELOPMENT_TEAM="74LC88G9SC"
     CODE_SIGN_STYLE="Automatic"
+    CODE_SIGNING_ALLOWED="NO"
     MARKETING_VERSION="${MARKETING_VERSION}"
     CURRENT_PROJECT_VERSION="${CURRENT_PROJECT_VERSION}"
     "${AUTH_ARGS[@]}"
@@ -119,6 +120,49 @@ if [ ! -f "$APP_PATH" ]; then
 fi
 
 echo "✓ Exported: ${APP_PATH} ($(du -sh "${APP_PATH}" | cut -f1))"
+
+# Step 5b: Sign embedded frameworks (Sentry.framework is unsigned when CODE_SIGNING_ALLOWED=NO is used)
+echo "==> Checking embedded frameworks for proper signing..."
+TEMP_DIR="${EXPORT_PATH}/_temp_resign"
+mkdir -p "${TEMP_DIR}"
+
+# Extract the IPA to a temp location
+unzip -qo "${APP_PATH}" -d "${TEMP_DIR}" 2>/dev/null
+APP_BUNDLE=$(find "${TEMP_DIR}/Payload" -name "*.app" -type d | head -1)
+
+if [ -n "$APP_BUNDLE" ] && [ -d "${APP_BUNDLE}/Frameworks/Sentry.framework" ]; then
+    # Get the signing identity from the main app
+    SIGN_INFO=$(codesign -d -v "${APP_BUNDLE}" 2>&1 || true)
+    echo "   Main app signing:"
+    echo "${SIGN_INFO}" | grep "Authority=" | head -3
+    
+    # Get the canonical signing identity (e.g. "Apple Distribution: Team Name (XXXXXXXXX)")
+    SIGN_IDENTITY=$(echo "${SIGN_INFO}" | grep "^Authority=" | head -1 | sed 's/^Authority=//')
+    
+    if [ -n "$SIGN_IDENTITY" ]; then
+        echo "==> Signing Sentry.framework with identity: ${SIGN_IDENTITY}"
+        codesign --force --sign "${SIGN_IDENTITY}" \
+            --verbose \
+            "${APP_BUNDLE}/Frameworks/Sentry.framework" 2>&1 || echo "⚠️  Sentry.framework re-sign failed (non-fatal)"
+    else
+        echo "⚠️  Could not determine signing identity, trying ad-hoc..."
+        codesign --force --sign - \
+            --verbose \
+            "${APP_BUNDLE}/Frameworks/Sentry.framework" 2>&1 || true
+    fi
+    
+    # Re-package the IPA
+    echo "==> Re-packaging IPA with signed frameworks..."
+    cd "${TEMP_DIR}"
+    zip -qr "${APP_PATH}" Payload/ 2>/dev/null
+    cd - > /dev/null
+    echo "✓ Re-packaged: ${APP_PATH} ($(du -sh "${APP_PATH}" | cut -f1))"
+else
+    echo "   No Sentry.framework found or no payload extracted — skipping re-sign"
+fi
+
+# Clean up temp
+rm -rf "${TEMP_DIR}"
 
 # Step 6: Upload to App Store Connect (optional)
 if [[ "${UPLOAD}" == "--upload" ]]; then
