@@ -48,10 +48,9 @@ jobs:
       - name: Derive version
         id: version
         run: |
-          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "0.0.0")
           COMMIT=$(git rev-parse --short HEAD)
           BUILD_NUMBER=$(git rev-list --count HEAD 2>/dev/null || echo 1)
-          MARKETING="${TAG#v}"
+          MARKETING=$(grep 'MARKETING_VERSION:' server/swift/DianeCompanion-iOS/project.yml | head -1 | sed 's/.*: *//' | sed 's/ *$//')
           echo "version=${MARKETING}-preview+${COMMIT}" >> "$GITHUB_OUTPUT"
           echo "marketing_version=${MARKETING}" >> "$GITHUB_OUTPUT"
           echo "build_version=${BUILD_NUMBER}" >> "$GITHUB_OUTPUT"
