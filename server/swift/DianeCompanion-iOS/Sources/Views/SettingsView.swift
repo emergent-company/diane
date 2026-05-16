@@ -287,6 +287,14 @@ struct SettingsView: View {
             }
 
             HStack {
+                Text("Distribution")
+                Spacer()
+                Text(distributionLabel)
+                    .foregroundColor(.secondary)
+                    .font(.caption)
+            }
+
+            HStack {
                 Text("SDK")
                 Spacer()
                 Text("Swift 6")
@@ -364,6 +372,17 @@ struct SettingsView: View {
 
     private var appBuild: String {
         Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+    }
+
+    private var distributionLabel: String {
+        #if DEBUG
+        return "Debug (Xcode)"
+        #else
+        if Bundle.main.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt" {
+            return "TestFlight"
+        }
+        return "App Store"
+        #endif
     }
 }
 
