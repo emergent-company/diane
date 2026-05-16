@@ -14,10 +14,16 @@ enum DateUtils {
         return f
     }()
 
+    private static nonisolated(unsafe) let iso8601FormatterNoFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
     /// Parses an ISO8601 string with or without fractional seconds.
     private static func parseISO8601(_ str: String) -> Date? {
         iso8601Formatter.date(from: str)
-            ?? ISO8601DateFormatter().date(from: str)
+            ?? iso8601FormatterNoFractional.date(from: str)
     }
 
     /// Returns a human-friendly timestamp string.

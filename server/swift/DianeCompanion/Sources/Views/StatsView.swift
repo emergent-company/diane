@@ -18,6 +18,18 @@ struct StatsView: View {
 
     private let hourOptions = [(24, "24h"), (168, "7d"), (720, "30d")]
 
+    private static nonisolated(unsafe) let isoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    private static nonisolated(unsafe) let isoFormatterNoFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Design.Spacing.lg) {
@@ -173,9 +185,7 @@ struct StatsView: View {
     }
 
     private func uptimeString(from isoDate: String) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        guard let date = formatter.date(from: isoDate) ?? ISO8601DateFormatter().date(from: isoDate) else {
+        guard let date = Self.isoFormatter.date(from: isoDate) ?? Self.isoFormatterNoFractional.date(from: isoDate) else {
             return "—"
         }
         let interval = Date().timeIntervalSince(date)

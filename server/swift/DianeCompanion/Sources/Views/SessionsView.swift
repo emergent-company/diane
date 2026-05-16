@@ -29,6 +29,18 @@ struct SessionsView: View {
     // Session copy feedback
     @State private var sessionIDCopied = false
 
+    private static nonisolated(unsafe) let isoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    private static nonisolated(unsafe) let isoFormatterNoFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
     // Session metadata panel state
     @State private var sessionRuns: [SessionRunSummary] = []
     @State private var sessionTodos: [SessionTodoItem] = []

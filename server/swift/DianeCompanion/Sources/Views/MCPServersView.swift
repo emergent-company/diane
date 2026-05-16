@@ -271,6 +271,17 @@ private struct MCPServerDetailView: View {
 
     // Logs state
     @State private var logs: [MCPServerLogEntry] = []
+
+    private static nonisolated(unsafe) let isoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    private static nonisolated(unsafe) let isoFormatterNoFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
     @State private var isLoadingLogs = false
     @State private var logsError: String? = nil
 
@@ -837,15 +848,7 @@ private struct MCPServerDetailView: View {
     }
 
     private func formatLogTime(_ iso: String) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: iso) {
-            let timeFormatter = DateFormatter()
-            timeFormatter.dateFormat = "HH:mm:ss"
-            return timeFormatter.string(from: date)
-        }
-        formatter.formatOptions = [.withInternetDateTime]
-        if let date = formatter.date(from: iso) {
+        if let date = Self.isoFormatter.date(from: iso) ?? Self.isoFormatterNoFractional.date(from: iso) {
             let timeFormatter = DateFormatter()
             timeFormatter.dateFormat = "HH:mm:ss"
             return timeFormatter.string(from: date)
