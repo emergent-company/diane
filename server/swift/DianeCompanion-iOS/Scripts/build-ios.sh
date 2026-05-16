@@ -102,7 +102,33 @@ else
     xcodebuild archive "${XCODEBUILD_ARGS[@]}"
 fi
 
-# Step 5: Export for App Store
+# Step 5: Sign embedded frameworks BEFORE export
+# (Sentry.framework is unsigned when CODE_SIGNING_ALLOWED=NO is used during archive)
+echo "==> Signing embedded frameworks in archive..."
+ARCHIVE_APP=$(find "${ARCHIVE_PATH}/Products/Applications" -name "*.app" -type d -maxdepth 2 | head -1 2>/dev/null || true)
+if [ -n "$ARCHIVE_APP" ] && [ -d "${ARCHIVE_APP}/Frameworks/Sentry.framework" ]; then
+    # Discover signing identity from keychain (API key distributes cert to keychain)
+    SIGN_IDENTITY=$(security find-identity -v -p basic 2>/dev/null | grep "Apple Distribution" | head -1 | sed 's/.*"\(.*\)".*/\1/' || true)
+    if [ -z "$SIGN_IDENTITY" ]; then
+        # Try Apple Development / Apple iPhone Developer as fallback
+        SIGN_IDENTITY=$(security find-identity -v -p basic 2>/dev/null | grep "Apple Development" | head -1 | sed 's/.*"\(.*\)".*/\1/' || true)
+    fi
+    if [ -n "$SIGN_IDENTITY" ]; then
+        echo "   Found identity: ${SIGN_IDENTITY}"
+        echo "   Signing Sentry.framework..."
+        codesign --force --sign "${SIGN_IDENTITY}" "${ARCHIVE_APP}/Frameworks/Sentry.framework" 2>&1 || echo "⚠️  Sentry.framework sign failed (non-fatal)"
+    else
+        echo "⚠️  No signing identity found in keychain — Sentry.framework may remain unsigned"
+    fi
+elif [ -n "$ARCHIVE_APP" ]; then
+    echo "   No Sentry.framework found in archive"
+    ls -d "${ARCHIVE_APP}/Frameworks/"* 2>/dev/null || echo "   (no Frameworks directory)"
+else
+    echo "   No .app bundle found in archive at ${ARCHIVE_PATH}/Products/Applications/"
+    ls -la "${ARCHIVE_PATH}/Products/Applications/" 2>/dev/null || echo "   (Applications dir not found)"
+fi
+
+# Step 6: Export for App Store
 echo "==> Exporting .app..."
 mkdir -p "${EXPORT_PATH}"
 xcodebuild -exportArchive \
@@ -122,66 +148,7 @@ fi
 echo "✓ Exported: ${APP_PATH} ($(du -sh "${APP_PATH}" | cut -f1))"
 ABS_IPA_PATH="$(cd "$(dirname "${APP_PATH}")" && pwd)/$(basename "${APP_PATH}")"
 
-# Step 5b: Sign embedded frameworks (Sentry.framework is unsigned when CODE_SIGNING_ALLOWED=NO is used)
-echo "==> Checking embedded frameworks for proper signing..."
-TEMP_DIR="${EXPORT_PATH}/_temp_resign"
-mkdir -p "${TEMP_DIR}"
-
-# Extract the IPA to a temp location
-unzip -qo "${APP_PATH}" -d "${TEMP_DIR}" 2>/dev/null || echo "⚠️  IPA extraction had warnings"
-ls -la "${TEMP_DIR}/Payload/" 2>/dev/null || echo "   (no Payload directory)"
-APP_BUNDLE=$(find "${TEMP_DIR}/Payload" -type d -name "*.app" -maxdepth 2 | head -1)
-echo "   App bundle: ${APP_BUNDLE:-<not found>}"
-
-if [ -n "$APP_BUNDLE" ] && [ -d "${APP_BUNDLE}/Frameworks/Sentry.framework" ]; then
-    # Get the signing identity from the main app (if signed)
-    SIGN_IDENTITY=""
-    SIGN_INFO=$(codesign -d -v "${APP_BUNDLE}" 2>&1 || true)
-    echo "   Main app signing: ${SIGN_INFO:-<none>}"
-    
-    # Try to extract the identity from the existing app signature
-    SIGN_IDENTITY=$(echo "${SIGN_INFO}" | grep "^Authority=" | head -1 | sed 's/^Authority=//' || true)
-    
-    # If no identity from app, search for any available distribution identity
-    if [ -z "$SIGN_IDENTITY" ]; then
-        echo "   Searching for available distribution identity..."
-        SIGN_IDENTITY=$(security find-identity -v -p basic 2>/dev/null | grep "Apple Distribution" | head -1 | sed 's/.*"\(.*\)".*/\1/' || true)
-        if [ -n "$SIGN_IDENTITY" ]; then
-            echo "   Found distribution identity: ${SIGN_IDENTITY}"
-        fi
-    fi
-    
-    if [ -n "$SIGN_IDENTITY" ]; then
-        echo "==> Signing Sentry.framework with identity: ${SIGN_IDENTITY}"
-        codesign --force --sign "${SIGN_IDENTITY}" \
-            --verbose \
-            "${APP_BUNDLE}/Frameworks/Sentry.framework" 2>&1 || echo "⚠️  Sentry.framework re-sign failed (non-fatal)"
-    else
-        echo "⚠️  No distribution identity found — trying ad-hoc..."
-        codesign --force --sign - \
-            --verbose \
-            "${APP_BUNDLE}/Frameworks/Sentry.framework" 2>&1 || true
-    fi
-    
-    # Re-package the IPA
-    echo "==> Re-packaging IPA with signed frameworks..."
-    cd "${TEMP_DIR}"
-    zip -qr "${ABS_IPA_PATH}" Payload/ 2>/dev/null
-    cd - > /dev/null
-    RESULT=$?
-    echo "✓ Re-packaged: ${ABS_IPA_PATH} ($(du -sh "${ABS_IPA_PATH}" | cut -f1))"
-else
-    echo "   No Sentry.framework found or no payload extracted — skipping re-sign"
-    if [ -n "$APP_BUNDLE" ]; then
-        echo "   Frameworks in app:" 
-        ls -d "${APP_BUNDLE}/Frameworks/"* 2>/dev/null || echo "   (no frameworks directory)"
-    fi
-fi
-
-# Clean up temp
-rm -rf "${TEMP_DIR}"
-
-# Step 6: Upload to App Store Connect (optional)
+# Step 7: Upload to App Store Connect (optional)
 if [[ "${UPLOAD}" == "--upload" ]]; then
     echo "==> Uploading to App Store Connect..."
     # Use altool with Apple ID credentials (must be set in env)
