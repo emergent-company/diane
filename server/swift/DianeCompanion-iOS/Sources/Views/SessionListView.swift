@@ -135,57 +135,7 @@ private struct ErrorStateView: View {
 // MARK: - SessionListView
 
 struct SessionListView: View {
-    var body: some View {
-        VStack(spacing: 0) {
-            if isOffline {
-                OfflineBanner()
-            }
-
-            Group {
-            if isLoading && sessions.isEmpty {
-                // Redacted placeholder rows while loading
-                List {
-                    ForEach(placeholderSessions) { session in
-                        SessionRow(session: session)
-                            .redacted(reason: .placeholder)
-                    }
-                }
-                .listStyle(.insetGrouped)
-            } else if let err = error, sessions.isEmpty {
-                ErrorStateView(message: err) {
-                    Task { await load() }
-                }
-            } else if sessions.isEmpty {
-                EmptyStateView {
-                    Task { await createNewSession() }
-                }
-            } else {
-                List {
-                    ForEach(filteredSessions) { session in
-                        NavigationLink(value: session) {
-                            SessionRow(session: session)
-                        }
-                        .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) {
-                                sessionToDelete = session
-                                showDeleteAlert = true
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
-                        }
-                    }
-                    .onDelete { indexSet in
-                        guard let index = indexSet.first, index < filteredSessions.count else { return }
-                        sessionToDelete = filteredSessions[index]
-                        showDeleteAlert = true
-                    }
-                }
-                .listStyle(.insetGrouped)
-            }
-        }
-        }
-        .searchable(text: $searchText, prompt: "Search sessions...")
-    @Environment(\.apiClient) private var apiClient
+    @Environment(\.cloudClient) private var cloudClient
     @State private var sessions: [DianeSession] = []
     @State private var isLoading = true
     @State private var error: String?
@@ -289,8 +239,8 @@ struct SessionListView: View {
             if let connected = notification.userInfo?["isConnected"] as? Bool, connected {
                 Task { await load() }
             }
-            .sentryView("SessionListView")
-    }
+        }
+        .sentryView("SessionListView")
     }
 
     // MARK: - Data Loading
@@ -300,7 +250,7 @@ struct SessionListView: View {
         error = nil
         isOffline = false
         do {
-            sessions = try await apiClient.fetchSessions()
+            sessions = try await cloudClient.fetchSessions()
             SessionCache.shared.cacheSessions(sessions)
         } catch {
             // Fall back to cached sessions
@@ -318,7 +268,7 @@ struct SessionListView: View {
     private func createNewSession() async {
         isCreating = true
         do {
-            let session = try await apiClient.createSession()
+            let session = try await cloudClient.createSession()
             sessions.insert(session, at: 0)
         } catch {
             self.error = error.localizedDescription
@@ -328,7 +278,7 @@ struct SessionListView: View {
 
     private func performDelete(_ session: DianeSession) async {
         do {
-            try await apiClient.deleteSession(session.id)
+            try await cloudClient.deleteSession(id: session.id)
         } catch {
             // If deletion fails on the server, re-insert the session
             if !sessions.contains(where: { $0.id == session.id }) {

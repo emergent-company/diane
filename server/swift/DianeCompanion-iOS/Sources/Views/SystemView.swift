@@ -2,7 +2,6 @@ import SwiftUI
 import DianeShared
 
 struct SystemView: View {
-    @Environment(\.apiClient) private var apiClient
     @Environment(\.cloudClient) private var cloudClient
 
     @State private var sessions: [DianeSession] = []
@@ -30,7 +29,7 @@ struct SystemView: View {
                         HStack {
                             Label("Server", systemImage: "externaldrive")
                             Spacer()
-                            Text(apiClient.baseURL.isEmpty ? "Not configured" : apiClient.baseURL)
+                            Text(cloudClient.baseURL.isEmpty ? "Not configured" : cloudClient.baseURL)
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                                 .lineLimit(1)
@@ -132,9 +131,9 @@ struct SystemView: View {
         error = nil
         do {
             // Fetch counts in parallel
-            async let sessionsTask = apiClient.fetchSessions()
-            async let agentsTask = apiClient.fetchAgents()
-            async let serversTask = apiClient.fetchMCPServers()
+            async let sessionsTask = cloudClient.fetchSessions()
+            async let agentsTask = cloudClient.fetchAgentDefs()
+            async let serversTask = cloudClient.fetchMCPServers()
 
             (sessions, agents, servers) = try await (
                 sessionsTask,

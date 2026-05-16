@@ -25,6 +25,18 @@ struct QuestionsView: View {
 
     private var projectID: String { serverConfig.projectID }
 
+    private static nonisolated(unsafe) let isoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    private static nonisolated(unsafe) let isoFormatterNoFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
     var body: some View {
         SplitListDetailView(
             emptyTitle: "No Questions",
@@ -431,12 +443,7 @@ struct QuestionsView: View {
     }
 
     private func formattedDate(_ iso: String) -> String? {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        guard let date = formatter.date(from: iso) ?? {
-            formatter.formatOptions = [.withInternetDateTime]
-            return formatter.date(from: iso)
-        }() else { return nil }
+        guard let date = Self.isoFormatter.date(from: iso) ?? Self.isoFormatterNoFractional.date(from: iso) else { return nil }
 
         let elapsed = Date().timeIntervalSince(date)
         if elapsed < 3600 { // < 1 hour
@@ -460,6 +467,18 @@ struct QuestionsView: View {
 
 private struct QuestionRowView: View {
     let question: AgentQuestion
+
+    private static nonisolated(unsafe) let isoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    private static nonisolated(unsafe) let isoFormatterNoFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
 
     var body: some View {
         HStack(spacing: 10) {
@@ -509,12 +528,7 @@ private struct QuestionRowView: View {
     }
 
     private func formattedDate(iso: String) -> String? {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        guard let date = formatter.date(from: iso) ?? {
-            formatter.formatOptions = [.withInternetDateTime]
-            return formatter.date(from: iso)
-        }() else { return nil }
+        guard let date = Self.isoFormatter.date(from: iso) ?? Self.isoFormatterNoFractional.date(from: iso) else { return nil }
 
         let elapsed = Date().timeIntervalSince(date)
         if elapsed < 86400 * 7 { // < 1 week

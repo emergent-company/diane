@@ -18,6 +18,18 @@ struct DocumentDetailView: View {
     @State private var retryMessage: String?
     @State private var retryMessageIsError = false
 
+    private static nonisolated(unsafe) let isoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    private static nonisolated(unsafe) let isoFormatterNoFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Design.Spacing.md) {
@@ -416,9 +428,7 @@ struct DocumentDetailView: View {
 
     private func formattedDate(_ iso: String?) -> String {
         guard let iso = iso else { return "-" }
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: iso) {
+        if let date = Self.isoFormatter.date(from: iso) ?? Self.isoFormatterNoFractional.date(from: iso) {
             return date.formatted(date: .abbreviated, time: .shortened)
         }
         return iso

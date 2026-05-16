@@ -32,7 +32,6 @@ struct OnboardingView: View {
                 Image(systemName: "brain.head.profile")
                     .font(.system(size: 48))
                     .foregroundStyle(.tint)
-                    .symbolRenderingMode(.hierarchical)
 
                 Text("Welcome to Diane")
                     .font(.title)

@@ -27,12 +27,14 @@ struct ContentView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
-        if sizeClass == .regular {
-            iPadLayout()
-            .sentryView("ContentView")
-    } else {
-            iPhoneLayout()
+        Group {
+            if sizeClass == .regular {
+                iPadLayout()
+            } else {
+                iPhoneLayout()
+            }
         }
+        .sentryView("ContentView")
     }
 }
 
@@ -108,7 +110,7 @@ struct iPadLayout: View {
 // MARK: - Session List for iPad Sidebar
 
 struct SessionListiPadView: View {
-    @Environment(\.apiClient) private var apiClient
+    @Environment(\.cloudClient) private var cloudClient
     @Binding var selectedSession: DianeSession?
 
     @State private var sessions: [DianeSession] = []
@@ -192,7 +194,7 @@ struct SessionListiPadView: View {
         error = nil
         isOffline = false
         do {
-            sessions = try await apiClient.fetchSessions()
+            sessions = try await cloudClient.fetchSessions()
             SessionCache.shared.cacheSessions(sessions)
         } catch {
             let cached = SessionCache.shared.loadCachedSessions()
@@ -208,7 +210,7 @@ struct SessionListiPadView: View {
 
     private func createNewSession() async {
         do {
-            let session = try await apiClient.createSession()
+            let session = try await cloudClient.createSession()
             sessions.insert(session, at: 0)
             selectedSession = session
         } catch {

@@ -230,6 +230,24 @@ final class DianeAPIClient: ObservableObject {
         return (try? JSONDecoder().decode([RelayNode].self, from: data)) ?? []
     }
 
+    /// Fetch the auth code for iOS QR code pairing.
+    /// GET /api/auth-code → {mp_url, api_key, project_id}
+    func fetchAuthCode() async throws -> (mpURL: String, apiKey: String, projectID: String) {
+        let data = try await get("/api/auth-code")
+        struct AuthCodeResponse: Decodable {
+            let mpURL: String
+            let apiKey: String
+            let projectID: String
+            enum CodingKeys: String, CodingKey {
+                case mpURL = "mp_url"
+                case apiKey = "api_key"
+                case projectID = "project_id"
+            }
+        }
+        let resp = try JSONDecoder().decode(AuthCodeResponse.self, from: data)
+        return (resp.mpURL, resp.apiKey, resp.projectID)
+    }
+
     // MARK: - MCP Tools & Prompts
 
     /// Fetch tools exposed by a specific MCP server.
@@ -716,8 +734,29 @@ struct RelayNode: Identifiable, Codable, Hashable, Sendable {
     let relayActive: Bool?     // MCP relay connected
     let botActive: Bool?       // Discord bot connected
     let healthy: Bool?         // overall health
+    let authCode: String?      // JSON auth code for iOS QR pairing (master node only)
 
     var id: String { instanceID }
+
+    init(instanceID: String, hostname: String? = nil, mode: String? = nil,
+         version: String? = nil, toolCount: Int? = nil, connectedAt: String? = nil,
+         online: Bool? = nil, uptime: String? = nil, provider: String? = nil,
+         relayActive: Bool? = nil, botActive: Bool? = nil, healthy: Bool? = nil,
+         authCode: String? = nil) {
+        self.instanceID = instanceID
+        self.hostname = hostname
+        self.mode = mode
+        self.version = version
+        self.toolCount = toolCount
+        self.connectedAt = connectedAt
+        self.online = online
+        self.uptime = uptime
+        self.provider = provider
+        self.relayActive = relayActive
+        self.botActive = botActive
+        self.healthy = healthy
+        self.authCode = authCode
+    }
 
     enum CodingKeys: String, CodingKey {
         case instanceID = "instance_id"
@@ -728,6 +767,7 @@ struct RelayNode: Identifiable, Codable, Hashable, Sendable {
         case relayActive = "relay_active"
         case botActive = "bot_active"
         case healthy
+        case authCode = "auth_code"
     }
 
     func hash(into hasher: inout Hasher) { hasher.combine(instanceID) }

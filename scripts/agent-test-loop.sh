@@ -63,15 +63,129 @@ rm -rf /tmp/DianeUnitTests.xcresult
 # Regenerate project if project.yml changed
 xcodegen generate 2>&1 | tail -1
 
+# Create a test-only scheme for DianeTests (separate from the main Diane scheme
+# to avoid Xcode 26.5 module name conflicts between the app and test targets).
+# UUIDs are extracted dynamically from the pbxproj since xcodegen regenerates them.
+SCHEME_DIR="Diane.xcodeproj/xcshareddata/xcschemes"
+mkdir -p "$SCHEME_DIR"
+
+DIANE_UUID=$(grep -B1 'isa = PBXNativeTarget' Diane.xcodeproj/project.pbxproj | grep '/\* Diane \*/' | awk '{print $1}')
+TEST_UUID=$(grep -B1 'isa = PBXNativeTarget' Diane.xcodeproj/project.pbxproj | grep '/\* DianeTests \*/' | awk '{print $1}')
+
+cat > "$SCHEME_DIR/DianeUnitTests.xcscheme" << SCHEME_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<Scheme LastUpgradeVersion="1650" version="2.0">
+   <BuildAction
+      parallelizeBuildables="YES"
+      buildImplicitDependencies="YES">
+      <BuildActionEntries>
+         <BuildActionEntry
+            buildForTesting="YES"
+            buildForRunning="YES"
+            buildForProfiling="YES"
+            buildForArchiving="YES"
+            buildForAnalyzing="YES">
+            <BuildableReference
+               BuildableIdentifier="primary"
+               BlueprintIdentifier="${DIANE_UUID}"
+               BuildableName="Diane.app"
+               BlueprintName="Diane"
+               ReferencedContainer="container:Diane.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting="YES"
+            buildForRunning="NO"
+            buildForProfiling="NO"
+            buildForArchiving="NO"
+            buildForAnalyzing="NO">
+            <BuildableReference
+               BuildableIdentifier="primary"
+               BlueprintIdentifier="${TEST_UUID}"
+               BuildableName="DianeTests.xctest"
+               BlueprintName="DianeTests"
+               ReferencedContainer="container:Diane.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+      </BuildActionEntries>
+   </BuildAction>
+   <TestAction
+      buildConfiguration="Debug"
+      selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB"
+      selectedLauncherIdentifier="Xcode.DebuggerFoundation.Launcher.LLDB"
+      shouldUseLaunchSchemeArgsEnv="YES">
+      <Testables>
+         <TestableReference
+            skipped="NO">
+            <BuildableReference
+               BuildableIdentifier="primary"
+               BlueprintIdentifier="${TEST_UUID}"
+               BuildableName="DianeTests.xctest"
+               BlueprintName="DianeTests"
+               ReferencedContainer="container:Diane.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+      </Testables>
+      <MacroExpansion>
+         <BuildableReference
+            BuildableIdentifier="primary"
+            BlueprintIdentifier="${DIANE_UUID}"
+            BuildableName="Diane.app"
+            BlueprintName="Diane"
+            ReferencedContainer="container:Diane.xcodeproj">
+         </BuildableReference>
+      </MacroExpansion>
+   </TestAction>
+   <LaunchAction
+      buildConfiguration="Debug"
+      selectedDebuggerIdentifier=""
+      selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.PosixSpawn"
+      launchStyle="0"
+      useCustomWorkingDirectory="NO"
+      ignoresPersistentStateOnLaunch="NO"
+      debugDocumentVersioning="YES"
+      debugServiceExtension="internal"
+      allowLocationSimulation="NO">
+      <MacroExpansion>
+         <BuildableReference
+            BuildableIdentifier="primary"
+            BlueprintIdentifier="${DIANE_UUID}"
+            BuildableName="Diane.app"
+            BlueprintName="Diane"
+            ReferencedContainer="container:Diane.xcodeproj">
+         </BuildableReference>
+      </MacroExpansion>
+   </LaunchAction>
+   <ProfileAction
+      buildConfiguration="Release"
+      shouldUseLaunchSchemeArgsEnv="YES"
+      savedToolIdentifier=""
+      useCustomWorkingDirectory="NO"
+      debugDocumentVersioning="YES">
+      <MacroExpansion>
+         <BuildableReference
+            BuildableIdentifier="primary"
+            BlueprintIdentifier="${DIANE_UUID}"
+            BuildableName="Diane.app"
+            BlueprintName="Diane"
+            ReferencedContainer="container:Diane.xcodeproj">
+         </BuildableReference>
+      </MacroExpansion>
+   </ProfileAction>
+   <AnalyzeAction buildConfiguration="Debug">
+   </AnalyzeAction>
+   <ArchiveAction buildConfiguration="Release" revealArchiveInOrganizer="YES">
+   </ArchiveAction>
+</Scheme>
+SCHEME_EOF
+
 # Run tests — capture exit code but don't abort (set -e), so Step 3 still runs
 # NOTE: Skip LiveAPI tests — they require cloud connectivity to memory.emergent-company.ai
 # and fail the entire suite when the cloud API is unreachable (transient DNS/network issues).
 # Use test-fast.sh --live to run these intentionally.
 set +e
-xcodebuild test -project Diane.xcodeproj -scheme Diane \
-  -destination 'platform=macOS,arch=arm64' \
-  -only-testing:DianeTests \
-  -skip-testing:DianeUITests \
+xcodebuild test -project Diane.xcodeproj -scheme DianeUnitTests \
+  -destination 'platform=macOS' \
   -skip-testing:DianeTests/DianeLiveAPITests \
   -skip-testing:DianeTests/LiveAPIResponseShapeTests \
   -resultBundlePath /tmp/DianeUnitTests.xcresult \
@@ -83,12 +197,15 @@ set -e
 # Always clean up the result bundle
 rm -rf /tmp/DianeUnitTests.xcresult
 
-if [ "$XCODE_EXIT" -ne 0 ] && grep -q "failed at " /tmp/xctest-raw-output.txt 2>/dev/null; then
-    echo "✗ Unit tests FAILED"
-    fail_test "swift_xctest" "$(grep 'failed at ' /tmp/xctest-raw-output.txt | grep -v 'nw_' | head -3 | tr '\n' ' ')"
-else
+if [ "$XCODE_EXIT" -eq 0 ]; then
     echo "✓ All unit tests passed"
     pass_test "swift_xctest"
+elif grep -q "failed at " /tmp/xctest-raw-output.txt 2>/dev/null; then
+    echo "✗ Unit tests FAILED — test case(s) failed"
+    fail_test "swift_xctest" "$(grep 'failed at ' /tmp/xctest-raw-output.txt | grep -v 'nw_' | head -3 | tr '\\n' ' ')"
+else
+    echo "✗ Unit tests FAILED — build/config error (exit code $XCODE_EXIT)"
+    fail_test "swift_xctest" "$(grep -i 'error:' /tmp/xctest-raw-output.txt | head -3 | tr '\\n' ' ')"
 fi
 
 # ── Step 3: API Integration Test ──

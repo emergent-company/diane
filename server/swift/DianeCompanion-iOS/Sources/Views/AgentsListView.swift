@@ -2,7 +2,7 @@ import SwiftUI
 import DianeShared
 
 struct AgentsListView: View {
-    @Environment(\.apiClient) private var apiClient
+    @Environment(\.cloudClient) private var cloudClient
 
     @State private var agents: [AgentDef] = []
     @State private var selectedAgent: AgentDef?
@@ -49,8 +49,8 @@ struct AgentsListView: View {
         .refreshable { await load() }
         .navigationDestination(for: AgentDef.self) { agent in
             AgentDetailView(agent: agent)
-            .sentryView("AgentsListView")
-    }
+        }
+        .sentryView("AgentsListView")
     }
 
     private func load() async {
@@ -58,7 +58,7 @@ struct AgentsListView: View {
         error = nil
         isOffline = false
         do {
-            agents = try await apiClient.fetchAgents()
+            agents = try await cloudClient.fetchAgentDefs()
             cacheAgents(agents)
         } catch {
             let cached = loadCachedAgents()

@@ -2,7 +2,7 @@ import SwiftUI
 import DianeShared
 
 struct MCPServersView: View {
-    @Environment(\.apiClient) private var apiClient
+    @Environment(\.cloudClient) private var cloudClient
 
     @State private var servers: [MCPServer] = []
     @State private var selectedServer: MCPServer?
@@ -49,8 +49,8 @@ struct MCPServersView: View {
         .refreshable { await load() }
         .navigationDestination(for: MCPServer.self) { server in
             MCPDetailView(server: server)
-            .sentryView("MCPServersView")
-    }
+        }
+        .sentryView("MCPServersView")
     }
 
     private func load() async {
@@ -58,7 +58,7 @@ struct MCPServersView: View {
         error = nil
         isOffline = false
         do {
-            servers = try await apiClient.fetchMCPServers()
+            servers = try await cloudClient.fetchMCPServers()
             cacheServers(servers)
         } catch {
             let cached = loadCachedServers()

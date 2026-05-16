@@ -249,41 +249,71 @@ struct ChatInputBar: View {
     let isStreaming: Bool
     let onSend: () -> Void
     let onStop: () -> Void
+    let onPickFile: () -> Void
+    let hasPendingAttachment: Bool
+    let pendingAttachmentName: String?
 
     var body: some View {
-        HStack(spacing: DesignTokens.spacingSM) {
-            // Text input
-            TextField("Message Diane...", text: $text, axis: .vertical)
-                .textFieldStyle(.plain)
-                .padding(DesignTokens.spacingMD)
-                .background(Color(.systemGray6))
-                .cornerRadius(DesignTokens.radiusXL)
-                .lineLimit(1...6)
+        VStack(spacing: 4) {
+            // Pending attachment indicator
+            if let name = pendingAttachmentName, hasPendingAttachment {
+                HStack(spacing: DesignTokens.spacingXS) {
+                    Image(systemName: "doc.fill")
+                        .font(.caption)
+                        .foregroundColor(.accentColor)
+                    Text(name)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                    Spacer()
+                }
+                .padding(.horizontal, DesignTokens.spacingMD)
+            }
+
+            HStack(spacing: DesignTokens.spacingSM) {
+                // File picker button
+                Button(action: onPickFile) {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(Color.secondary)
+                        .frame(width: DesignTokens.minTouchTarget, height: DesignTokens.minTouchTarget)
+                }
                 .disabled(isStreaming)
 
-            // Send / Stop button
-            Button(action: isStreaming ? onStop : onSend) {
-                Image(systemName: isStreaming ? "stop.circle.fill" : "arrow.up.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(
-                        (text.trimmingCharacters(in: .whitespaces).isEmpty && !isStreaming)
-                            ? Color.secondary
-                            : Color.accentColor
-                    )
-                    .frame(width: DesignTokens.minTouchTarget, height: DesignTokens.minTouchTarget)
+                // Text input
+                TextField("Message Diane...", text: $text, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .padding(DesignTokens.spacingMD)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(DesignTokens.radiusXL)
+                    .lineLimit(1...6)
+                    .disabled(isStreaming)
+
+                // Send / Stop button
+                Button(action: isStreaming ? onStop : onSend) {
+                    Image(systemName: isStreaming ? "stop.circle.fill" : "arrow.up.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(
+                            (text.trimmingCharacters(in: .whitespaces).isEmpty && !isStreaming)
+                                ? Color.secondary
+                                : Color.accentColor
+                        )
+                        .frame(width: DesignTokens.minTouchTarget, height: DesignTokens.minTouchTarget)
+                }
+                .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty && !isStreaming)
             }
-            .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty && !isStreaming)
+            .padding(.horizontal, DesignTokens.spacingMD)
+            .padding(.vertical, DesignTokens.spacingSM)
+            .background(Color(.systemBackground))
         }
-        .padding(.horizontal, DesignTokens.spacingMD)
-        .padding(.vertical, DesignTokens.spacingSM)
-        .background(Color(.systemBackground))
     }
 }
 
 // MARK: - ChatView
 
 struct ChatView: View {
-    @Environment(\.apiClient) private var apiClient
+    @Environment(\.cloudClient) private var cloudClient
+    @Environment(\.config) private var config
     let session: DianeSession
 
     @State private var messages: [DianeMessage] = []
@@ -292,6 +322,12 @@ struct ChatView: View {
     @State private var isStreaming = false
     @State private var error: String?
     @State private var streamingTask: Task<Void, Never>?
+
+    // File upload state
+    @State private var showFilePicker = false
+    @State private var isUploading = false
+    @State private var pendingDocumentID: String?
+    @State private var pendingDocumentName: String?
 
     private var streamingMessageID: String? {
         messages.last(where: { $0.role == "assistant" && isStreaming })?.id
@@ -330,6 +366,20 @@ struct ChatView: View {
                 )
             }
 
+            // Uploading progress bar
+            if isUploading {
+                HStack(spacing: DesignTokens.spacingSM) {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                    Text("Uploading file…")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, DesignTokens.spacingMD)
+                .padding(.vertical, 4)
+            }
+
             // Divider
             Divider()
 
@@ -338,7 +388,10 @@ struct ChatView: View {
                 text: $inputText,
                 isStreaming: isStreaming,
                 onSend: { sendMessage() },
-                onStop: { stopStreaming() }
+                onStop: { stopStreaming() },
+                onPickFile: { showFilePicker = true },
+                hasPendingAttachment: pendingDocumentName != nil,
+                pendingAttachmentName: pendingDocumentName
             )
         }
         .navigationTitle(session.title ?? "Chat")
@@ -360,6 +413,19 @@ struct ChatView: View {
         }
         .task { await loadMessages() }
         .onDisappear { stopStreaming() }
+        .fileImporter(
+            isPresented: $showFilePicker,
+            allowedContentTypes: [.data, .pdf, .text, .plainText, .image, .movie, .audio],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                guard let url = urls.first else { return }
+                Task { await uploadAndAttach(url: url) }
+            case .failure:
+                break // user cancelled or error — silently ignore
+            }
+        }
         .sentryView("ChatView")
     }
 
@@ -369,7 +435,7 @@ struct ChatView: View {
         isLoading = true
         error = nil
         do {
-            let fetched = try await apiClient.fetchMessages(sessionID: session.id)
+            let fetched = try await cloudClient.fetchMessages(sessionID: session.id)
             messages = fetched
             SessionCache.shared.cacheMessages(fetched, for: session.id)
         } catch {
@@ -393,18 +459,121 @@ struct ChatView: View {
         BadgeManager.shared.updateBadge(count: count)
     }
 
+    // MARK: - File Upload
+
+    /// Upload a file to the Memory Platform and attach it as a pending document.
+    private func uploadAndAttach(url: URL) async {
+        guard url.startAccessingSecurityScopedResource() else { return }
+        defer { url.stopAccessingSecurityScopedResource() }
+
+        isUploading = true
+        defer { isUploading = false }
+
+        do {
+            let fileData = try Data(contentsOf: url)
+            let filename = url.lastPathComponent
+            let mimeType = mimeTypeForFile(filename)
+
+            let projectID: String
+            if !config.projectID.isEmpty {
+                projectID = config.projectID
+            } else {
+                // Fallback: extract from session if projectID available
+                projectID = ""
+            }
+
+            guard !projectID.isEmpty else {
+                // No project configured — user needs to set one in settings
+                let errMsg = DianeMessage(
+                    id: "error-\(UUID().uuidString)",
+                    role: "error",
+                    content: "Cannot upload file: no project ID configured. Add your project ID in Settings.",
+                    createdAt: ISO8601DateFormatter().string(from: Date())
+                )
+                await MainActor.run { messages.append(errMsg) }
+                return
+            }
+
+            let document = try await cloudClient.uploadDocument(
+                fileData: fileData,
+                filename: filename,
+                mimeType: mimeType,
+                projectID: projectID,
+                autoExtract: true
+            )
+
+            await MainActor.run {
+                pendingDocumentID = document.id
+                pendingDocumentName = document.title ?? filename
+            }
+        } catch {
+            let errMsg = DianeMessage(
+                id: "error-\(UUID().uuidString)",
+                role: "error",
+                content: "Upload failed: \(error.localizedDescription)",
+                createdAt: ISO8601DateFormatter().string(from: Date())
+            )
+            await MainActor.run { messages.append(errMsg) }
+        }
+    }
+
+    /// Guess a MIME type from file extension for upload.
+    private func mimeTypeForFile(_ filename: String) -> String {
+        let ext = (filename as NSString).pathExtension.lowercased()
+        switch ext {
+        case "pdf":             return "application/pdf"
+        case "md", "markdown":  return "text/markdown"
+        case "txt":             return "text/plain"
+        case "rtf":             return "application/rtf"
+        case "json":            return "application/json"
+        case "csv":             return "text/csv"
+        case "xml":             return "application/xml"
+        case "html", "htm":     return "text/html"
+        case "png":             return "image/png"
+        case "jpg", "jpeg":     return "image/jpeg"
+        case "gif":             return "image/gif"
+        case "svg":             return "image/svg+xml"
+        case "docx":            return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        case "doc":             return "application/msword"
+        case "xlsx":            return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        case "ppt", "pptx":     return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        default:                return "application/octet-stream"
+        }
+    }
+
     // MARK: - Send Message
 
     private func sendMessage() {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !isStreaming else { return }
+        guard !isStreaming else { return }
         inputText = ""
+
+        // Build message content — prepend document reference if uploading
+        var messageContent = text
+        if let docName = pendingDocumentName {
+            let prefix = text.isEmpty
+                ? "📄 Uploaded: \(docName)"
+                : "[📄 \(docName)] "
+            messageContent = prefix + (text.isEmpty ? "" : "\n\n" + text)
+        }
+
+        guard !messageContent.trimmingCharacters(in: .whitespaces).isEmpty else {
+            // Nothing to send — restore input text if we had a document but cleared it
+            if pendingDocumentName != nil {
+                inputText = text
+            }
+            return
+        }
+
+        // Clear pending attachment
+        pendingDocumentName = nil
+        pendingDocumentID = nil
 
         // Create user message
         let userMsg = DianeMessage(
             id: "user-\(UUID().uuidString)",
             role: "user",
-            content: text,
+            content: messageContent,
             createdAt: ISO8601DateFormatter().string(from: Date())
         )
         messages.append(userMsg)
@@ -420,14 +589,12 @@ struct ChatView: View {
 
         isStreaming = true
 
-        streamingTask = Task { [weak apiClient] in
-            guard let apiClient else { return }
-
+        streamingTask = Task {
             do {
-                let stream = apiClient.streamChat(
+                let stream = cloudClient.sendMessageStream(
                     sessionID: session.id,
-                    content: text,
-                    agentName: session.agentName ?? "diane-default"
+                    content: messageContent,
+                    agentID: session.agentName ?? "diane-default"
                 )
 
                 var accumulatedContent = ""

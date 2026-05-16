@@ -5,7 +5,6 @@ import Sentry
 @main
 struct DianeCompanionApp: App {
     @State private var config = ServerConfiguration()
-    @State private var apiClient = RemoteDianeAPIClient()
     @State private var cloudClient = EmergentAPIClient()
     @State private var showConfigSheet = false
 
@@ -27,13 +26,12 @@ struct DianeCompanionApp: App {
         WindowGroup {
             ContentView()
                 .environment(\.config, config)
-                .environment(\.apiClient, apiClient)
                 .environment(\.cloudClient, cloudClient)
                 .task { await startup() }
                 .sheet(isPresented: $showConfigSheet) {
                     SettingsView()
                         .environment(\.config, config)
-                        .environment(\.apiClient, apiClient)
+                        .environment(\.cloudClient, cloudClient)
                 }
                 .onChange(of: scenePhase) { _, newPhase in
                     handleScenePhase(newPhase)
@@ -45,9 +43,9 @@ struct DianeCompanionApp: App {
         // 0. Start network monitoring
         NetworkMonitor.shared.start()
 
-        // 1. Configure clients
-        apiClient.configure(baseURL: config.serverURL, apiKey: config.apiKey)
-        cloudClient.configure(baseURL: MemoryPlatform.defaultURL, apiKey: config.apiKey)
+        // 1. Use Diane server URL from config (or fall back to Memory Platform)
+        let effectiveURL = config.dianeServerURL.isEmpty ? MemoryPlatform.defaultURL : config.dianeServerURL
+        cloudClient.configure(baseURL: effectiveURL, apiKey: config.apiKey)
 
         // 2. If no API key, show config sheet
         if !config.isConfigured && !CommandLine.arguments.contains("UITesting") {

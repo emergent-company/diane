@@ -8,6 +8,7 @@ struct RelayNodesView: View {
     @EnvironmentObject var serverConfig: ServerConfiguration
 
     @State private var vm: RelayNodesViewModel?
+    @State private var qrCodeAuthJSON: String?
 
     var body: some View {
         Group {
@@ -32,6 +33,14 @@ struct RelayNodesView: View {
             }
         }
         .navigationTitle("Relay Nodes")
+        .sheet(isPresented: .init(
+            get: { qrCodeAuthJSON != nil },
+            set: { if !$0 { qrCodeAuthJSON = nil } }
+        )) {
+            if let json = qrCodeAuthJSON {
+                QRCodePopoverView(authJSON: json)
+            }
+        }
     }
 
     @ViewBuilder
@@ -182,6 +191,24 @@ struct RelayNodesView: View {
                     infoRow(label: "Health", value: healthy ? "Healthy" : "Unhealthy",
                             valueColor: healthy ? .green : .red)
                 }
+
+                // ── iOS Pairing (master node only) ──
+                if let authCode = node.authCode, node.mode == "master" {
+                    HStack(spacing: Design.Spacing.sm) {
+                        Text("iOS Pair")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 80, alignment: .leading)
+                        Spacer()
+                        Button("Show QR Code") {
+                            qrCodeAuthJSON = authCode
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 2)
+                }
             }
 
             Divider().padding(.horizontal, 12)
@@ -325,5 +352,63 @@ struct RelayNodesView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 2)
+    }
+}
+
+// MARK: - QR Code Popover
+
+/// A popover view that displays a QR code from auth JSON data.
+private struct QRCodePopoverView: View {
+    let authJSON: String
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Pair iOS Device")
+                .font(.title3)
+                .fontWeight(.semibold)
+
+            if let image = QRCodeGenerator.generate(from: authJSON) {
+                Image(nsImage: image)
+                    .interpolation(.none)
+                    .resizable()
+                    .frame(width: 240, height: 240)
+                    .padding()
+            } else {
+                Image(systemName: "qrcode")
+                    .font(.system(size: 120))
+                    .foregroundStyle(.secondary)
+            }
+
+            Text("Scan this code with the Diane iOS app\nto authenticate this device.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(24)
+        .frame(width: 340)
+    }
+}
+
+// MARK: - QR Code Generator
+
+/// Generates QR code images using CoreImage's CIQRCodeGenerator.
+private enum QRCodeGenerator {
+    static func generate(from string: String) -> NSImage? {
+        guard let data = string.data(using: .utf8) else { return nil }
+
+        let filter = CIFilter(name: "CIQRCodeGenerator")
+        filter?.setValue(data, forKey: "inputMessage")
+        filter?.setValue("M", forKey: "inputCorrectionLevel")
+
+        guard let ciImage = filter?.outputImage else { return nil }
+
+        // Scale up for sharp display (10x)
+        let transform = CGAffineTransform(scaleX: 10, y: 10)
+        let scaled = ciImage.transformed(by: transform)
+
+        let rep = NSCIImageRep(ciImage: scaled)
+        let nsImage = NSImage(size: rep.size)
+        nsImage.addRepresentation(rep)
+        return nsImage
     }
 }

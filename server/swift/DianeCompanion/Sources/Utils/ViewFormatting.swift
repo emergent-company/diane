@@ -65,9 +65,7 @@ enum ViewFormatting {
 
     /// Format ISO8601 date string as "MMM d, yyyy HH:mm" for schema detail.
     static func formatSchemaDate(_ iso: String) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        guard let date = formatter.date(from: iso) ?? ISO8601DateFormatter().date(from: iso) else {
+        guard let date = Self.isoFormatter.date(from: iso) ?? Self.isoFormatterNoFractional.date(from: iso) else {
             return iso
         }
         let df = DateFormatter()
@@ -77,9 +75,7 @@ enum ViewFormatting {
 
     /// Format ISO8601 date as a friendly string.
     static func friendlyDate(_ iso: String) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        guard let date = formatter.date(from: iso) ?? ISO8601DateFormatter().date(from: iso) else {
+        guard let date = Self.isoFormatter.date(from: iso) ?? Self.isoFormatterNoFractional.date(from: iso) else {
             return iso
         }
         return Self.friendlyFormatter.string(from: date)
@@ -89,6 +85,18 @@ enum ViewFormatting {
     static func friendlyDate(_ date: Date) -> String {
         Self.friendlyFormatter.string(from: date)
     }
+
+    private static nonisolated(unsafe) let isoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    private static nonisolated(unsafe) let isoFormatterNoFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
 
     private static let friendlyFormatter: DateFormatter = {
         let df = DateFormatter()

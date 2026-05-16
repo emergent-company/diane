@@ -28,13 +28,12 @@ private let notificationSounds: [(name: String, id: String)] = [
 
 struct SettingsView: View {
     @Environment(\.config) private var config
-    @Environment(\.apiClient) private var apiClient
     @Environment(\.cloudClient) private var cloudClient
     @Environment(\.dismiss) private var dismiss
 
-    @State private var serverURL: String = ""
     @State private var apiKey: String = ""
     @State private var projectID: String = ""
+    @State private var dianeServerURL: String = ""
     @State private var isTestingConnection = false
     @State private var connectionTestResult: ConnectionTestResult?
     @State private var pushEnabled = PushNotificationService.shared.isRegistered
@@ -63,18 +62,18 @@ struct SettingsView: View {
             }
         }
         .onAppear {
-            serverURL = config.serverURL
             apiKey = config.apiKey
             projectID = config.projectID
-            .sentryView("SettingsView")
-    }
+            dianeServerURL = config.dianeServerURL
+        }
+        .sentryView("SettingsView")
     }
 
     // MARK: - Has Changes
 
     private var hasChanges: Bool {
-        serverURL != config.serverURL
-        || apiKey != config.apiKey
+        apiKey != config.apiKey
+        || dianeServerURL != config.dianeServerURL
         || projectID != config.projectID
     }
 
@@ -82,17 +81,29 @@ struct SettingsView: View {
 
     private var connectionSection: some View {
         Section {
-            TextField("Server URL", text: $serverURL)
-                .textContentType(.URL)
-                .keyboardType(.URL)
-                .autocapitalization(.none)
-                .disableAutocorrection(true)
+            // Memory Platform URL — hardcoded, not user-editable
+            HStack {
+                Label("Memory Platform", systemImage: "cloud.fill")
+                    .foregroundColor(.accentColor)
+                Spacer()
+                Text(MemoryPlatform.defaultURL)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
 
             SecureField("API Key", text: $apiKey)
                 .autocapitalization(.none)
                 .disableAutocorrection(true)
 
-            TextField("Project ID (optional)", text: $projectID)
+            TextField("Project ID", text: $projectID)
+                .autocapitalization(.none)
+                .disableAutocorrection(true)
+
+            TextField("Diane Server URL", text: $dianeServerURL)
+                .textContentType(.URL)
+                .keyboardType(.URL)
                 .autocapitalization(.none)
                 .disableAutocorrection(true)
 
@@ -124,7 +135,7 @@ struct SettingsView: View {
                             }
                         }
                     }
-                    .disabled(serverURL.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(apiKey.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
 
@@ -136,7 +147,7 @@ struct SettingsView: View {
         } header: {
             Label("Connection", systemImage: "antenna.radiowaves.left.and.right")
         } footer: {
-            Text("Configure your Diane server connection. The server URL should point to your running Diane instance.")
+            Text("Configure your API key and project ID. The Memory Platform URL is fixed.")
         }
     }
 
@@ -299,18 +310,21 @@ struct SettingsView: View {
     // MARK: - Actions
 
     private func saveConfig() {
-        config.serverURL = serverURL.trimmingCharacters(in: .whitespaces)
+        config.serverURL = MemoryPlatform.defaultURL
         config.apiKey = apiKey.trimmingCharacters(in: .whitespaces)
         config.projectID = projectID.trimmingCharacters(in: .whitespaces)
-        apiClient.configure(baseURL: config.serverURL, apiKey: config.apiKey)
-        cloudClient.configure(baseURL: MemoryPlatform.defaultURL, apiKey: config.apiKey)
+        config.dianeServerURL = dianeServerURL.trimmingCharacters(in: .whitespaces)
+        let effectiveURL = config.dianeServerURL.isEmpty ? MemoryPlatform.defaultURL : config.dianeServerURL
+        cloudClient.configure(baseURL: effectiveURL, apiKey: config.apiKey)
         dismiss()
     }
 
     private func testConnection() async {
-        let testURL = serverURL.trimmingCharacters(in: .whitespaces)
-        guard !testURL.isEmpty else {
-            connectionTestResult = .failure("Server URL is empty")
+        let effectiveDianeURL = dianeServerURL.trimmingCharacters(in: .whitespaces)
+        let testURL = effectiveDianeURL.isEmpty ? MemoryPlatform.defaultURL : effectiveDianeURL
+
+        guard !apiKey.trimmingCharacters(in: .whitespaces).isEmpty else {
+            connectionTestResult = .failure("API Key is empty")
             return
         }
 
@@ -318,43 +332,30 @@ struct SettingsView: View {
         connectionTestResult = nil
 
         // Temporarily configure the client with the entered values
-        let savedURL = config.serverURL
+        let savedURL = config.dianeServerURL
         let savedKey = config.apiKey
-        config.serverURL = testURL
         config.apiKey = apiKey.trimmingCharacters(in: .whitespaces)
-        apiClient.configure(baseURL: testURL, apiKey: apiKey)
+        cloudClient.configure(baseURL: testURL, apiKey: config.apiKey)
 
         do {
-            let _ = try await apiClient.fetchSessions()
+            // Test connectivity — use /api/health which exists on both servers
+            let _ = try await cloudClient.fetchDiagnostics()
             connectionTestResult = .success
         } catch {
-            // Fallback: try the health endpoint directly
-            do {
-                guard let url = URL(string: testURL)?.appendingPathComponent("/api/health") else {
-                    throw HTTPError.invalidURL(testURL)
-                }
-                var request = URLRequest(url: url)
-                request.timeoutInterval = 10
-                let (_, response) = try await URLSession.shared.data(for: request)
-                guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                    throw HTTPError.httpError((response as? HTTPURLResponse)?.statusCode ?? 0, nil)
-                }
-                connectionTestResult = .success
-            } catch {
-                let message: String
-                if let httpErr = error as? HTTPError {
-                    message = httpErr.localizedDescription
-                } else {
-                    message = error.localizedDescription
-                }
-                connectionTestResult = .failure(message)
+            let message: String
+            if let httpErr = error as? HTTPError {
+                message = httpErr.localizedDescription
+            } else {
+                message = error.localizedDescription
             }
+            connectionTestResult = .failure(message)
         }
 
         // Restore saved config
-        config.serverURL = savedURL
         config.apiKey = savedKey
-        apiClient.configure(baseURL: savedURL, apiKey: savedKey)
+        config.dianeServerURL = savedURL
+        let restoreURL = config.dianeServerURL.isEmpty ? MemoryPlatform.defaultURL : config.dianeServerURL
+        cloudClient.configure(baseURL: restoreURL, apiKey: savedKey)
         isTestingConnection = false
     }
 
