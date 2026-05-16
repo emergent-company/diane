@@ -135,7 +135,7 @@ private struct ErrorStateView: View {
 // MARK: - SessionListView
 
 struct SessionListView: View {
-    @Environment(\.apiClient) private var apiClient
+    @Environment(\.cloudClient) private var cloudClient
     @State private var sessions: [DianeSession] = []
     @State private var isLoading = true
     @State private var error: String?

@@ -107,7 +107,7 @@ struct iPadLayout: View {
 // MARK: - Session List for iPad Sidebar
 
 struct SessionListiPadView: View {
-    @Environment(\.apiClient) private var apiClient
+    @Environment(\.cloudClient) private var cloudClient
     @Binding var selectedSession: DianeSession?
 
     @State private var sessions: [DianeSession] = []

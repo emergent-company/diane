@@ -283,7 +283,7 @@ struct ChatInputBar: View {
 // MARK: - ChatView
 
 struct ChatView: View {
-    @Environment(\.apiClient) private var apiClient
+    @Environment(\.cloudClient) private var cloudClient
     let session: DianeSession
 
     @State private var messages: [DianeMessage] = []
@@ -368,7 +368,7 @@ struct ChatView: View {
         isLoading = true
         error = nil
         do {
-            let fetched = try await apiClient.fetchMessages(sessionID: session.id)
+            let fetched = try await cloudClient.fetchMessages(sessionID: session.id)
             messages = fetched
             SessionCache.shared.cacheMessages(fetched, for: session.id)
         } catch {
@@ -419,14 +419,12 @@ struct ChatView: View {
 
         isStreaming = true
 
-        streamingTask = Task { [weak apiClient] in
-            guard let apiClient else { return }
-
+        streamingTask = Task {
             do {
-                let stream = apiClient.streamChat(
+                let stream = cloudClient.sendMessageStream(
                     sessionID: session.id,
                     content: text,
-                    agentName: session.agentName ?? "diane-default"
+                    agentID: session.agentName ?? "diane-default"
                 )
 
                 var accumulatedContent = ""

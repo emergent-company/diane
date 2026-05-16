@@ -28,7 +28,6 @@ private let notificationSounds: [(name: String, id: String)] = [
 
 struct SettingsView: View {
     @Environment(\.config) private var config
-    @Environment(\.apiClient) private var apiClient
     @Environment(\.cloudClient) private var cloudClient
     @Environment(\.dismiss) private var dismiss
 

@@ -4,7 +4,6 @@ import DianeShared
 @main
 struct DianeCompanionApp: App {
     @State private var config = ServerConfiguration()
-    @State private var apiClient = RemoteDianeAPIClient()
     @State private var cloudClient = EmergentAPIClient()
     @State private var showConfigSheet = false
 
@@ -14,13 +13,12 @@ struct DianeCompanionApp: App {
         WindowGroup {
             ContentView()
                 .environment(\.config, config)
-                .environment(\.apiClient, apiClient)
                 .environment(\.cloudClient, cloudClient)
                 .task { await startup() }
                 .sheet(isPresented: $showConfigSheet) {
                     SettingsView()
                         .environment(\.config, config)
-                        .environment(\.apiClient, apiClient)
+                        .environment(\.cloudClient, cloudClient)
                 }
                 .onChange(of: scenePhase) { _, newPhase in
                     handleScenePhase(newPhase)
@@ -33,7 +31,6 @@ struct DianeCompanionApp: App {
         NetworkMonitor.shared.start()
 
         // 1. Configure clients
-        let dianeURL = config.dianeServerURL.isEmpty ? config.serverURL : config.dianeServerURL
         cloudClient.configure(baseURL: config.serverURL, apiKey: config.apiKey)
 
         // 2. If no API key, show config sheet
