@@ -76,6 +76,11 @@ fi
 
 # Step 4: Archive
 echo "==> Archiving..."
+# Use xcpretty only if available and not on CI (to avoid hiding errors)
+USE_XCPRETTY=false
+if command -v xcpretty &>/dev/null && [ -z "${CI:-}" ]; then
+    USE_XCPRETTY=true
+fi
 XCODEBUILD_ARGS=(
     -project "${PROJECT}"
     -scheme "${SCHEME}"
@@ -90,7 +95,7 @@ XCODEBUILD_ARGS=(
     "${AUTH_ARGS[@]}"
 )
 
-if command -v xcpretty &>/dev/null; then
+if [ "$USE_XCPRETTY" = true ]; then
     xcodebuild archive "${XCODEBUILD_ARGS[@]}" 2>&1 | xcpretty
 else
     xcodebuild archive "${XCODEBUILD_ARGS[@]}"
