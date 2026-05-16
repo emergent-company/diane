@@ -274,12 +274,7 @@ public final class EmergentAPIClient: @unchecked Sendable {
         let data = try await http.get("/api/stats")
         // Try multiple response formats
         if let s = try? JSONDecoder().decode(ProjectStats.self, from: data) { return s }
-        struct AltStats: Decodable, Sendable {
-            let totalObjects: Int?; let totalTypes: Int?; let enabledTypes: Int?
-            let typesWithObjects: Int?; let totalDocuments: Int?
-        }
-        let _: AltStats = try JSONDecoder().decode(AltStats.self, from: data)
-        return ProjectStats(totalObjects: 0, totalTypes: 0, enabledTypes: 0, typesWithObjects: 0, totalDocuments: 0)
+        return ProjectStats(totalSessions: 0, totalMessages: 0, activeAgents: 0, totalProjects: 0, sessionsToday: 0, messagesToday: 0)
     }
 
     // MARK: - Diagnostics
@@ -290,12 +285,10 @@ public final class EmergentAPIClient: @unchecked Sendable {
 
     // MARK: - Search (MP API)
 
-    public func searchObjects(query: String, type: String? = nil) async throws -> [AnySearchResult] {
+    public func searchObjects(query: String, type: String? = nil) async throws -> Data {
         var path = "/api/search?q=\(query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query)"
         if let type { path += "&type=\(type)" }
-        struct SearchResponse: Decodable, Sendable { let results: [AnySearchResult] }
-        let response: SearchResponse = try await getJSON(path)
-        return response.results
+        return try await http.get(path)
     }
 
     // MARK: - Documents (MP API)

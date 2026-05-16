@@ -58,12 +58,8 @@ fi
 # ── iOS companion ───────────────────────────────────────────────
 if [ -n "$STAGED_IOS" ]; then
     echo "🔍 iOS files staged — checking iOS companion build..."
-
-    cd "$IOS_DIR"
-    if [ ! -f "Diane.xcodeproj" ]; then
-        echo "==> Generating iOS Xcode project..."
-        xcodegen generate --quiet 2>&1
-    fi
+    echo "==> Generating iOS Xcode project..."
+    (cd "$IOS_DIR" && xcodegen generate --quiet) 2>&1
 
     echo "==> Building iOS Diane scheme (debug, no signing)..."
     xcodebuild \
@@ -83,9 +79,7 @@ if [ -n "$STAGED_IOS" ]; then
     if [ "$BUILD_EXIT" -ne 0 ]; then
         echo ""
         echo "❌ iOS companion build FAILED. Fix errors before committing."
-        cd - > /dev/null
         exit 1
     fi
     echo "✅ iOS companion app builds cleanly."
-    cd - > /dev/null
 fi
