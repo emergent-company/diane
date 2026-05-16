@@ -31,8 +31,6 @@ struct SettingsView: View {
     @Environment(\.cloudClient) private var cloudClient
     @Environment(\.dismiss) private var dismiss
 
-    @State private var serverURL: String = ""
-    @State private var dianeServerURL: String = ""
     @State private var apiKey: String = ""
     @State private var projectID: String = ""
     @State private var isTestingConnection = false
@@ -63,7 +61,6 @@ struct SettingsView: View {
             }
         }
         .onAppear {
-            serverURL = config.serverURL
             apiKey = config.apiKey
             projectID = config.projectID
         }
