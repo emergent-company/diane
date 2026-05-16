@@ -44,6 +44,7 @@ targets:
         excludes:
           - "**/*.plist"
           - "**/*.entitlements"
+      - path: DianeCompanion/Assets.xcassets
     dependencies:
       - package: Sparkle
         product: Sparkle
@@ -101,6 +102,23 @@ targets:
       path: DianeCompanion/Info.plist
     entitlements:
       path: DianeCompanion/DianeCompanion.entitlements
+
+  DianeTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: DianeTests
+    dependencies:
+      - target: Diane
+    settings:
+      base:
+        INFOPLIST_FILE: DianeTests/Info.plist
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Diane.app/Contents/MacOS/Diane"
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_MODULE_NAME: DianeUnitTests
+        SWIFT_EMIT_MODULE_ARCHIVE: NO
 
   DianeUITests:
     type: bundle.ui-testing
