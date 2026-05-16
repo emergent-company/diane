@@ -52,6 +52,18 @@ jobs:
           echo "${{ secrets.APP_STORE_CONNECT_API_KEY }}" > /tmp/AuthKey.p8
           chmod 600 /tmp/AuthKey.p8
 
+      - name: Ensure app exists in App Store Connect
+        continue-on-error: true
+        run: |
+          echo "==> Checking if app exists in App Store Connect..."
+          xcrun altool --create-app \
+            -t ios \
+            -u "${{ secrets.NOTARIZE_APPLE_ID }}" \
+            -p "${{ secrets.NOTARIZE_PASSWORD }}" \
+            --bundle-id "com.diane.io" \
+            --bundle-name "Diane" \
+            --output-format xml 2>&1 || echo "App may already exist — continuing"
+
       - name: Archive
         id: archive
         run: |

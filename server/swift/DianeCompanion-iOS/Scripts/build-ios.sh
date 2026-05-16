@@ -98,7 +98,7 @@ mkdir -p "${EXPORT_PATH}"
 xcodebuild -exportArchive \
     -archivePath "${ARCHIVE_PATH}" \
     -exportPath "${EXPORT_PATH}" \
-    -exportOptionsPlist DianeCompanion/ExportOptions.plist \
+    -exportOptionsPlist ExportOptions.plist \
     "${AUTH_ARGS[@]}"
 
 APP_PATH="${EXPORT_PATH}/${SCHEME}.ipa"
