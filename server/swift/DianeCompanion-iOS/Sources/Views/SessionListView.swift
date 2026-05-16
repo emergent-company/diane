@@ -144,6 +144,7 @@ struct SessionListView: View {
     @State private var showDeleteAlert = false
     @State private var isCreating = false
     @State private var isOffline = false
+    @State private var showSettings = false
 
     var filteredSessions: [DianeSession] {
         if searchText.isEmpty { return sessions }
@@ -205,16 +206,27 @@ struct SessionListView: View {
         .searchable(text: $searchText, prompt: "Search sessions...")
         .navigationTitle("Chats")
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button(action: { Task { await createNewSession() } }) {
-                    if isCreating {
-                        ProgressView()
-                            .scaleEffect(0.8)
-                    } else {
-                        Image(systemName: "plus.bubble")
+            ToolbarItem(placement: .navigationBarTrailing) {
+                HStack(spacing: 4) {
+                    Button(action: { Task { await createNewSession() } }) {
+                        if isCreating {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                        } else {
+                            Image(systemName: "plus.bubble")
+                        }
+                    }
+                    .disabled(isCreating)
+
+                    Button(action: { showSettings = true }) {
+                        Image(systemName: "gearshape")
                     }
                 }
-                .disabled(isCreating)
+            }
+        }
+        .sheet(isPresented: $showSettings) {
+            NavigationStack {
+                SettingsView()
             }
         }
         .task { await load() }

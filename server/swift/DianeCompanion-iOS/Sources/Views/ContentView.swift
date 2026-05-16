@@ -1,26 +1,6 @@
 import SwiftUI
 import DianeShared
 
-enum AppTab: String, CaseIterable {
-    case chats, status, settings
-
-    var title: String {
-        switch self {
-        case .chats: return "Chats"
-        case .status: return "Status"
-        case .settings: return "Settings"
-        }
-    }
-
-    var icon: String {
-        switch self {
-        case .chats: return "message.fill"
-        case .status: return "antenna.radiowaves.left.and.right"
-        case .settings: return "gearshape.fill"
-        }
-    }
-}
-
 struct ContentView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
 
@@ -39,27 +19,9 @@ struct ContentView: View {
 // MARK: - iPhone Layout
 
 struct iPhoneLayout: View {
-    @State private var selectedTab: AppTab = .chats
-
     var body: some View {
-        TabView(selection: $selectedTab) {
-            NavigationStack {
-                SessionListView()
-            }
-            .tabItem { Label(AppTab.chats.title, systemImage: AppTab.chats.icon) }
-            .tag(AppTab.chats)
-
-            NavigationStack {
-                SystemView()
-            }
-            .tabItem { Label(AppTab.status.title, systemImage: AppTab.status.icon) }
-            .tag(AppTab.status)
-
-            NavigationStack {
-                SettingsView()
-            }
-            .tabItem { Label(AppTab.settings.title, systemImage: AppTab.settings.icon) }
-            .tag(AppTab.settings)
+        NavigationStack {
+            SessionListView()
         }
     }
 }
@@ -212,5 +174,3 @@ struct SessionListiPadView: View {
         }
     }
 }
-
-// MARK: - Placeholder View (reserved for MCPServersView access)
