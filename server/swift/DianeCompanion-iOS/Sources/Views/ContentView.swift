@@ -70,7 +70,6 @@ struct SessionListiPadView: View {
     @State private var sessions: [DianeSession] = []
     @State private var isLoading = true
     @State private var error: String?
-    @State private var isOffline = false
     @State private var searchText = ""
 
     var filteredSessions: [DianeSession] {
@@ -83,8 +82,6 @@ struct SessionListiPadView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if isOffline { OfflineBanner() }
-
             if isLoading && sessions.isEmpty {
                 List {
                     ForEach(0..<5, id: \.self) { _ in
@@ -146,19 +143,7 @@ struct SessionListiPadView: View {
     private func load() async {
         isLoading = true
         error = nil
-        isOffline = false
-        do {
-            sessions = SessionCache.shared.loadCachedSessions()
-            SessionCache.shared.cacheSessions(sessions)
-        } catch {
-            let cached = SessionCache.shared.loadCachedSessions()
-            if cached.isEmpty {
-                self.error = error.localizedDescription
-            } else {
-                sessions = cached
-                isOffline = true
-            }
-        }
+        sessions = SessionCache.shared.loadCachedSessions()
         isLoading = false
     }
 

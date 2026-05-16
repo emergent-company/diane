@@ -143,7 +143,6 @@ struct SessionListView: View {
     @State private var sessionToDelete: DianeSession?
     @State private var showDeleteAlert = false
     @State private var isCreating = false
-    @State private var isOffline = false
     @State private var showSettings = false
 
     var filteredSessions: [DianeSession] {
@@ -156,10 +155,6 @@ struct SessionListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if isOffline {
-                OfflineBanner()
-            }
-
             Group {
             if isLoading && sessions.isEmpty {
                 // Redacted placeholder rows while loading
@@ -260,35 +255,12 @@ struct SessionListView: View {
     private func load() async {
         isLoading = true
         error = nil
-        isOffline = false
 
-        // Show cached sessions immediately while ACP fetch runs
+        // Load from local cache only — the MP ACP server does not expose
+        // GET /acp/v1/sessions (list all), so we can't fetch remote session
+        // listings. New sessions are synced on create via createACPSession().
         let cached = SessionCache.shared.loadCachedSessions()
         sessions = cached
-
-        // Fetch live sessions from Memory Platform via ACP
-        do {
-            let acpItems = try await cloudClient.fetchACPSessions()
-            let acpSessions = acpItems.map { $0.toDianeSession() }
-
-            // Merge: ACP sessions are canonical, keep any local-only sessions too
-            var merged = [String: DianeSession]()
-            for s in acpSessions { merged[s.id] = s }
-            for s in cached { if merged[s.id] == nil { merged[s.id] = s } }
-
-            sessions = Array(merged.values).sorted { a, b in
-                (a.createdAt ?? "") > (b.createdAt ?? "")
-            }
-
-            SessionCache.shared.cacheSessions(sessions)
-        } catch {
-            // Fall back to cached if ACP fetch fails
-            if sessions.isEmpty {
-                self.error = error.localizedDescription
-            } else {
-                isOffline = true
-            }
-        }
         isLoading = false
     }
 
