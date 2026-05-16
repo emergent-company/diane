@@ -179,6 +179,8 @@ struct SettingsView: View {
             .onChange(of: pushEnabled) { _, newValue in
                 if newValue {
                     PushNotificationService.shared.register()
+                } else {
+                    PushNotificationService.shared.unregister()
                 }
             }
 
