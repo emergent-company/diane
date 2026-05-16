@@ -31,13 +31,15 @@ jobs:
 
       - name: Select Xcode
         run: |
-          XCODE_26=$(ls /Applications/Xcode_26*.app 2>/dev/null | head -1)
+          XCODE_26=$(find /Applications -maxdepth 1 -name "Xcode_2[56]*.app" -type d | head -1)
           if [ -n "$XCODE_26" ]; then
             sudo xcode-select -s "$XCODE_26"
+            xcodebuild -version
           else
-            sudo xcode-select -s /Applications/Xcode.app || true
+            echo "No Xcode 26 found, trying default..."
+            sudo xcode-select -s /Applications/Xcode.app 2>/dev/null || true
+            xcodebuild -version
           fi
-          xcodebuild -version
 
       - name: Install tools
         run: |
