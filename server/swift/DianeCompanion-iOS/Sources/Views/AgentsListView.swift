@@ -49,7 +49,8 @@ struct AgentsListView: View {
         .refreshable { await load() }
         .navigationDestination(for: AgentDef.self) { agent in
             AgentDetailView(agent: agent)
-        }
+            .sentryView("AgentsListView")
+    }
     }
 
     private func load() async {

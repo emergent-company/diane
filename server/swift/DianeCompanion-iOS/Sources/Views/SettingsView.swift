@@ -66,7 +66,8 @@ struct SettingsView: View {
             serverURL = config.serverURL
             apiKey = config.apiKey
             projectID = config.projectID
-        }
+            .sentryView("SettingsView")
+    }
     }
 
     // MARK: - Has Changes

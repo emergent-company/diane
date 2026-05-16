@@ -64,6 +64,7 @@ struct SchemaView: View {
         .navigationTitle("Schema")
         .task { await load() }
         .refreshable { await load() }
+        .sentryView("SchemaView")
     }
 
     private func load() async {

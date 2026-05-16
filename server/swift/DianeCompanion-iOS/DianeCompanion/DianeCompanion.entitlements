@@ -4,7 +4,7 @@
 <dict>
     <key>keychain-access-groups</key>
     <array>
-        <string>$(AppIdentifierPrefix)com.diane.io</string>
+        <string>$(AppIdentifierPrefix)com.diane.ios</string>
     </array>
     <key>aps-environment</key>
     <string>production</string>

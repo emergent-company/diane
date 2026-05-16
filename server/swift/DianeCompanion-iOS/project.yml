@@ -12,7 +12,7 @@ settings:
     base:
         SWIFT_VERSION: "6.0"
         IPHONEOS_DEPLOYMENT_TARGET: "18.0"
-        PRODUCT_BUNDLE_IDENTIFIER: com.diane.io
+        PRODUCT_BUNDLE_IDENTIFIER: com.diane.ios
         DEVELOPMENT_TEAM: "74LC88G9SC"
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: "Apple Development"
@@ -21,6 +21,9 @@ settings:
         CURRENT_PROJECT_VERSION: 1
 
 packages:
+  Sentry:
+    url: https://github.com/getsentry/sentry-cocoa
+    from: 8.0.0
   DianeShared:
     path: ../Packages/DianeShared
 
@@ -34,6 +37,8 @@ targets:
       - path: DianeCompanion/Assets.xcassets
       - path: DianeCompanion/LaunchScreen.storyboard
     dependencies:
+      - package: Sentry
+        product: Sentry
       - package: DianeShared
         product: DianeShared
     settings:
@@ -71,5 +76,5 @@ targets:
       base:
         PRODUCT_NAME: DianeUITests
         GENERATE_INFOPLIST_FILE: YES
-        PRODUCT_BUNDLE_IDENTIFIER: com.diane.io.uitests
+        PRODUCT_BUNDLE_IDENTIFIER: com.diane.ios.uitests
         TEST_TARGET_NAME: Diane

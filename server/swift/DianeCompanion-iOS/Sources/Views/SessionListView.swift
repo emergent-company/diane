@@ -135,6 +135,56 @@ private struct ErrorStateView: View {
 // MARK: - SessionListView
 
 struct SessionListView: View {
+    var body: some View {
+        VStack(spacing: 0) {
+            if isOffline {
+                OfflineBanner()
+            }
+
+            Group {
+            if isLoading && sessions.isEmpty {
+                // Redacted placeholder rows while loading
+                List {
+                    ForEach(placeholderSessions) { session in
+                        SessionRow(session: session)
+                            .redacted(reason: .placeholder)
+                    }
+                }
+                .listStyle(.insetGrouped)
+            } else if let err = error, sessions.isEmpty {
+                ErrorStateView(message: err) {
+                    Task { await load() }
+                }
+            } else if sessions.isEmpty {
+                EmptyStateView {
+                    Task { await createNewSession() }
+                }
+            } else {
+                List {
+                    ForEach(filteredSessions) { session in
+                        NavigationLink(value: session) {
+                            SessionRow(session: session)
+                        }
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) {
+                                sessionToDelete = session
+                                showDeleteAlert = true
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                    }
+                    .onDelete { indexSet in
+                        guard let index = indexSet.first, index < filteredSessions.count else { return }
+                        sessionToDelete = filteredSessions[index]
+                        showDeleteAlert = true
+                    }
+                }
+                .listStyle(.insetGrouped)
+            }
+        }
+        }
+        .searchable(text: $searchText, prompt: "Search sessions...")
     @Environment(\.apiClient) private var apiClient
     @State private var sessions: [DianeSession] = []
     @State private var isLoading = true
@@ -239,7 +289,8 @@ struct SessionListView: View {
             if let connected = notification.userInfo?["isConnected"] as? Bool, connected {
                 Task { await load() }
             }
-        }
+            .sentryView("SessionListView")
+    }
     }
 
     // MARK: - Data Loading

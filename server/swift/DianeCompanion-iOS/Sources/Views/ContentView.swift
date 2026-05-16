@@ -29,7 +29,8 @@ struct ContentView: View {
     var body: some View {
         if sizeClass == .regular {
             iPadLayout()
-        } else {
+            .sentryView("ContentView")
+    } else {
             iPhoneLayout()
         }
     }
