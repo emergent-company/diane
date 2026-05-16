@@ -7,6 +7,8 @@ on:
       - 'server/swift/DianeCompanion/Sources/**'
       - 'server/swift/DianeCompanion/Diane.xcodeproj/**'
       - 'server/swift/DianeCompanion/Scripts/**'
+      - 'server/swift/DianeCompanion/project.yml'
+      - 'server/swift/DianeCompanion/DianeCompanion/Assets.xcassets/**'
   workflow_dispatch:
 
 permissions:
