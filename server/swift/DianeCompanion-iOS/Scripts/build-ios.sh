@@ -30,13 +30,17 @@ else
 fi
 
 # Step 2: Set version
-if [ -n "${VERSION:-}" ]; then
-    echo "==> Setting version: ${VERSION}"
-    MARKETING_VERSION="${VERSION#v}"
-    CURRENT_PROJECT_VERSION="${VERSION#v}"
-else
-    MARKETING_VERSION=$(plutil -extract CFBundleShortVersionString raw "$(pwd)/DianeCompanion/Info.plist" 2>/dev/null || echo "1.0.0")
-    CURRENT_PROJECT_VERSION="$MARKETING_VERSION"
+MARKETING_VERSION="${MARKETING_VERSION:-}"
+CURRENT_PROJECT_VERSION="${BUILD_NUMBER:-}"
+if [ -z "$MARKETING_VERSION" ] || [ -z "$CURRENT_PROJECT_VERSION" ]; then
+    if [ -n "${VERSION:-}" ]; then
+        MARKETING_VERSION="${VERSION#v}"
+        MARKETING_VERSION="${MARKETING_VERSION%%-*}"
+        CURRENT_PROJECT_VERSION="${MARKETING_VERSION}"
+    else
+        MARKETING_VERSION=$(plutil -extract CFBundleShortVersionString raw "$(pwd)/DianeCompanion/Info.plist" 2>/dev/null || echo "1.0.0")
+        CURRENT_PROJECT_VERSION="$MARKETING_VERSION"
+    fi
 fi
 VERSION="${VERSION:-${MARKETING_VERSION}}"
 
