@@ -10,14 +10,14 @@
 set -euo pipefail
 
 SWIFT_DIR="server/swift/DianeCompanion"
+IOS_DIR="server/swift/DianeCompanion-iOS"
 
 # Only run if Swift files are staged
 STAGED_SWIFT=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null | grep '\.swift$' || true)
+STAGED_IOS=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null | grep -E '(DianeCompanion-iOS|Packages/DianeShared)' || true)
 if [ -z "$STAGED_SWIFT" ]; then
     exit 0
 fi
-
-echo "🔍 Swift files staged — checking companion app build..."
 
 # Check for xcodegen
 if ! command -v xcodegen &>/dev/null; then
@@ -26,31 +26,66 @@ if ! command -v xcodegen &>/dev/null; then
     exit 0
 fi
 
-# Generate Xcode project from project.yml
-echo "==> Generating Xcode project..."
-(cd "$SWIFT_DIR" && xcodegen generate --quiet) 2>&1
+# ── macOS companion ──────────────────────────────────────────────
+# Only build macOS if non-iOS Swift files are staged
+if echo "$STAGED_SWIFT" | grep -vq 'DianeCompanion-iOS' 2>/dev/null; then
+    echo "🔍 Swift files staged — checking macOS companion build..."
+    echo "==> Generating Xcode project..."
+    (cd "$SWIFT_DIR" && xcodegen generate --quiet) 2>&1
 
-# Quick build check — just compile, no signing
-echo "==> Building Diane scheme (debug, no signing)..."
-xcodebuild \
-    -project "$SWIFT_DIR/Diane.xcodeproj" \
-    -scheme Diane \
-    -configuration Debug \
-    -derivedDataPath "$SWIFT_DIR/build/DerivedData" \
-    CODE_SIGN_IDENTITY="" \
-    CODE_SIGNING_REQUIRED=NO \
-    CODE_SIGNING_ALLOWED=NO \
-    SWIFT_ACTIVE_COMPILATION_CONDITIONS= \
-    build \
-    2>&1 | tail -20
+    echo "==> Building Diane scheme (debug, no signing)..."
+    xcodebuild \
+        -project "$SWIFT_DIR/Diane.xcodeproj" \
+        -scheme Diane \
+        -configuration Debug \
+        -derivedDataPath "$SWIFT_DIR/build/DerivedData" \
+        CODE_SIGN_IDENTITY="" \
+        CODE_SIGNING_REQUIRED=NO \
+        CODE_SIGNING_ALLOWED=NO \
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS= \
+        build \
+        2>&1 | tail -20
 
-BUILD_EXIT=${PIPESTATUS[0]}
-if [ "$BUILD_EXIT" -ne 0 ]; then
-    echo ""
-    echo "❌ Swift build FAILED. Fix errors before committing."
-    echo "   Run locally:"
-    echo "     cd $SWIFT_DIR && xcodegen generate && xcodebuild -project Diane.xcodeproj -scheme Diane build"
-    exit 1
+    BUILD_EXIT=${PIPESTATUS[0]}
+    if [ "$BUILD_EXIT" -ne 0 ]; then
+        echo ""
+        echo "❌ macOS companion build FAILED. Fix errors before committing."
+        exit 1
+    fi
+    echo "✅ macOS companion app builds cleanly."
 fi
 
-echo "✅ Swift companion app builds cleanly."
+# ── iOS companion ───────────────────────────────────────────────
+if [ -n "$STAGED_IOS" ]; then
+    echo "🔍 iOS files staged — checking iOS companion build..."
+
+    cd "$IOS_DIR"
+    if [ ! -f "Diane.xcodeproj" ]; then
+        echo "==> Generating iOS Xcode project..."
+        xcodegen generate --quiet 2>&1
+    fi
+
+    echo "==> Building iOS Diane scheme (debug, no signing)..."
+    xcodebuild \
+        -project "$IOS_DIR/Diane.xcodeproj" \
+        -scheme Diane \
+        -configuration Debug \
+        -sdk iphonesimulator \
+        -derivedDataPath "$IOS_DIR/build/DerivedData" \
+        CODE_SIGN_IDENTITY="" \
+        CODE_SIGNING_REQUIRED=NO \
+        CODE_SIGNING_ALLOWED=NO \
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS= \
+        build \
+        2>&1 | tail -20
+
+    BUILD_EXIT=${PIPESTATUS[0]}
+    if [ "$BUILD_EXIT" -ne 0 ]; then
+        echo ""
+        echo "❌ iOS companion build FAILED. Fix errors before committing."
+        cd - > /dev/null
+        exit 1
+    fi
+    echo "✅ iOS companion app builds cleanly."
+    cd - > /dev/null
+fi
