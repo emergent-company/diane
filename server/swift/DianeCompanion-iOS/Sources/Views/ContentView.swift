@@ -2,12 +2,11 @@ import SwiftUI
 import DianeShared
 
 enum AppTab: String, CaseIterable {
-    case chats, agents, status, settings
+    case chats, status, settings
 
     var title: String {
         switch self {
         case .chats: return "Chats"
-        case .agents: return "Agents"
         case .status: return "Status"
         case .settings: return "Settings"
         }
@@ -16,7 +15,6 @@ enum AppTab: String, CaseIterable {
     var icon: String {
         switch self {
         case .chats: return "message.fill"
-        case .agents: return "brain.head.profile"
         case .status: return "antenna.radiowaves.left.and.right"
         case .settings: return "gearshape.fill"
         }
@@ -50,12 +48,6 @@ struct iPhoneLayout: View {
             }
             .tabItem { Label(AppTab.chats.title, systemImage: AppTab.chats.icon) }
             .tag(AppTab.chats)
-
-            NavigationStack {
-                AgentsListView()
-            }
-            .tabItem { Label(AppTab.agents.title, systemImage: AppTab.agents.icon) }
-            .tag(AppTab.agents)
 
             NavigationStack {
                 SystemView()
