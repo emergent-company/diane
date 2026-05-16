@@ -128,11 +128,9 @@ struct MessageBubble: View {
             if isUser { Spacer(minLength: 60) }
 
             VStack(alignment: isUser ? .trailing : .leading, spacing: DesignTokens.spacingXS) {
-                // Content
-                Text(message.content)
-                    .font(.body)
+                // Content — auto-detects markdown, renders with Textual (iOS 18+) or AttributedString fallback
+                MessageContentView(message: message)
                     .foregroundColor(textColor)
-                    .textSelection(.enabled)
 
                 // Streaming cursor
                 if isStreaming {
