@@ -131,7 +131,7 @@ struct SystemView: View {
         do {
             // Fetch counts in parallel
             async let sessionsTask = cloudClient.fetchSessions()
-            async let agentsTask = cloudClient.fetchAgents()
+            async let agentsTask = cloudClient.fetchAgentDefs()
             async let serversTask = cloudClient.fetchMCPServers()
 
             (sessions, agents, servers) = try await (
