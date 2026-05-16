@@ -120,6 +120,7 @@ if [ ! -f "$APP_PATH" ]; then
 fi
 
 echo "✓ Exported: ${APP_PATH} ($(du -sh "${APP_PATH}" | cut -f1))"
+ABS_IPA_PATH="$(cd "$(dirname "${APP_PATH}")" && pwd)/$(basename "${APP_PATH}")"
 
 # Step 5b: Sign embedded frameworks (Sentry.framework is unsigned when CODE_SIGNING_ALLOWED=NO is used)
 echo "==> Checking embedded frameworks for proper signing..."
@@ -165,10 +166,10 @@ if [ -n "$APP_BUNDLE" ] && [ -d "${APP_BUNDLE}/Frameworks/Sentry.framework" ]; t
     # Re-package the IPA
     echo "==> Re-packaging IPA with signed frameworks..."
     cd "${TEMP_DIR}"
-    zip -qr "${APP_PATH}" Payload/ 2>/dev/null
+    zip -qr "${ABS_IPA_PATH}" Payload/ 2>/dev/null
     cd - > /dev/null
     RESULT=$?
-    echo "✓ Re-packaged: ${APP_PATH} ($(du -sh "${APP_PATH}" | cut -f1))"
+    echo "✓ Re-packaged: ${ABS_IPA_PATH} ($(du -sh "${ABS_IPA_PATH}" | cut -f1))"
 else
     echo "   No Sentry.framework found or no payload extracted — skipping re-sign"
     if [ -n "$APP_BUNDLE" ]; then
