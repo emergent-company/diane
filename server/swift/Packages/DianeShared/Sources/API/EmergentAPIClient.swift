@@ -216,6 +216,83 @@ public final class EmergentAPIClient: @unchecked Sendable {
         return response.data
     }
 
+    /// Upload a file as a document to the Memory Platform.
+    /// Uses multipart/form-data POST to the document upload endpoint.
+    /// - Parameters:
+    ///   - fileData: Raw file contents
+    ///   - filename: Original filename (e.g., "report.pdf")
+    ///   - mimeType: MIME type string (e.g., "application/pdf")
+    ///   - projectID: The project to upload into
+    ///   - autoExtract: Whether the server should run extraction after upload
+    /// - Returns: The created Document model
+    public func uploadDocument(
+        fileData: Data,
+        filename: String,
+        mimeType: String,
+        projectID: String,
+        autoExtract: Bool = true
+    ) async throws -> Document {
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var body = Data()
+
+        // autoExtract field
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"autoExtract\"\r\n\r\n".data(using: .utf8)!)
+        body.append("\(autoExtract)\r\n".data(using: .utf8)!)
+
+        // file field
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
+        body.append(fileData)
+        body.append("\r\n".data(using: .utf8)!)
+
+        // closing boundary
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+        let headers: [String: String] = [
+            "Content-Type": "multipart/form-data; boundary=\(boundary)",
+            "X-Project-ID": projectID,
+        ]
+        let data = try await http.post("/api/documents/upload", body: body, headers: headers, timeout: 120)
+
+        struct UploadResponse: Decodable, Sendable {
+            let document: UploadDocument
+            let isDuplicate: Bool?
+        }
+        struct UploadDocument: Decodable, Sendable {
+            let id: String
+            let name: String
+            let mimeType: String?
+            let fileSizeBytes: Int?
+            let conversionStatus: String?
+            let storageKey: String?
+            let createdAt: String?
+
+            enum CodingKeys: String, CodingKey {
+                case id, name
+                case mimeType = "mime_type"
+                case fileSizeBytes = "file_size_bytes"
+                case conversionStatus = "conversion_status"
+                case storageKey = "storage_key"
+                case createdAt = "created_at"
+            }
+        }
+
+        let uploadResp = try JSONDecoder().decode(UploadResponse.self, from: data)
+
+        return Document(
+            id: uploadResp.document.id,
+            title: uploadResp.document.name,
+            content: nil,
+            fileType: uploadResp.document.mimeType,
+            size: uploadResp.document.fileSizeBytes,
+            projectID: projectID,
+            createdAt: uploadResp.document.createdAt,
+            updatedAt: nil
+        )
+    }
+
     // MARK: - Schema
 
     public func fetchSchema() async throws -> SchemaResponse {

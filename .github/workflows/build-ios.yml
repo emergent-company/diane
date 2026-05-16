@@ -120,4 +120,9 @@ jobs:
             --apiKey "${{ secrets.APP_STORE_CONNECT_KEY_ID }}" \
             --apiIssuer "${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}" \
             --output-format xml
+          result=$?
+          if [ $result -ne 0 ]; then
+            echo "::error::altool upload failed with exit code $result"
+            exit $result
+          fi
         working-directory: server/swift/DianeCompanion-iOS
