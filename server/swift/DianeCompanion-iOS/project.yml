@@ -44,8 +44,7 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
         TARGETED_DEVICE_FAMILY: "1,2"
-    info:
-      path: DianeCompanion/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
 
   DianeTests:
     type: bundle.unit-test
