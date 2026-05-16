@@ -58,7 +58,7 @@ struct AgentsListView: View {
         error = nil
         isOffline = false
         do {
-            agents = try await cloudClient.fetchAgentDefs()
+            agents = try await cloudClient.fetchAgentDefs(projectID: cloudClient.projectID)
             cacheAgents(agents)
         } catch {
             let cached = loadCachedAgents()

@@ -194,7 +194,7 @@ struct SessionListiPadView: View {
         error = nil
         isOffline = false
         do {
-            sessions = try await cloudClient.fetchSessions()
+            sessions = SessionCache.shared.loadCachedSessions()
             SessionCache.shared.cacheSessions(sessions)
         } catch {
             let cached = SessionCache.shared.loadCachedSessions()
@@ -210,9 +210,11 @@ struct SessionListiPadView: View {
 
     private func createNewSession() async {
         do {
-            let session = try await cloudClient.createSession()
+            let acpID = try await cloudClient.createACPSession(agentName: "diane-default")
+            let session = DianeSession(id: acpID, title: "New Chat", agentName: "diane-default", createdAt: ISO8601DateFormatter().string(from: Date()))
             sessions.insert(session, at: 0)
             selectedSession = session
+            SessionCache.shared.cacheSessions(sessions)
         } catch {
             self.error = error.localizedDescription
         }

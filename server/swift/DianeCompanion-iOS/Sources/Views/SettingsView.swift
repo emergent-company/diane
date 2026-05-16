@@ -31,13 +31,12 @@ struct SettingsView: View {
     @Environment(\.cloudClient) private var cloudClient
     @Environment(\.dismiss) private var dismiss
 
+    @State private var serverURL: String = ""
+    @State private var dianeServerURL: String = ""
     @State private var apiKey: String = ""
     @State private var projectID: String = ""
-    @State private var dianeServerURL: String = ""
     @State private var isTestingConnection = false
     @State private var connectionTestResult: ConnectionTestResult?
-    @State private var pushEnabled = PushNotificationService.shared.isRegistered
-    @State private var selectedSound: String = "default"
 
     private enum ConnectionTestResult: Equatable {
         case success
@@ -62,18 +61,17 @@ struct SettingsView: View {
             }
         }
         .onAppear {
+            serverURL = config.serverURL
+            dianeServerURL = config.dianeServerURL
             apiKey = config.apiKey
             projectID = config.projectID
-            dianeServerURL = config.dianeServerURL
         }
-        .sentryView("SettingsView")
     }
 
     // MARK: - Has Changes
 
     private var hasChanges: Bool {
         apiKey != config.apiKey
-        || dianeServerURL != config.dianeServerURL
         || projectID != config.projectID
     }
 
@@ -98,12 +96,6 @@ struct SettingsView: View {
                 .disableAutocorrection(true)
 
             TextField("Project ID", text: $projectID)
-                .autocapitalization(.none)
-                .disableAutocorrection(true)
-
-            TextField("Diane Server URL", text: $dianeServerURL)
-                .textContentType(.URL)
-                .keyboardType(.URL)
                 .autocapitalization(.none)
                 .disableAutocorrection(true)
 
@@ -313,16 +305,15 @@ struct SettingsView: View {
         config.serverURL = MemoryPlatform.defaultURL
         config.apiKey = apiKey.trimmingCharacters(in: .whitespaces)
         config.projectID = projectID.trimmingCharacters(in: .whitespaces)
-        config.dianeServerURL = dianeServerURL.trimmingCharacters(in: .whitespaces)
-        let effectiveURL = config.dianeServerURL.isEmpty ? MemoryPlatform.defaultURL : config.dianeServerURL
-        cloudClient.configure(baseURL: effectiveURL, apiKey: config.apiKey)
+        cloudClient.configure(
+            baseURL: MemoryPlatform.defaultURL,
+            apiKey: config.apiKey,
+            projectID: config.projectID
+        )
         dismiss()
     }
 
     private func testConnection() async {
-        let effectiveDianeURL = dianeServerURL.trimmingCharacters(in: .whitespaces)
-        let testURL = effectiveDianeURL.isEmpty ? MemoryPlatform.defaultURL : effectiveDianeURL
-
         guard !apiKey.trimmingCharacters(in: .whitespaces).isEmpty else {
             connectionTestResult = .failure("API Key is empty")
             return
@@ -332,13 +323,16 @@ struct SettingsView: View {
         connectionTestResult = nil
 
         // Temporarily configure the client with the entered values
-        let savedURL = config.dianeServerURL
         let savedKey = config.apiKey
+        let savedPID = config.projectID
         config.apiKey = apiKey.trimmingCharacters(in: .whitespaces)
-        cloudClient.configure(baseURL: testURL, apiKey: config.apiKey)
+        cloudClient.configure(
+            baseURL: MemoryPlatform.defaultURL,
+            apiKey: config.apiKey
+        )
 
         do {
-            // Test connectivity — use /api/health which exists on both servers
+            // Test MP connectivity via /api/diagnostics
             let _ = try await cloudClient.fetchDiagnostics()
             connectionTestResult = .success
         } catch {
@@ -353,9 +347,12 @@ struct SettingsView: View {
 
         // Restore saved config
         config.apiKey = savedKey
-        config.dianeServerURL = savedURL
-        let restoreURL = config.dianeServerURL.isEmpty ? MemoryPlatform.defaultURL : config.dianeServerURL
-        cloudClient.configure(baseURL: restoreURL, apiKey: savedKey)
+        config.projectID = savedPID
+        cloudClient.configure(
+            baseURL: MemoryPlatform.defaultURL,
+            apiKey: savedKey,
+            projectID: savedPID
+        )
         isTestingConnection = false
     }
 

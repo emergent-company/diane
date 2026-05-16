@@ -250,8 +250,7 @@ struct SessionListView: View {
         error = nil
         isOffline = false
         do {
-            sessions = try await cloudClient.fetchSessions()
-            SessionCache.shared.cacheSessions(sessions)
+            sessions = SessionCache.shared.loadCachedSessions()
         } catch {
             // Fall back to cached sessions
             let cached = SessionCache.shared.loadCachedSessions()
@@ -268,8 +267,10 @@ struct SessionListView: View {
     private func createNewSession() async {
         isCreating = true
         do {
-            let session = try await cloudClient.createSession()
+            let acpID = try await cloudClient.createACPSession(agentName: "diane-default")
+            let session = DianeSession(id: acpID, title: "New Chat", agentName: "diane-default", createdAt: ISO8601DateFormatter().string(from: Date()))
             sessions.insert(session, at: 0)
+            SessionCache.shared.cacheSessions(sessions)
         } catch {
             self.error = error.localizedDescription
         }
@@ -277,15 +278,8 @@ struct SessionListView: View {
     }
 
     private func performDelete(_ session: DianeSession) async {
-        do {
-            try await cloudClient.deleteSession(id: session.id)
-        } catch {
-            // If deletion fails on the server, re-insert the session
-            if !sessions.contains(where: { $0.id == session.id }) {
-                sessions.append(session)
-                sessions.sort { ($0.createdAt ?? "") > ($1.createdAt ?? "") }
-            }
-        }
+        // Remove from local cache only
+        SessionCache.shared.cacheSessions(sessions)
     }
 }
 

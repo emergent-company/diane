@@ -7,9 +7,6 @@ public final class ServerConfiguration: @unchecked Sendable {
     public var apiKey: String {
         didSet { store.set(apiKey, forKey: Keys.apiKey) }
     }
-    public var dianeServerURL: String {
-        didSet { store.set(dianeServerURL, forKey: Keys.dianeServerURL) }
-    }
     public var projectID: String {
         didSet { store.set(projectID, forKey: Keys.projectID) }
     }
@@ -24,7 +21,6 @@ public final class ServerConfiguration: @unchecked Sendable {
     enum Keys {
         static let serverURL = "serverURL"
         static let apiKey = "apiKey"
-        static let dianeServerURL = "dianeServerURL"
         static let projectID = "projectID"
     }
 
@@ -34,7 +30,6 @@ public final class ServerConfiguration: @unchecked Sendable {
         self.store = userDefaults
         self.serverURL = userDefaults.string(forKey: Keys.serverURL) ?? ""
         self.apiKey = userDefaults.string(forKey: Keys.apiKey) ?? ""
-        self.dianeServerURL = userDefaults.string(forKey: Keys.dianeServerURL) ?? ""
         self.projectID = userDefaults.string(forKey: Keys.projectID) ?? ""
     }
 }

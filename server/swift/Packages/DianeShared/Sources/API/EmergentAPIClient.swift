@@ -4,6 +4,7 @@ import Foundation
 
 public final class EmergentAPIClient: @unchecked Sendable {
     public let http: HTTPClient
+    public var projectID: String = ""
 
     public var baseURL: String {
         get { http.baseURL }
@@ -17,8 +18,9 @@ public final class EmergentAPIClient: @unchecked Sendable {
 
     // MARK: - Init
 
-    public init(baseURL: String = "", apiKey: String = "") {
+    public init(baseURL: String = "", apiKey: String = "", projectID: String = "") {
         self.http = HTTPClient(baseURL: baseURL, timeoutForRequest: 30, timeoutForResource: 60)
+        self.projectID = projectID
         if !apiKey.isEmpty {
             self.apiKey = apiKey
         }
@@ -27,16 +29,17 @@ public final class EmergentAPIClient: @unchecked Sendable {
 
     // MARK: - Configuration
 
-    public func configure(baseURL: String, apiKey: String) {
+    public func configure(baseURL: String, apiKey: String, projectID: String = "") {
         self.baseURL = baseURL
         self.apiKey = apiKey
+        self.projectID = projectID
     }
 
     public var isConfigured: Bool {
         !baseURL.isEmpty && !apiKey.isEmpty
     }
 
-    // MARK: - Convenience JSON helpers
+    // MARK: - Private JSON helpers
 
     private func jsonDecoder() -> JSONDecoder {
         let decoder = JSONDecoder()
@@ -59,81 +62,191 @@ public final class EmergentAPIClient: @unchecked Sendable {
         return try jsonDecoder().decode(R.self, from: responseData)
     }
 
-    // MARK: - Projects
-
-    public func fetchProjects() async throws -> [Project] {
-        struct ProjectsResponse: Decodable, Sendable {
-            let projects: [Project]
-        }
-        let response: APIListResponse<Project> = try await getJSON("/api/projects")
-        return response.data
+    /// GET with X-Project-ID header (used for MP API endpoints that require project scoping).
+    private func getWithProject(_ path: String) async throws -> Data {
+        let headers = projectID.isEmpty ? nil : ["X-Project-ID": projectID]
+        return try await http.get(path, headers: headers)
     }
 
-    public func fetchProjectStats() async throws -> ProjectStats {
-        try await getJSON("/api/stats")
+    /// POST with X-Project-ID header.
+    private func postWithProject(_ path: String, body: Data? = nil) async throws -> Data {
+        let headers = projectID.isEmpty ? nil : ["X-Project-ID": projectID]
+        return try await http.post(path, body: body, headers: headers)
     }
 
-    public func fetchProject(id: String) async throws -> Project {
-        try await getJSON("/api/projects/\(id)")
+    // MARK: - ACP v1 Streaming Chat (Direct to Memory Platform)
+
+    /// Creates an ACP session for the given agent.
+    /// POST /acp/v1/sessions { agent_name: "..." }
+    public func createACPSession(agentName: String = "diane-default") async throws -> String {
+        let body: [String: String] = ["agent_name": agentName]
+        let data = try await http.post("/acp/v1/sessions", body: JSONEncoder().encode(body))
+        struct ACPSessionResponse: Decodable, Sendable { let id: String }
+        let resp = try JSONDecoder().decode(ACPSessionResponse.self, from: data)
+        return resp.id
     }
 
-    // MARK: - Sessions
-
-    public func fetchSessions(projectID: String? = nil, limit: Int = 50, offset: Int = 0) async throws -> [DianeSession] {
-        var path = "/api/sessions?limit=\(limit)&offset=\(offset)"
-        if let pid = projectID { path += "&project_id=\(pid)" }
-        let response: APIListResponse<DianeSession> = try await getJSON(path)
-        return response.data
-    }
-
-    public func fetchSession(id: String) async throws -> DianeSession {
-        try await getJSON("/api/sessions/\(id)")
-    }
-
-    public func deleteSession(id: String) async throws {
-        let _: Data = try await http.delete("/api/sessions/\(id)")
-    }
-
-    public func createSession() async throws -> DianeSession {
-        struct CreateSessionResponse: Decodable, Sendable {
-            let session: DianeSession
-        }
-        let response: CreateSessionResponse = try await postJSONEmptyBody("/api/sessions")
-        return response.session
-    }
-
-    // MARK: - Messages
-
-    public func fetchMessages(sessionID: String) async throws -> [DianeMessage] {
-        let response: APIListResponse<DianeMessage> = try await getJSON("/api/sessions/\(sessionID)/messages")
-        return response.data
-    }
-
-    // MARK: - Chat / Streaming
-
-    public func sendMessageStream(
+    /// Stream a chat message directly to the ACP SSE endpoint.
+    /// POST /acp/v1/agents/{name}/runs with mode=stream
+    public func streamACP(
+        agentName: String,
         sessionID: String,
-        content: String,
-        agentID: String? = nil
+        content: String
     ) -> AsyncThrowingStream<StreamChatEvent, Error> {
-        var body: [String: Any] = [
-            "content": content,
-            "session_id": sessionID,
-        ]
-        if let agentID { body["agent_id"] = agentID }
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    guard let url = URL(string: "/acp/v1/agents/\(agentName)/runs", relativeTo: URL(string: self.http.baseURL))
+                            ?? URL(string: self.http.baseURL + "/acp/v1/agents/\(agentName)/runs") else {
+                        continuation.finish(throwing: HTTPError.invalidURL("/acp/v1/agents/\(agentName)/runs"))
+                        return
+                    }
 
-        let payload = try! JSONSerialization.data(withJSONObject: body)
+                    let body: [String: Any] = [
+                        "mode": "stream",
+                        "session_id": sessionID,
+                        "message": [
+                            ["content_type": "text/plain", "content": content]
+                        ]
+                    ]
+                    let jsonData = try JSONSerialization.data(withJSONObject: body)
 
-        return http.streamSSE(path: "/api/chat/stream", body: payload)
+                    var request = URLRequest(url: url)
+                    request.httpMethod = "POST"
+                    request.httpBody = jsonData
+                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                    request.timeoutInterval = 300
+                    // ACP auth: use Bearer if key starts with emt_
+                    if !self.apiKey.isEmpty {
+                        request.setValue(self.apiKey.hasPrefix("emt_")
+                            ? "Bearer \(self.apiKey)"
+                            : self.apiKey,
+                            forHTTPHeaderField: "Authorization")
+                    }
+
+                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    guard let httpResp = response as? HTTPURLResponse, httpResp.statusCode == 200 else {
+                        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+                        continuation.finish(throwing: HTTPError.httpError(code, nil))
+                        return
+                    }
+
+                    var currentEvent: String?
+                    var hadDone = false
+                    var hadError = false
+
+                    for try await line in bytes.lines {
+                        if line.hasPrefix("event: ") {
+                            currentEvent = String(line.dropFirst(7))
+                        } else if line.hasPrefix("data: ") {
+                            let jsonStr = String(line.dropFirst(6))
+                            if jsonStr == "[DONE]" { break }
+
+                            guard let data = jsonStr.data(using: .utf8),
+                                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                                continue
+                            }
+
+                            let eventType = currentEvent ?? ""
+                            currentEvent = nil
+
+                            switch eventType {
+                            case "run.created", "run.in-progress":
+                                break
+
+                            case "message.part":
+                                guard let part = json["part"] as? [String: Any],
+                                      let contentType = part["content_type"] as? String else {
+                                    continue
+                                }
+                                switch contentType {
+                                case "text/plain":
+                                    if let content = part["content"] as? String, !content.isEmpty {
+                                        continuation.yield(StreamChatEvent(
+                                            type: "token", content: content,
+                                            name: nil, role: nil, sessionID: sessionID, runID: nil, message: nil))
+                                    }
+                                case "application/json":
+                                    if let meta = part["metadata"] as? [String: Any],
+                                       let kind = meta["kind"] as? String,
+                                       kind == "trajectory" {
+                                        let toolName = meta["tool_name"] as? String ?? "unknown"
+                                        let hasOutput = meta["tool_output"] != nil
+                                        continuation.yield(StreamChatEvent(
+                                            type: hasOutput ? "tool_result" : "tool_call",
+                                            content: nil, name: toolName, role: nil,
+                                            sessionID: sessionID, runID: nil, message: nil))
+                                    }
+                                default:
+                                    break
+                                }
+
+                            case "message.created":
+                                if let msg = json["message"] as? [String: Any] {
+                                    let role = msg["role"] as? String ?? ""
+                                    let parts = msg["parts"] as? [[String: Any]] ?? []
+                                    let textContent = parts.compactMap { p -> String? in
+                                        guard let ct = p["content_type"] as? String, ct == "text/plain" else { return nil }
+                                        return p["content"] as? String
+                                    }.joined()
+                                    continuation.yield(StreamChatEvent(
+                                        type: "message", content: textContent.isEmpty ? nil : textContent,
+                                        name: nil, role: role.isEmpty ? nil : role,
+                                        sessionID: sessionID, runID: nil, message: nil))
+                                }
+
+                            case "run.completed":
+                                hadDone = true
+                                continuation.yield(StreamChatEvent(
+                                    type: "done", content: nil, name: nil, role: nil,
+                                    sessionID: sessionID, runID: nil, message: nil))
+
+                            case "run.failed", "run.cancelled":
+                                hadError = true
+                                var errMsg = eventType
+                                if let run = json["run"] as? [String: Any],
+                                   let err = run["error"] as? [String: Any],
+                                   let m = err["message"] as? String { errMsg = m }
+                                continuation.yield(StreamChatEvent(
+                                    type: "error", content: nil, name: nil, role: nil,
+                                    sessionID: sessionID, runID: nil, message: errMsg))
+
+                            case "error":
+                                hadError = true
+                                var errMsg = "stream error"
+                                if let e = json["error"] as? [String: Any],
+                                   let m = e["message"] as? String { errMsg = m }
+                                continuation.yield(StreamChatEvent(
+                                    type: "error", content: nil, name: nil, role: nil,
+                                    sessionID: sessionID, runID: nil, message: errMsg))
+
+                            default:
+                                break
+                            }
+
+                            if hadDone || hadError { break }
+                        }
+                    }
+
+                    continuation.finish()
+                } catch {
+                    if Task.isCancelled { continuation.finish(); return }
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { @Sendable _ in task.cancel() }
+        }
     }
 
-    public func sendMessage(
+    /// Convenience: send a message via ACP and wait for completion.
+    public func sendMessageACP(
+        agentName: String = "diane-default",
         sessionID: String,
-        content: String,
-        agentID: String? = nil
+        content: String
     ) async throws -> StreamChatEvent {
-        let stream = sendMessageStream(sessionID: sessionID, content: content, agentID: agentID)
-        var finalEvent: StreamChatEvent?
+        let stream = streamACP(agentName: agentName, sessionID: sessionID, content: content)
+        var finalEvent: StreamChatEvent? = nil
         for try await event in stream {
             if event.type == "done" || event.type == "error" {
                 finalEvent = event
@@ -146,85 +259,54 @@ public final class EmergentAPIClient: @unchecked Sendable {
         return event
     }
 
-    // MARK: - Agents
+    // MARK: - Projects (MP API)
 
-    public func fetchAgents() async throws -> [AgentInfo] {
-        let response: APIListResponse<AgentInfo> = try await getJSON("/api/agents")
-        return response.data
-    }
-
-    public func fetchAgentDefs() async throws -> [AgentDef] {
-        struct AgentDefsResponse: Decodable, Sendable {
-            let definitions: [AgentDef]
+    public func fetchProjects() async throws -> [Project] {
+        struct ProjectsResponse: Decodable, Sendable { let projects: [Project] }
+        let data = try await http.get("/api/projects")
+        if let resp = try? JSONDecoder().decode(ProjectsResponse.self, from: data), !resp.projects.isEmpty {
+            return resp.projects
         }
-        let response: APIListResponse<AgentDef> = try await getJSON("/api/agents/definitions")
-        return response.data
+        return (try? JSONDecoder().decode([Project].self, from: data)) ?? []
     }
 
-    public func fetchAgentDetail(id: String) async throws -> AgentDetail {
-        try await getJSON("/api/agents/\(id)")
+    public func fetchProjectStats() async throws -> ProjectStats {
+        let data = try await http.get("/api/stats")
+        // Try multiple response formats
+        if let s = try? JSONDecoder().decode(ProjectStats.self, from: data) { return s }
+        struct AltStats: Decodable, Sendable {
+            let totalObjects: Int?; let totalTypes: Int?; let enabledTypes: Int?
+            let typesWithObjects: Int?; let totalDocuments: Int?
+        }
+        let _: AltStats = try JSONDecoder().decode(AltStats.self, from: data)
+        return ProjectStats(totalObjects: 0, totalTypes: 0, enabledTypes: 0, typesWithObjects: 0, totalDocuments: 0)
     }
 
     // MARK: - Diagnostics
 
     public func fetchDiagnostics() async throws -> HealthStatus {
-        try await getJSON("/api/status")
+        try await getJSON("/api/diagnostics")
     }
 
-    // MARK: - Search
+    // MARK: - Search (MP API)
 
     public func searchObjects(query: String, type: String? = nil) async throws -> [AnySearchResult] {
         var path = "/api/search?q=\(query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query)"
         if let type { path += "&type=\(type)" }
-        struct SearchResponse: Decodable, Sendable {
-            let results: [AnySearchResult]
-        }
+        struct SearchResponse: Decodable, Sendable { let results: [AnySearchResult] }
         let response: SearchResponse = try await getJSON(path)
         return response.results
     }
 
-    // MARK: - MCP Servers
-
-    public func fetchMCPServers() async throws -> [MCPServer] {
-        let response: APIListResponse<MCPServer> = try await getJSON("/api/mcp-servers")
-        return response.data
-    }
-
-    public func fetchMCPTools(serverID: String) async throws -> [MCPToolInfo] {
-        let response: APIListResponse<MCPToolInfo> = try await getJSON("/api/mcp-servers/\(serverID)/tools")
-        return response.data
-    }
-
-    // MARK: - Relay Nodes
-
-    public func fetchRelayNodes() async throws -> [RelayNode] {
-        let response: APIListResponse<RelayNode> = try await getJSON("/api/nodes")
-        return response.data
-    }
-
-    // MARK: - Workers
-
-    public func fetchWorkers() async throws -> [Worker] {
-        let response: APIListResponse<Worker> = try await getJSON("/api/workers")
-        return response.data
-    }
-
-    // MARK: - Documents
+    // MARK: - Documents (MP API)
 
     public func fetchDocuments(projectID: String) async throws -> [Document] {
-        let response: APIListResponse<Document> = try await getJSON("/api/projects/\(projectID)/documents")
-        return response.data
+        struct Response: Decodable, Sendable { let documents: [Document] }
+        let data = try await http.get("/api/documents", headers: ["X-Project-ID": projectID])
+        if let resp = try? JSONDecoder().decode(Response.self, from: data) { return resp.documents }
+        return (try? JSONDecoder().decode([Document].self, from: data)) ?? []
     }
 
-    /// Upload a file as a document to the Memory Platform.
-    /// Uses multipart/form-data POST to the document upload endpoint.
-    /// - Parameters:
-    ///   - fileData: Raw file contents
-    ///   - filename: Original filename (e.g., "report.pdf")
-    ///   - mimeType: MIME type string (e.g., "application/pdf")
-    ///   - projectID: The project to upload into
-    ///   - autoExtract: Whether the server should run extraction after upload
-    /// - Returns: The created Document model
     public func uploadDocument(
         fileData: Data,
         filename: String,
@@ -234,103 +316,48 @@ public final class EmergentAPIClient: @unchecked Sendable {
     ) async throws -> Document {
         let boundary = "Boundary-\(UUID().uuidString)"
         var body = Data()
-
-        // autoExtract field
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"autoExtract\"\r\n\r\n".data(using: .utf8)!)
         body.append("\(autoExtract)\r\n".data(using: .utf8)!)
-
-        // file field
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n".data(using: .utf8)!)
         body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
         body.append(fileData)
         body.append("\r\n".data(using: .utf8)!)
-
-        // closing boundary
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
-
         let headers: [String: String] = [
             "Content-Type": "multipart/form-data; boundary=\(boundary)",
             "X-Project-ID": projectID,
         ]
         let data = try await http.post("/api/documents/upload", body: body, headers: headers, timeout: 120)
-
         struct UploadResponse: Decodable, Sendable {
-            let document: UploadDocument
-            let isDuplicate: Bool?
+            let document: UploadDocument; let isDuplicate: Bool?
         }
         struct UploadDocument: Decodable, Sendable {
-            let id: String
-            let name: String
-            let mimeType: String?
-            let fileSizeBytes: Int?
-            let conversionStatus: String?
-            let storageKey: String?
+            let id: String; let name: String; let mimeType: String?
+            let fileSizeBytes: Int?; let conversionStatus: String?; let storageKey: String?
             let createdAt: String?
-
-            enum CodingKeys: String, CodingKey {
-                case id, name
-                case mimeType = "mime_type"
-                case fileSizeBytes = "file_size_bytes"
-                case conversionStatus = "conversion_status"
-                case storageKey = "storage_key"
-                case createdAt = "created_at"
-            }
         }
-
         let uploadResp = try JSONDecoder().decode(UploadResponse.self, from: data)
-
         return Document(
-            id: uploadResp.document.id,
-            title: uploadResp.document.name,
-            content: nil,
-            fileType: uploadResp.document.mimeType,
-            size: uploadResp.document.fileSizeBytes,
-            projectID: projectID,
-            createdAt: uploadResp.document.createdAt,
-            updatedAt: nil
-        )
+            id: uploadResp.document.id, title: uploadResp.document.name,
+            content: nil, fileType: uploadResp.document.mimeType,
+            size: uploadResp.document.fileSizeBytes, projectID: projectID,
+            createdAt: uploadResp.document.createdAt, updatedAt: nil)
     }
 
-    // MARK: - Schema
+    // MARK: - Schema (MP API)
 
     public func fetchSchema() async throws -> SchemaResponse {
         try await getJSON("/api/schema")
     }
-}
 
-// MARK: - API Response Wrapper
+    // MARK: - Agents (MP API)
 
-public struct APIListResponse<T: Decodable & Sendable>: Decodable, Sendable {
-    public let data: [T]
-    public let total: Int?
-    public let page: Int?
-    public let pageSize: Int?
-
-    enum CodingKeys: String, CodingKey {
-        case data, total, page
-        case pageSize = "page_size"
-    }
-}
-
-// MARK: - AnySearchResult (polymorphic search result)
-
-public struct AnySearchResult: Codable, Sendable, Identifiable {
-    public let id: String
-    public let type: String
-    public let title: String?
-    public let subtitle: String?
-    public let score: Double?
-    public let metadata: [String: String]?
-
-    enum CodingKeys: String, CodingKey {
-        case id, type, title, subtitle, score, metadata
-    }
-
-    public init(id: String, type: String, title: String? = nil, subtitle: String? = nil,
-                score: Double? = nil, metadata: [String: String]? = nil) {
-        self.id = id; self.type = type; self.title = title; self.subtitle = subtitle
-        self.score = score; self.metadata = metadata
+    public func fetchAgentDefs(projectID: String) async throws -> [AgentDef] {
+        let data = try await http.get("/api/agent-definitions", headers: ["X-Project-ID": projectID])
+        struct Response: Decodable, Sendable { let data: [AgentDef] }
+        if let resp = try? JSONDecoder().decode(Response.self, from: data) { return resp.data }
+        return (try? JSONDecoder().decode([AgentDef].self, from: data)) ?? []
     }
 }

@@ -43,9 +43,12 @@ struct DianeCompanionApp: App {
         // 0. Start network monitoring
         NetworkMonitor.shared.start()
 
-        // 1. Use Diane server URL from config (or fall back to Memory Platform)
-        let effectiveURL = config.dianeServerURL.isEmpty ? MemoryPlatform.defaultURL : config.dianeServerURL
-        cloudClient.configure(baseURL: effectiveURL, apiKey: config.apiKey)
+        // 1. Connect to Memory Platform
+        cloudClient.configure(
+            baseURL: MemoryPlatform.defaultURL,
+            apiKey: config.apiKey,
+            projectID: config.projectID
+        )
 
         // 2. If no API key, show config sheet
         if !config.isConfigured && !CommandLine.arguments.contains("UITesting") {

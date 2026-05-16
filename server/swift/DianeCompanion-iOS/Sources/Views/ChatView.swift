@@ -435,9 +435,8 @@ struct ChatView: View {
         isLoading = true
         error = nil
         do {
-            let fetched = try await cloudClient.fetchMessages(sessionID: session.id)
-            messages = fetched
-            SessionCache.shared.cacheMessages(fetched, for: session.id)
+            messages = SessionCache.shared.loadCachedMessages(for: session.id)
+            SessionCache.shared.cacheMessages(messages, for: session.id)
         } catch {
             // Fall back to cached messages
             let cached = SessionCache.shared.loadCachedMessages(for: session.id)
@@ -591,10 +590,10 @@ struct ChatView: View {
 
         streamingTask = Task {
             do {
-                let stream = cloudClient.sendMessageStream(
+                let stream = cloudClient.streamACP(
+                    agentName: "diane-default",
                     sessionID: session.id,
-                    content: messageContent,
-                    agentID: session.agentName ?? "diane-default"
+                    content: messageContent
                 )
 
                 var accumulatedContent = ""
@@ -691,6 +690,9 @@ struct ChatView: View {
                     }
                     self.isStreaming = false
                 }
+
+                // Cache messages after successful stream
+                SessionCache.shared.cacheMessages(messages, for: session.id)
 
             } catch {
                 if Task.isCancelled { return }
