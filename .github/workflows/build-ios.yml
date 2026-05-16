@@ -1,0 +1,107 @@
+name: Build iOS (TestFlight)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server/swift/DianeCompanion-iOS/Sources/**'
+      - 'server/swift/DianeCompanion-iOS/DianeCompanion/**'
+      - 'server/swift/DianeCompanion-iOS/project.yml'
+      - 'server/swift/DianeCompanion-iOS/Scripts/**'
+      - 'server/swift/Packages/DianeShared/**'
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: 'Upload to TestFlight after build'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios:
+    name: Build iOS App
+    runs-on: [self-hosted, macos-arm64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app || true
+
+      - name: Install tools
+        run: |
+          brew list xcodegen &>/dev/null || brew install xcodegen
+
+      - name: Derive version
+        id: version
+        run: |
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          COMMIT=$(git rev-parse --short HEAD)
+          if [ -n "$TAG" ]; then
+            echo "version=${TAG}-preview+${COMMIT}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-preview+${COMMIT}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Archive
+        id: archive
+        run: |
+          mkdir -p build
+          chmod +x Scripts/build-ios.sh
+          ./Scripts/build-ios.sh 2>&1 | tee build/build-log.txt
+          exit_code=${PIPESTATUS[0]}
+          if [ $exit_code -ne 0 ]; then
+            grep -E "(error:|❌|BUILD FAILED|ARCHIVE FAILED)" build/build-log.txt | head -10 | while read line; do
+              echo "::error::$line"
+            done
+          fi
+          exit $exit_code
+        working-directory: server/swift/DianeCompanion-iOS
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: diane-ios-${{ github.sha }}
+          path: server/swift/DianeCompanion-iOS/build/Export/Diane.ipa
+          retention-days: 14
+
+      - name: Upload archive (for re-signing/debugging)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diane-ios-archive-${{ github.sha }}
+          path: server/swift/DianeCompanion-iOS/build/Diane.xcarchive
+          retention-days: 3
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-log-${{ github.sha }}
+          path: server/swift/DianeCompanion-iOS/build/build-log.txt
+
+      - name: Upload to TestFlight
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.upload) || (github.event_name == 'push') }}
+        run: |
+          IPA=$(find build/Export -name "*.ipa" -type f | head -1)
+          if [ -z "$IPA" ]; then
+            echo "::error::No IPA found for upload"
+            exit 1
+          fi
+          echo "==> Uploading $IPA to App Store Connect..."
+          xcrun altool --upload-app \
+            -f "$IPA" \
+            -t ios \
+            -u "${{ secrets.NOTARIZE_APPLE_ID }}" \
+            -p "${{ secrets.NOTARIZE_PASSWORD }}" \
+            --output-format xml
+        working-directory: server/swift/DianeCompanion-iOS
+        env:
+          NOTARIZE_APPLE_ID: ${{ secrets.NOTARIZE_APPLE_ID }}
+          NOTARIZE_PASSWORD: ${{ secrets.NOTARIZE_PASSWORD }}
