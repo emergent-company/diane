@@ -53,6 +53,7 @@ targets:
       path: DianeCompanion/Info.plist
       properties:
         UILaunchScreen: { }
+        ITSAppUsesNonExemptEncryption: false
         UISupportedInterfaceOrientations: ["UIInterfaceOrientationPortrait"]
         UISupportedInterfaceOrientations~ipad:
           - "UIInterfaceOrientationPortrait"
