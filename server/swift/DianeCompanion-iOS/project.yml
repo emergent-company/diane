@@ -19,6 +19,7 @@ settings:
         ENABLE_HARDENED_RUNTIME: NO
         MARKETING_VERSION: 1.42.0
         CURRENT_PROJECT_VERSION: 1
+        ALWAYS_SEARCH_USER_PATHS: NO
 
 packages:
   Sentry:

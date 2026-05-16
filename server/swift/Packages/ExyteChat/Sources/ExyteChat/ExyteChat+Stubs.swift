@@ -52,7 +52,7 @@ public struct MediaPickerSelectionParameters: Sendable {
 }
 
 public typealias MediaPickerLiveCameraStyle = LiveCameraCellStyle
-public typealias MediaPickerOrientationHandler = () -> Void
+public typealias MediaPickerOrientationHandler = @Sendable () -> Void
 
 public struct LiveCameraCellStyle: Sendable {
     public init() {}

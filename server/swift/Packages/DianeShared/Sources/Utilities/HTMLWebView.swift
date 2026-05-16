@@ -25,7 +25,9 @@ public struct HTMLWebView: UIViewRepresentable {
 
     public func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        config.preferences.javaScriptEnabled = false
+        let prefs = WKWebpagePreferences()
+        prefs.allowsContentJavaScript = false
+        config.defaultWebpagePreferences = prefs
         config.suppressesIncrementalRendering = true
         config.allowsInlineMediaPlayback = false
 

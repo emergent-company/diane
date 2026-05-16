@@ -9,6 +9,11 @@
 import Foundation
 @preconcurrency import AVFoundation
 
+private struct UncheckedSendableBox<T>: @unchecked Sendable {
+    let value: T
+    init(_ value: T) { self.value = value }
+}
+
 final actor Recorder {
 
     // duration and waveform samples
@@ -73,22 +78,28 @@ final actor Recorder {
             audioRecorder?.record()
             durationProgressHandler(0.0, [])
 
-            DispatchQueue.main.async { [weak self] in
-                self?.audioTimer?.invalidate()
-                self?.audioTimer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
-                    Task {
-                        await self?.onTimer(durationProgressHandler)
-                    }
-                }
-                if let timer = self?.audioTimer {
-                    RunLoop.main.add(timer, forMode: .common)
-                }
+            Task { [weak self] in
+                await self?.scheduleAudioTimer(durationProgressHandler)
             }
 
             return recordingUrl
         } catch {
             stopRecording()
             return nil
+        }
+    }
+
+    private func scheduleAudioTimer(_ durationProgressHandler: @escaping ProgressHandler) {
+        audioTimer?.invalidate()
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            Task {
+                await self?.onTimer(durationProgressHandler)
+            }
+        }
+        audioTimer = timer
+        let timerRef = UncheckedSendableBox(timer)
+        DispatchQueue.main.async {
+            RunLoop.main.add(timerRef.value, forMode: .common)
         }
     }
 

@@ -425,20 +425,9 @@ struct ChatView: View {
     private func loadMessages() async {
         isLoading = true
         error = nil
-        do {
-            messages = SessionCache.shared.loadCachedMessages(for: session.id)
-            SessionCache.shared.cacheMessages(messages, for: session.id)
-        } catch {
-            // Fall back — loadCachedMessages is synchronous so this shouldn't fail
-            let cached = SessionCache.shared.loadCachedMessages(for: session.id)
-            if cached.isEmpty {
-                self.error = error.localizedDescription
-            } else {
-                messages = cached
-            }
-        }
+        messages = SessionCache.shared.loadCachedMessages(for: session.id)
+        SessionCache.shared.cacheMessages(messages, for: session.id)
         isLoading = false
-        // Mark session as read
         SessionCache.shared.markRead(sessionID: session.id)
     }
 

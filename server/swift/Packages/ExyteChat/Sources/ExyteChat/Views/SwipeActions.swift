@@ -7,7 +7,7 @@
 import SwiftUI
 
 protocol SwipeActionable {
-    func render(type: ChatType) -> UIImage
+    @MainActor func render(type: ChatType) -> UIImage
     var action: (Message, @escaping (Message, DefaultMessageMenuAction) -> Void) -> Void { get }
     var activeFor: (Message) -> Bool { get }
     var background: Color? { get }

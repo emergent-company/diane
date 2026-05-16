@@ -40,6 +40,7 @@ public final class PushNotificationService: NSObject, @unchecked Sendable {
     }
 
     /// Unregister from remote notifications and persist the preference.
+    @MainActor
     public func unregister() {
         UIApplication.shared.unregisterForRemoteNotifications()
         _isRegistered = false

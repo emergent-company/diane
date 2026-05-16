@@ -49,7 +49,6 @@ struct MessageView: View {
         let isCurrentUser = message.user.isCurrentUser
         let bubblePaddings = MessageView.horizontalScreenEdgePadding * 2 + MessageView.horizontalBubblePadding
         let avatarViewWithPaddings = params.avatarSize + MessageView.horizontalSpacing
-        let statusViewWithPaddings = MessageView.statusViewWidth + MessageView.horizontalSpacing
         let textPaddings = MessageView.horizontalTextPadding * 2
         let widthWithoutMedia =
 UIScreen.main.bounds.width

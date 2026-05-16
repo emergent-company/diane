@@ -104,7 +104,7 @@ struct UIList<MessageContent: View>: UIViewRepresentable {
         }
 
         if context.coordinator.sections != sections || tableView.contentOffset != chatParams.externalContentOffset, chatParams.scrollToMessageID != nil {
-            updateQueue.didPerformRealUpdate = true
+            Task { await updateQueue.markRealUpdate() }
         }
 
         let needToScroll = chatParams.externalContentOffset != nil || chatParams.scrollToMessageID != nil
@@ -802,6 +802,10 @@ actor UpdateQueue {
         self.didPerformRealUpdate = true
         finishBecauseRealUpdateHappened()
     }
+
+    func markRealUpdate() {
+        didPerformRealUpdate = true
+    }
 }
 
 public final class TableUpdateTransaction {
@@ -818,10 +822,11 @@ public final class TableUpdateTransaction {
         }
 
         // This runs AFTER SwiftUI had a chance to react
+        let queue = updateQueue
         DispatchQueue.main.async {
             Task {
                 //print("TableUpdateTransaction finishIfNeeded")
-                await self.updateQueue?.finishIfNeeded()
+                await queue?.finishIfNeeded()
             }
         }
 

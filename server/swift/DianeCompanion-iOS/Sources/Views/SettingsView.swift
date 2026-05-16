@@ -322,7 +322,8 @@ struct SettingsView: View {
         #if DEBUG
         return "Debug (Xcode)"
         #else
-        if Bundle.main.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt" {
+        let receiptURL = Bundle.main.value(forKey: "appStoreReceiptURL") as? URL
+        if receiptURL?.lastPathComponent == "sandboxReceipt" {
             return "TestFlight"
         }
         return "App Store"

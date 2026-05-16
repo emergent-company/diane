@@ -270,7 +270,7 @@ public extension ChatView {
     // MARK: - Built-in input view
 
     /// binding to current text in the default input text field
-    public func inputViewText(_ binding: Binding<String>) -> ChatView {
+    func inputViewText(_ binding: Binding<String>) -> ChatView {
         var view = self
         view.inputViewCustomizationParameters.externalInputText = binding.wrappedValue
         view.inputViewCustomizationParameters.onInputTextChange = { binding.wrappedValue = $0 }
