@@ -36,7 +36,6 @@ struct SettingsView: View {
     @State private var dianeServerURL: String = ""
     @State private var isTestingConnection = false
     @State private var connectionTestResult: ConnectionTestResult?
-    @State private var showQRScanner = false
     @State private var pushEnabled = PushNotificationService.shared.isRegistered
     @State private var selectedSound: String = "default"
 
@@ -108,28 +107,6 @@ struct SettingsView: View {
                 .autocapitalization(.none)
                 .disableAutocorrection(true)
 
-            // Scan QR Code button
-            Button(action: { showQRScanner = true }) {
-                HStack(spacing: DesignTokens.spacingSM) {
-                    Image(systemName: "qrcode.viewfinder")
-                        .font(.title3)
-                    Text("Scan QR Code from macOS")
-                        .font(.subheadline)
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-            .sheet(isPresented: $showQRScanner) {
-                QRScanView { payload in
-                    applyScannedPayload(payload)
-                    showQRScanner = false
-                } onCancel: {
-                    showQRScanner = false
-                }
-            }
-
             // Test Connection
             HStack {
                 if isTestingConnection {
@@ -170,7 +147,7 @@ struct SettingsView: View {
         } header: {
             Label("Connection", systemImage: "antenna.radiowaves.left.and.right")
         } footer: {
-            Text("Scan a QR code from the Diane macOS app to auto-configure. The Memory Platform URL is fixed.")
+            Text("Configure your API key and project ID. The Memory Platform URL is fixed.")
         }
     }
 
@@ -339,15 +316,6 @@ struct SettingsView: View {
         config.dianeServerURL = dianeServerURL.trimmingCharacters(in: .whitespaces)
         cloudClient.configure(baseURL: MemoryPlatform.defaultURL, apiKey: config.apiKey)
         dismiss()
-    }
-
-    /// Apply credentials from a scanned QR code payload.
-    private func applyScannedPayload(_ payload: AuthCodePayload) {
-        apiKey = payload.apiKey
-        projectID = payload.projectID
-        // dianeServerURL is NOT in the QR code — user enters it separately
-        // Save immediately
-        saveConfig()
     }
 
     private func testConnection() async {

@@ -473,7 +473,7 @@ final class EdgeCaseDecodingTests: XCTestCase {
             "id": "msg-tc-2",
             "role": "assistant",
             "content": "Here are the results.",
-            "toolCalls": [
+            "tool_calls": [
                 {"id": "call_2", "name": "search_docs", "arguments": "{\\"query\\":\\"weather\\"}"}
             ]
         }

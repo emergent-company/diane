@@ -68,6 +68,7 @@ func startLocalAPI(pc *config.ProjectConfig, port int, callbackHost string, mcpP
 	mux.HandleFunc("/api/schema", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleSchema(w, r) })
 	mux.HandleFunc("/api/schema/objects/", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleSchemaObjects(w, r) })
 	mux.HandleFunc("/api/doctor", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleDoctor(w, r) })
+	mux.HandleFunc("/api/auth-code", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleAuthCode(w, r) })
 
 	// Provider CRUD routes via bridge + proxy for rest of /api/v1, /api/graph/, /api/embeddings/
 	mux.HandleFunc("/api/projects", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleProjectsProxy(w, r) })
@@ -75,7 +76,7 @@ func startLocalAPI(pc *config.ProjectConfig, port int, callbackHost string, mcpP
 	mux.HandleFunc("/api/graph/", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleMPProxy(w, r) })
 	mux.HandleFunc("/api/embeddings/", func(w http.ResponseWriter, r *http.Request) { registered++; api.handleMPProxy(w, r) })
 
-	expected := 24
+	expected := 25
 	if registered != expected {
 		log.Printf("[LOCAL-API] WARNING: registered %d routes, expected %d — check for missing handlers", registered, expected)
 	}
@@ -286,6 +287,21 @@ func (h *apiHandlers) handleDoctor(w http.ResponseWriter, r *http.Request) {
 	addResult("version_match", vmStatus, vmMsg)
 
 	writeJSON(w, DoctorResponse{Ok: true, Version: Version, Results: results})
+}
+
+// handleAuthCode returns the auth code for iOS QR code pairing.
+// GET /api/auth-code → {"mp_url": "...", "api_key": "...", "project_id": "..."}
+func (h *apiHandlers) handleAuthCode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	writeJSON(w, map[string]any{
+		"mp_url":     h.pc.ServerURL,
+		"api_key":    h.pc.Token,
+		"project_id": h.pc.ProjectID,
+	})
 }
 
 // ── Agent handlers ──
@@ -2243,10 +2259,11 @@ func (h *apiHandlers) handleNodes(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Enrich with graph config fields (mode, hostname, provider, etc.)
-		// Only set fields the relay session doesn't already have.
+		// auth_code is also enriched here — it's injected below for the
+		// local master node and persisted to the graph on subsequent calls.
 		if cfg, ok := graphConfigs[id]; ok {
 			for _, key := range []string{"mode", "hostname", "provider",
-				"uptime", "relay_active", "bot_active", "healthy"} {
+				"uptime", "relay_active", "bot_active", "healthy", "auth_code"} {
 				if _, exists := m[key]; !exists {
 					if val, ok := cfg[key]; ok {
 						m[key] = val
@@ -2277,6 +2294,23 @@ func (h *apiHandlers) handleNodes(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			nodes = append(nodes, node)
+		}
+	}
+
+	// Inject auth_code into the first node (the local master) so it's visible
+	// in the companion's RelayNodesView for iOS QR code pairing.
+	if len(nodes) > 0 {
+		if m, ok := nodes[0].(map[string]any); ok {
+			if _, exists := m["auth_code"]; !exists {
+				authData := map[string]any{
+					"mp_url":     h.pc.ServerURL,
+					"api_key":    h.pc.Token,
+					"project_id": h.pc.ProjectID,
+				}
+				authJSON, _ := json.Marshal(authData)
+				m["auth_code"] = string(authJSON)
+				nodes[0] = m
+			}
 		}
 	}
 
