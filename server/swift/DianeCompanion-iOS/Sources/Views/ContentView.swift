@@ -191,7 +191,7 @@ struct SessionListiPadView: View {
         error = nil
         isOffline = false
         do {
-            sessions = try await apiClient.fetchSessions()
+            sessions = try await cloudClient.fetchSessions()
             SessionCache.shared.cacheSessions(sessions)
         } catch {
             let cached = SessionCache.shared.loadCachedSessions()
@@ -207,7 +207,7 @@ struct SessionListiPadView: View {
 
     private func createNewSession() async {
         do {
-            let session = try await apiClient.createSession()
+            let session = try await cloudClient.createSession()
             sessions.insert(session, at: 0)
             selectedSession = session
         } catch {

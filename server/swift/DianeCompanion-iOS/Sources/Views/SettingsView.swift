@@ -33,6 +33,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var serverURL: String = ""
+    @State private var dianeServerURL: String = ""
     @State private var apiKey: String = ""
     @State private var projectID: String = ""
     @State private var isTestingConnection = false
@@ -64,6 +65,7 @@ struct SettingsView: View {
         }
         .onAppear {
             serverURL = config.serverURL
+            dianeServerURL = config.dianeServerURL
             apiKey = config.apiKey
             projectID = config.projectID
         }
@@ -73,6 +75,7 @@ struct SettingsView: View {
 
     private var hasChanges: Bool {
         serverURL != config.serverURL
+        || dianeServerURL != config.dianeServerURL
         || apiKey != config.apiKey
         || projectID != config.projectID
     }
@@ -81,7 +84,13 @@ struct SettingsView: View {
 
     private var connectionSection: some View {
         Section {
-            TextField("Server URL", text: $serverURL)
+            TextField("Memory Platform URL", text: $serverURL)
+                .textContentType(.URL)
+                .keyboardType(.URL)
+                .autocapitalization(.none)
+                .disableAutocorrection(true)
+
+            TextField("Diane Server URL", text: $dianeServerURL)
                 .textContentType(.URL)
                 .keyboardType(.URL)
                 .autocapitalization(.none)
@@ -299,17 +308,20 @@ struct SettingsView: View {
 
     private func saveConfig() {
         config.serverURL = serverURL.trimmingCharacters(in: .whitespaces)
+        config.dianeServerURL = dianeServerURL.trimmingCharacters(in: .whitespaces)
         config.apiKey = apiKey.trimmingCharacters(in: .whitespaces)
         config.projectID = projectID.trimmingCharacters(in: .whitespaces)
-        apiClient.configure(baseURL: config.serverURL, apiKey: config.apiKey)
-        cloudClient.configure(baseURL: MemoryPlatform.defaultURL, apiKey: config.apiKey)
+        cloudClient.configure(baseURL: config.serverURL, apiKey: config.apiKey)
         dismiss()
     }
 
     private func testConnection() async {
         let testURL = serverURL.trimmingCharacters(in: .whitespaces)
-        guard !testURL.isEmpty else {
-            connectionTestResult = .failure("Server URL is empty")
+        let testDianeURL = dianeServerURL.trimmingCharacters(in: .whitespaces)
+        let effectiveDianeURL = testDianeURL.isEmpty ? testURL : testDianeURL
+
+        guard !testURL.isEmpty && !effectiveDianeURL.isEmpty else {
+            connectionTestResult = .failure("Server URLs are empty")
             return
         }
 
@@ -318,42 +330,32 @@ struct SettingsView: View {
 
         // Temporarily configure the client with the entered values
         let savedURL = config.serverURL
+        let savedDianeURL = config.dianeServerURL
         let savedKey = config.apiKey
         config.serverURL = testURL
+        config.dianeServerURL = testDianeURL
         config.apiKey = apiKey.trimmingCharacters(in: .whitespaces)
-        apiClient.configure(baseURL: testURL, apiKey: apiKey)
+        cloudClient.configure(baseURL: testURL, apiKey: apiKey)
 
         do {
-            let _ = try await apiClient.fetchSessions()
+            // Test Memory Platform connectivity
+            let _ = try await cloudClient.fetchSessions()
             connectionTestResult = .success
         } catch {
-            // Fallback: try the health endpoint directly
-            do {
-                guard let url = URL(string: testURL)?.appendingPathComponent("/api/health") else {
-                    throw HTTPError.invalidURL(testURL)
-                }
-                var request = URLRequest(url: url)
-                request.timeoutInterval = 10
-                let (_, response) = try await URLSession.shared.data(for: request)
-                guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                    throw HTTPError.httpError((response as? HTTPURLResponse)?.statusCode ?? 0, nil)
-                }
-                connectionTestResult = .success
-            } catch {
-                let message: String
-                if let httpErr = error as? HTTPError {
-                    message = httpErr.localizedDescription
-                } else {
-                    message = error.localizedDescription
-                }
-                connectionTestResult = .failure(message)
+            let message: String
+            if let httpErr = error as? HTTPError {
+                message = httpErr.localizedDescription
+            } else {
+                message = error.localizedDescription
             }
+            connectionTestResult = .failure(message)
         }
 
         // Restore saved config
         config.serverURL = savedURL
+        config.dianeServerURL = savedDianeURL
         config.apiKey = savedKey
-        apiClient.configure(baseURL: savedURL, apiKey: savedKey)
+        cloudClient.configure(baseURL: savedURL, apiKey: savedKey)
         isTestingConnection = false
     }
 

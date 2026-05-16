@@ -33,8 +33,8 @@ struct DianeCompanionApp: App {
         NetworkMonitor.shared.start()
 
         // 1. Configure clients
-        apiClient.configure(baseURL: config.serverURL, apiKey: config.apiKey)
-        cloudClient.configure(baseURL: MemoryPlatform.defaultURL, apiKey: config.apiKey)
+        let dianeURL = config.dianeServerURL.isEmpty ? config.serverURL : config.dianeServerURL
+        cloudClient.configure(baseURL: config.serverURL, apiKey: config.apiKey)
 
         // 2. If no API key, show config sheet
         if !config.isConfigured && !CommandLine.arguments.contains("UITesting") {

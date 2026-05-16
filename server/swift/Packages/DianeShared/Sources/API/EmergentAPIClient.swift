@@ -94,6 +94,14 @@ public final class EmergentAPIClient: @unchecked Sendable {
         let _: Data = try await http.delete("/api/sessions/\(id)")
     }
 
+    public func createSession() async throws -> DianeSession {
+        struct CreateSessionResponse: Decodable, Sendable {
+            let session: DianeSession
+        }
+        let response: CreateSessionResponse = try await postJSONEmptyBody("/api/sessions")
+        return response.session
+    }
+
     // MARK: - Messages
 
     public func fetchMessages(sessionID: String) async throws -> [DianeMessage] {

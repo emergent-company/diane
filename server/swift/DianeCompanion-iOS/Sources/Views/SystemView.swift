@@ -30,7 +30,7 @@ struct SystemView: View {
                         HStack {
                             Label("Server", systemImage: "externaldrive")
                             Spacer()
-                            Text(apiClient.baseURL.isEmpty ? "Not configured" : apiClient.baseURL)
+                            Text(cloudClient.baseURL.isEmpty ? "Not configured" : cloudClient.baseURL)
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                                 .lineLimit(1)

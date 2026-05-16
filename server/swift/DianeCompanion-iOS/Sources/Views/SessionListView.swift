@@ -249,7 +249,7 @@ struct SessionListView: View {
         error = nil
         isOffline = false
         do {
-            sessions = try await apiClient.fetchSessions()
+            sessions = try await cloudClient.fetchSessions()
             SessionCache.shared.cacheSessions(sessions)
         } catch {
             // Fall back to cached sessions
@@ -267,7 +267,7 @@ struct SessionListView: View {
     private func createNewSession() async {
         isCreating = true
         do {
-            let session = try await apiClient.createSession()
+            let session = try await cloudClient.createSession()
             sessions.insert(session, at: 0)
         } catch {
             self.error = error.localizedDescription
@@ -277,7 +277,7 @@ struct SessionListView: View {
 
     private func performDelete(_ session: DianeSession) async {
         do {
-            try await apiClient.deleteSession(session.id)
+            try await cloudClient.deleteSession(id: session.id)
         } catch {
             // If deletion fails on the server, re-insert the session
             if !sessions.contains(where: { $0.id == session.id }) {
