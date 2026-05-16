@@ -37,7 +37,7 @@ struct AttachmentsPage: View {
                 .frame(minWidth: 100, minHeight: 100)
                 .frame(maxHeight: 200)
                 .overlay {
-                    Text("Unknown", bundle: .module)
+                    Text("Unknown")
             }
         }
     }

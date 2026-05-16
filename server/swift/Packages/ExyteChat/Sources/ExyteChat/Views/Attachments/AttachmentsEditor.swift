@@ -48,27 +48,17 @@ struct AttachmentsEditor<InputViewContent: View>: View {
             MediaPicker(isPresented: $inputViewModel.showPicker) {
                 seleсtedMedias = $0
                 assembleSelectedMedia()
-            } albumSelectionBuilder: { _, albumSelectionView, _ in
+            } albumSelectionBuilder: {
                 VStack {
                     albumSelectionHeaderView
-                        .padding(.top, g.safeAreaInsets.top)
-                    albumSelectionView
                     Spacer()
                     inputView
-                        .padding(.bottom, g.safeAreaInsets.bottom)
                 }
                 .background(mediaPickerTheme.main.pickerBackground.ignoresSafeArea())
-            } cameraSelectionBuilder: { _, cancelClosure, cameraSelectionView in
+            } cameraSelectionBuilder: {
                 VStack {
-                    cameraSelectionView
-                        .overlay(alignment: .top) {
-                            cameraSelectionHeaderView(cancelClosure: cancelClosure)
-                                .padding(.top, 12)
-                        }
-                        .padding(.top, g.safeAreaInsets.top)
                     Spacer()
                     inputView
-                        .padding(.bottom, g.safeAreaInsets.bottom)
                 }
                 .background(mediaPickerTheme.main.pickerBackground.ignoresSafeArea())
             }

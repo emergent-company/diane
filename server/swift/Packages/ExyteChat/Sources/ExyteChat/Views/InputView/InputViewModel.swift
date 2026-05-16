@@ -79,6 +79,8 @@ final class InputViewModel: ObservableObject {
 
     private func inputViewActionInternal(_ action: InputViewAction) {
         switch action {
+        case .giphy:
+            break // Giphy support removed
         case .photo:
             #if os(iOS)
             mediaPickerMode = .photos

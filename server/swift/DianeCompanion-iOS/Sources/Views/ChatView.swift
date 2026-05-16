@@ -1,27 +1,6 @@
 import SwiftUI
 import DianeShared
-
-// MARK: - Corner Radius Modifier
-
-struct RoundedCorner: Shape {
-    var radius: CGFloat = .infinity
-    var corners: UIRectCorner = .allCorners
-
-    func path(in rect: CGRect) -> Path {
-        let path = UIBezierPath(
-            roundedRect: rect,
-            byRoundingCorners: corners,
-            cornerRadii: CGSize(width: radius, height: radius)
-        )
-        return Path(path.cgPath)
-    }
-}
-
-extension View {
-    func cornerRadius(_ radius: CGFloat, corners: UIRectCorner) -> some View {
-        clipShape(RoundedCorner(radius: radius, corners: corners))
-    }
-}
+import ExyteChat
 
 // MARK: - Tool Call View
 
@@ -101,11 +80,48 @@ struct ReasoningSection: View {
     }
 }
 
-// MARK: - Message Bubble
+// MARK: - Error Message Styling
 
-struct MessageBubble: View {
+struct ErrorMessageView: View {
+    let message: String
+
+    var body: some View {
+        HStack {
+            Spacer(minLength: 60)
+
+            VStack(alignment: .leading, spacing: DesignTokens.spacingXXS) {
+                HStack(spacing: DesignTokens.spacingXS) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundColor(.red)
+                    Text("Error")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.red)
+                }
+
+                Text(message)
+                    .font(.body)
+                    .foregroundColor(.primary)
+            }
+            .padding(DesignTokens.spacingMD)
+            .background(Color.red.opacity(0.08))
+            .cornerRadius(DesignTokens.radiusLG)
+
+            Spacer(minLength: 60)
+        }
+        .padding(.horizontal, DesignTokens.spacingMD)
+        .padding(.vertical, DesignTokens.spacingXXS)
+    }
+}
+
+// MARK: - ExyteChat Bubble Content
+
+/// Renders the visible content inside an ExyteChat message cell — tool calls, reasoning, markdown, streaming cursor.
+/// ExyteChat handles the cell layout (rotation, alignment containers); this view renders the bubble interior only.
+private struct ExyteBubbleContent: View {
     let message: DianeMessage
-    var isStreaming: Bool = false
+    let isStreaming: Bool
 
     private var isUser: Bool { message.role == "user" }
 
@@ -117,25 +133,19 @@ struct MessageBubble: View {
         isUser ? .white : .primary
     }
 
-    private var bubbleCorners: UIRectCorner {
-        isUser
-            ? [.topLeft, .topRight, .bottomLeft]
-            : [.topLeft, .topRight, .bottomRight]
-    }
-
     var body: some View {
         HStack(alignment: .bottom, spacing: DesignTokens.spacingSM) {
             if isUser { Spacer(minLength: 60) }
 
             VStack(alignment: isUser ? .trailing : .leading, spacing: DesignTokens.spacingXS) {
                 // Content — auto-detects markdown, renders with Textual (iOS 18+) or AttributedString fallback
-                MessageContentView(message: message)
+                MessageContentView(content: message.content, isUser: isUser)
                     .foregroundColor(textColor)
 
                 // Streaming cursor
                 if isStreaming {
                     HStack(spacing: 0) {
-                        Text("▍")
+                        Text("\u{258D}")
                             .font(.body)
                             .foregroundColor(textColor)
                             .opacity(0.6)
@@ -165,78 +175,12 @@ struct MessageBubble: View {
             }
             .padding(DesignTokens.spacingMD)
             .background(bubbleColor)
-            .cornerRadius(DesignTokens.radiusLG, corners: bubbleCorners)
+            .cornerRadius(DesignTokens.radiusLG)
 
             if !isUser { Spacer(minLength: 60) }
         }
         .padding(.horizontal, DesignTokens.spacingMD)
         .padding(.vertical, DesignTokens.spacingXXS)
-    }
-}
-
-// MARK: - Error Message Styling
-
-struct ErrorMessageView: View {
-    let message: String
-
-    var body: some View {
-        HStack {
-            Spacer(minLength: 60)
-
-            VStack(alignment: .leading, spacing: DesignTokens.spacingXXS) {
-                HStack(spacing: DesignTokens.spacingXS) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundColor(.red)
-                    Text("Error")
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.red)
-                }
-
-                Text(message)
-                    .font(.body)
-                    .foregroundColor(.primary)
-            }
-            .padding(DesignTokens.spacingMD)
-            .background(Color.red.opacity(0.08))
-            .cornerRadius(DesignTokens.radiusLG, corners: [.topLeft, .topRight, .bottomRight])
-
-            Spacer(minLength: 60)
-        }
-        .padding(.horizontal, DesignTokens.spacingMD)
-        .padding(.vertical, DesignTokens.spacingXXS)
-    }
-}
-
-// MARK: - Message List
-
-struct MessageListView: View {
-    let messages: [DianeMessage]
-    let streamingMessageID: String?
-
-    var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    // Earliest messages first, display oldest to newest
-                    ForEach(messages) { message in
-                        if message.role == "error" {
-                            ErrorMessageView(message: message.content)
-                                .id(message.id)
-                        } else {
-                            MessageBubble(
-                                message: message,
-                                isStreaming: message.id == streamingMessageID
-                            )
-                            .id(message.id)
-                        }
-                    }
-                }
-                .padding(.vertical, DesignTokens.spacingSM)
-            }
-            .defaultScrollAnchor(.bottom)
-        }
     }
 }
 
@@ -314,8 +258,9 @@ struct ChatView: View {
     @Environment(\.config) private var config
     let session: DianeSession
 
+    // MARK: State
+
     @State private var messages: [DianeMessage] = []
-    @State private var inputText = ""
     @State private var isLoading = true
     @State private var isStreaming = false
     @State private var error: String?
@@ -327,9 +272,32 @@ struct ChatView: View {
     @State private var pendingDocumentID: String?
     @State private var pendingDocumentName: String?
 
+    // MARK: ExyteChat users
+
+    private let currentUser = User(id: "user", name: "You", avatarURL: nil, isCurrentUser: true)
+    private let assistantUser = User(id: "assistant", name: "Diane", avatarURL: nil, isCurrentUser: false)
+
+    // MARK: Computed
+
     private var streamingMessageID: String? {
         messages.last(where: { $0.role == "assistant" && isStreaming })?.id
     }
+
+    /// Convert DianeMessage → ExyteChat.Message for the ExyteChat list.
+    private var exyteMessages: [ExyteChat.Message] {
+        messages.map { msg in
+            let user: User = msg.role == "user" ? currentUser : assistantUser
+            let date = msg.createdAt.flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
+            return ExyteChat.Message(
+                id: msg.id,
+                user: user,
+                createdAt: date,
+                text: msg.content
+            )
+        }
+    }
+
+    // MARK: Body
 
     var body: some View {
         VStack(spacing: 0) {
@@ -358,39 +326,48 @@ struct ChatView: View {
                 }
                 .frame(maxHeight: .infinity)
             } else {
-                MessageListView(
-                    messages: messages,
-                    streamingMessageID: streamingMessageID
+                // Uploading progress bar
+                if isUploading {
+                    HStack(spacing: DesignTokens.spacingSM) {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                        Text("Uploading file\u{2026}")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                    }
+                    .padding(.horizontal, DesignTokens.spacingMD)
+                    .padding(.vertical, 4)
+                }
+
+                ExyteChat.ChatView(
+                    messages: exyteMessages,
+                    didSendMessage: { _ in
+                        // Send is handled via inputViewBuilder's onSend closure
+                    },
+                    messageBuilder: { params in
+                        messageContent(for: params.message.id)
+                    },
+                    inputViewBuilder: { params in
+                        ChatInputBar(
+                            text: params.text,
+                            isStreaming: isStreaming,
+                            onSend: {
+                                let text = params.text.wrappedValue.trimmingCharacters(
+                                    in: .whitespacesAndNewlines
+                                )
+                                guard !text.isEmpty else { return }
+                                params.text.wrappedValue = ""
+                                sendMessage(text: text)
+                            },
+                            onStop: { stopStreaming() },
+                            onPickFile: { showFilePicker = true },
+                            hasPendingAttachment: pendingDocumentName != nil,
+                            pendingAttachmentName: pendingDocumentName
+                        )
+                    }
                 )
             }
-
-            // Uploading progress bar
-            if isUploading {
-                HStack(spacing: DesignTokens.spacingSM) {
-                    ProgressView()
-                        .scaleEffect(0.8)
-                    Text("Uploading file…")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                }
-                .padding(.horizontal, DesignTokens.spacingMD)
-                .padding(.vertical, 4)
-            }
-
-            // Divider
-            Divider()
-
-            // Input bar
-            ChatInputBar(
-                text: $inputText,
-                isStreaming: isStreaming,
-                onSend: { sendMessage() },
-                onStop: { stopStreaming() },
-                onPickFile: { showFilePicker = true },
-                hasPendingAttachment: pendingDocumentName != nil,
-                pendingAttachmentName: pendingDocumentName
-            )
         }
         .navigationTitle(session.title ?? "Chat")
         .navigationBarTitleDisplayMode(.inline)
@@ -421,10 +398,26 @@ struct ChatView: View {
                 guard let url = urls.first else { return }
                 Task { await uploadAndAttach(url: url) }
             case .failure:
-                break // user cancelled or error — silently ignore
+                break
             }
         }
         .sentryView("ChatView")
+    }
+
+    // MARK: - Message Content Builder
+
+    @ViewBuilder
+    private func messageContent(for id: String) -> some View {
+        if let dianeMsg = messages.first(where: { $0.id == id }) {
+            if dianeMsg.role == "error" {
+                ErrorMessageView(message: dianeMsg.content)
+            } else {
+                ExyteBubbleContent(
+                    message: dianeMsg,
+                    isStreaming: dianeMsg.id == streamingMessageID && isStreaming
+                )
+            }
+        }
     }
 
     // MARK: - Load Messages
@@ -436,7 +429,7 @@ struct ChatView: View {
             messages = SessionCache.shared.loadCachedMessages(for: session.id)
             SessionCache.shared.cacheMessages(messages, for: session.id)
         } catch {
-            // Fall back to cached messages
+            // Fall back — loadCachedMessages is synchronous so this shouldn't fail
             let cached = SessionCache.shared.loadCachedMessages(for: session.id)
             if cached.isEmpty {
                 self.error = error.localizedDescription
@@ -468,12 +461,10 @@ struct ChatView: View {
             if !config.projectID.isEmpty {
                 projectID = config.projectID
             } else {
-                // Fallback: extract from session if projectID available
                 projectID = ""
             }
 
             guard !projectID.isEmpty else {
-                // No project configured — user needs to set one in settings
                 let errMsg = DianeMessage(
                     id: "error-\(UUID().uuidString)",
                     role: "error",
@@ -533,24 +524,21 @@ struct ChatView: View {
 
     // MARK: - Send Message
 
-    private func sendMessage() {
-        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func sendMessage(text: String) {
         guard !isStreaming else { return }
-        inputText = ""
 
         // Build message content — prepend document reference if uploading
         var messageContent = text
         if let docName = pendingDocumentName {
             let prefix = text.isEmpty
-                ? "📄 Uploaded: \(docName)"
-                : "[📄 \(docName)] "
+                ? "\u{1F4C4} Uploaded: \(docName)"
+                : "[\u{1F4C4} \(docName)] "
             messageContent = prefix + (text.isEmpty ? "" : "\n\n" + text)
         }
 
         guard !messageContent.trimmingCharacters(in: .whitespaces).isEmpty else {
-            // Nothing to send — restore input text if we had a document but cleared it
             if pendingDocumentName != nil {
-                inputText = text
+                // Restore? Not needed with ExyteChat binding — text was already cleared
             }
             return
         }
@@ -635,7 +623,6 @@ struct ChatView: View {
                             createdAt: ISO8601DateFormatter().string(from: Date())
                         )
                         await MainActor.run {
-                            // Replace the streaming placeholder with error
                             if let idx = self.messages.firstIndex(where: { $0.id == assistantMsg.id }) {
                                 self.messages[idx] = err
                             } else {

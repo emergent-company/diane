@@ -25,71 +25,59 @@ public struct AttachmentCell: View {
     }
 
     public var body: some View {
-        Group {
-            if attachment.type == .image {
+        ZStack {
+            switch attachment.type {
+            case .image:
                 ZStack {
                     content
-                    if let status = attachment.fullUploadStatus {
-                        switch status {
-                        case .inProgress(.none):         // uploading status handled but not percent, simply show progress view
-                            uploadingOverlay(percent: nil)
-                        case .inProgress(let percent?):  // full upload status handling with percent, shows progress view with percent
-                            uploadingOverlay(percent: percent)
-                        case .complete:
-                            EmptyView()
-                        case .cancelled:
-                            cancelledOverlay
-                        case .error:
-                            errorOverlay
-                        }
-                    } else {  // upload status not handled assumes that content is uploaded before being sent to receiver
-                        EmptyView()
-                    }
+                    uploadStatusOverlay
                 }
-            } else if attachment.type == .video {
+            case .video:
                 ZStack {
                     content
-                    if let status = attachment.fullUploadStatus {
-                        switch status {
-                        case .inProgress(.none):
-                            uploadingOverlay(percent: nil)
-                        case .inProgress(let percent?):
-                            uploadingOverlay(percent: percent)
-                        case .complete:
-                            VStack {
-                                Spacer()
-                                theme.images.message.playVideo
-                                    .resizable()
-                                    .foregroundColor(.white)
-                                    .frame(width: 36, height: 36)
-                                Spacer()
-                            }
-                        case .cancelled:
-                            cancelledOverlay
-                        case .error:
-                            errorOverlay
-                        }
+                    if let status = attachment.fullUploadStatus, case .complete = status {
+                        playOverlay
+                    } else if attachment.fullUploadStatus == nil {
+                        playOverlay
                     } else {
-                        VStack {
-                            Spacer()
-                            theme.images.message.playVideo
-                                .resizable()
-                                .foregroundColor(.white)
-                                .frame(width: 36, height: 36)
-                            Spacer()
-                        }
+                        uploadStatusOverlay
                     }
                 }
-            } else {
-                content
-                    .overlay {
-                        Text("Unknown", bundle: .module)
-                    }
             }
         }
         .frame(width: size.width, height: size.height)
         .contentShape(Rectangle())
         .simultaneousGesture(attachmentTapGesture)
+    }
+
+    @ViewBuilder
+    private var playOverlay: some View {
+        VStack {
+            Spacer()
+            theme.images.message.playVideo
+                .resizable()
+                .foregroundColor(.white)
+                .frame(width: 36, height: 36)
+            Spacer()
+        }
+    }
+
+    @ViewBuilder
+    private var uploadStatusOverlay: some View {
+        if let status = attachment.fullUploadStatus {
+            switch status {
+            case .inProgress(.none):
+                uploadingOverlay(percent: nil)
+            case .inProgress(let percent?):
+                uploadingOverlay(percent: percent)
+            case .complete:
+                EmptyView()
+            case .cancelled:
+                cancelledOverlay
+            case .error:
+                errorOverlay
+            }
+        }
     }
 
     @ViewBuilder

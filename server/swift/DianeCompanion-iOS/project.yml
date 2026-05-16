@@ -26,6 +26,8 @@ packages:
     from: 8.0.0
   DianeShared:
     path: ../Packages/DianeShared
+  ExyteChat:
+    path: ../Packages/ExyteChat
 
 targets:
   Diane:
@@ -41,6 +43,8 @@ targets:
         product: Sentry
       - package: DianeShared
         product: DianeShared
+      - package: ExyteChat
+        product: ExyteChat
     settings:
       base:
         PRODUCT_NAME: Diane

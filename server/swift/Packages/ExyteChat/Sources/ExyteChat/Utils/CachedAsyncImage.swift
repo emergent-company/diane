@@ -31,6 +31,7 @@ public struct CachedAsyncImage<Content>: View where Content: View {
     /// Loads and displays a modifiable image with placeholder.
     public init<I, P>(
         url: URL?,
+        cacheKey: String? = nil,
         scale: CGFloat = 1,
         @ViewBuilder content: @escaping (Image) -> I,
         @ViewBuilder placeholder: @escaping () -> P
@@ -47,6 +48,7 @@ public struct CachedAsyncImage<Content>: View where Content: View {
     /// Loads and displays a modifiable image in phases.
     public init(
         url: URL?,
+        cacheKey: String? = nil,
         scale: CGFloat = 1,
         transaction: Transaction = Transaction(),
         @ViewBuilder content: @escaping (AsyncImagePhase) -> Content

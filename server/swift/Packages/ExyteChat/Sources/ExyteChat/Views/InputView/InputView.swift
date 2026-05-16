@@ -71,6 +71,7 @@ public struct InputViewAttachments {
 struct InputView: View {
     
     @Environment(\.chatTheme) private var theme
+    @Environment(\.pickerTheme) private var pickerTheme
 
     @EnvironmentObject private var keyboardState: KeyboardState
     
