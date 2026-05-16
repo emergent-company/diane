@@ -3,3 +3,5 @@ DerivedData/
 *.dmg
 *.xcodeproj/
 /diane
+.DS_Store
+.swiftpm/
