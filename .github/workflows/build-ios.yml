@@ -30,7 +30,14 @@ jobs:
           fetch-depth: 0
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode.app || true
+        run: |
+          XCODE_26=$(ls /Applications/Xcode_26*.app 2>/dev/null | head -1)
+          if [ -n "$XCODE_26" ]; then
+            sudo xcode-select -s "$XCODE_26"
+          else
+            sudo xcode-select -s /Applications/Xcode.app || true
+          fi
+          xcodebuild -version
 
       - name: Install tools
         run: |
