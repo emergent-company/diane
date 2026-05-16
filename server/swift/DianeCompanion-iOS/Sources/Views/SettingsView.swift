@@ -37,6 +37,8 @@ struct SettingsView: View {
     @State private var projectID: String = ""
     @State private var isTestingConnection = false
     @State private var connectionTestResult: ConnectionTestResult?
+    @State private var pushEnabled = PushNotificationService.shared.isRegistered
+    @State private var selectedSound = "default"
 
     private enum ConnectionTestResult: Equatable {
         case success
