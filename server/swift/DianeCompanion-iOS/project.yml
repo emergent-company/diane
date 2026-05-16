@@ -47,4 +47,29 @@ targets:
     info:
       path: DianeCompanion/Info.plist
 
+  DianeTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: DianeTests
+    dependencies:
+      - target: Diane
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
 
+  DianeUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: DianeUITests
+    dependencies:
+      - target: Diane
+    settings:
+      base:
+        PRODUCT_NAME: DianeUITests
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.diane.io.uitests
+        TEST_TARGET_NAME: Diane
