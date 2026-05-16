@@ -49,8 +49,9 @@ jobs:
 
       - name: Write API key
         run: |
-          echo "${{ secrets.APP_STORE_CONNECT_API_KEY }}" > /tmp/AuthKey.p8
-          chmod 600 /tmp/AuthKey.p8
+          mkdir -p ~/private_keys
+          echo "${{ secrets.APP_STORE_CONNECT_API_KEY }}" > ~/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_KEY_ID }}.p8
+          chmod 600 ~/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_KEY_ID }}.p8
 
       - name: Ensure app exists in App Store Connect
         continue-on-error: true
@@ -80,7 +81,7 @@ jobs:
         working-directory: server/swift/DianeCompanion-iOS
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          AUTH_KEY_PATH: /tmp/AuthKey.p8
+          AUTH_KEY_PATH: ~/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_KEY_ID }}.p8
           APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
 
@@ -118,10 +119,7 @@ jobs:
           xcrun altool --upload-app \
             -f "$IPA" \
             -t ios \
-            -u "${{ secrets.NOTARIZE_APPLE_ID }}" \
-            -p "${{ secrets.NOTARIZE_PASSWORD }}" \
+            --apiKey "${{ secrets.APP_STORE_CONNECT_KEY_ID }}" \
+            --apiIssuer "${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}" \
             --output-format xml
         working-directory: server/swift/DianeCompanion-iOS
-        env:
-          NOTARIZE_APPLE_ID: ${{ secrets.NOTARIZE_APPLE_ID }}
-          NOTARIZE_PASSWORD: ${{ secrets.NOTARIZE_PASSWORD }}
