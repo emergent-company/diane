@@ -47,6 +47,11 @@ jobs:
             echo "version=0.0.0-preview+${COMMIT}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Write API key
+        run: |
+          echo "${{ secrets.APP_STORE_CONNECT_API_KEY }}" > /tmp/AuthKey.p8
+          chmod 600 /tmp/AuthKey.p8
+
       - name: Archive
         id: archive
         run: |
@@ -63,6 +68,9 @@ jobs:
         working-directory: server/swift/DianeCompanion-iOS
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          AUTH_KEY_PATH: /tmp/AuthKey.p8
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
