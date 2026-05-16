@@ -50,6 +50,7 @@ struct AgentsListView: View {
         .navigationDestination(for: AgentDef.self) { agent in
             AgentDetailView(agent: agent)
         }
+        .sentryView("AgentsListView")
     }
 
     private func load() async {

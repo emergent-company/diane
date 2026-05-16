@@ -123,6 +123,7 @@ struct SystemView: View {
         .navigationTitle("Status")
         .task { await load() }
         .refreshable { await load() }
+        .sentryView("SystemView")
     }
 
     private func load() async {

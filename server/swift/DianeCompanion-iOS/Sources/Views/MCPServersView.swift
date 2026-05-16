@@ -50,6 +50,7 @@ struct MCPServersView: View {
         .navigationDestination(for: MCPServer.self) { server in
             MCPDetailView(server: server)
         }
+        .sentryView("MCPServersView")
     }
 
     private func load() async {

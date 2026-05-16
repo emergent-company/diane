@@ -31,12 +31,12 @@ struct SettingsView: View {
     @Environment(\.cloudClient) private var cloudClient
     @Environment(\.dismiss) private var dismiss
 
-    @State private var serverURL: String = ""
-    @State private var dianeServerURL: String = ""
     @State private var apiKey: String = ""
     @State private var projectID: String = ""
+    @State private var dianeServerURL: String = ""
     @State private var isTestingConnection = false
     @State private var connectionTestResult: ConnectionTestResult?
+    @State private var showQRScanner = false
     @State private var pushEnabled = PushNotificationService.shared.isRegistered
     @State private var selectedSound: String = "default"
 
@@ -63,19 +63,18 @@ struct SettingsView: View {
             }
         }
         .onAppear {
-            serverURL = config.serverURL
-            dianeServerURL = config.dianeServerURL
             apiKey = config.apiKey
             projectID = config.projectID
+            dianeServerURL = config.dianeServerURL
         }
+        .sentryView("SettingsView")
     }
 
     // MARK: - Has Changes
 
     private var hasChanges: Bool {
-        serverURL != config.serverURL
+        apiKey != config.apiKey
         || dianeServerURL != config.dianeServerURL
-        || apiKey != config.apiKey
         || projectID != config.projectID
     }
 
@@ -83,9 +82,23 @@ struct SettingsView: View {
 
     private var connectionSection: some View {
         Section {
-            TextField("Memory Platform URL", text: $serverURL)
-                .textContentType(.URL)
-                .keyboardType(.URL)
+            // Memory Platform URL — hardcoded, not user-editable
+            HStack {
+                Label("Memory Platform", systemImage: "cloud.fill")
+                    .foregroundColor(.accentColor)
+                Spacer()
+                Text(MemoryPlatform.defaultURL)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            SecureField("API Key", text: $apiKey)
+                .autocapitalization(.none)
+                .disableAutocorrection(true)
+
+            TextField("Project ID", text: $projectID)
                 .autocapitalization(.none)
                 .disableAutocorrection(true)
 
@@ -95,13 +108,27 @@ struct SettingsView: View {
                 .autocapitalization(.none)
                 .disableAutocorrection(true)
 
-            SecureField("API Key", text: $apiKey)
-                .autocapitalization(.none)
-                .disableAutocorrection(true)
-
-            TextField("Project ID (optional)", text: $projectID)
-                .autocapitalization(.none)
-                .disableAutocorrection(true)
+            // Scan QR Code button
+            Button(action: { showQRScanner = true }) {
+                HStack(spacing: DesignTokens.spacingSM) {
+                    Image(systemName: "qrcode.viewfinder")
+                        .font(.title3)
+                    Text("Scan QR Code from macOS")
+                        .font(.subheadline)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .sheet(isPresented: $showQRScanner) {
+                QRScanView { payload in
+                    applyScannedPayload(payload)
+                    showQRScanner = false
+                } onCancel: {
+                    showQRScanner = false
+                }
+            }
 
             // Test Connection
             HStack {
@@ -131,7 +158,7 @@ struct SettingsView: View {
                             }
                         }
                     }
-                    .disabled(serverURL.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(apiKey.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
 
@@ -143,7 +170,7 @@ struct SettingsView: View {
         } header: {
             Label("Connection", systemImage: "antenna.radiowaves.left.and.right")
         } footer: {
-            Text("Configure your Diane server connection. The server URL should point to your running Diane instance.")
+            Text("Scan a QR code from the Diane macOS app to auto-configure. The Memory Platform URL is fixed.")
         }
     }
 
@@ -306,21 +333,28 @@ struct SettingsView: View {
     // MARK: - Actions
 
     private func saveConfig() {
-        config.serverURL = serverURL.trimmingCharacters(in: .whitespaces)
-        config.dianeServerURL = dianeServerURL.trimmingCharacters(in: .whitespaces)
+        config.serverURL = MemoryPlatform.defaultURL
         config.apiKey = apiKey.trimmingCharacters(in: .whitespaces)
         config.projectID = projectID.trimmingCharacters(in: .whitespaces)
-        cloudClient.configure(baseURL: config.serverURL, apiKey: config.apiKey)
+        config.dianeServerURL = dianeServerURL.trimmingCharacters(in: .whitespaces)
+        cloudClient.configure(baseURL: MemoryPlatform.defaultURL, apiKey: config.apiKey)
         dismiss()
     }
 
-    private func testConnection() async {
-        let testURL = serverURL.trimmingCharacters(in: .whitespaces)
-        let testDianeURL = dianeServerURL.trimmingCharacters(in: .whitespaces)
-        let effectiveDianeURL = testDianeURL.isEmpty ? testURL : testDianeURL
+    /// Apply credentials from a scanned QR code payload.
+    private func applyScannedPayload(_ payload: AuthCodePayload) {
+        apiKey = payload.apiKey
+        projectID = payload.projectID
+        // dianeServerURL is NOT in the QR code — user enters it separately
+        // Save immediately
+        saveConfig()
+    }
 
-        guard !testURL.isEmpty && !effectiveDianeURL.isEmpty else {
-            connectionTestResult = .failure("Server URLs are empty")
+    private func testConnection() async {
+        let effectiveDianeURL = dianeServerURL.trimmingCharacters(in: .whitespaces)
+
+        guard !apiKey.trimmingCharacters(in: .whitespaces).isEmpty else {
+            connectionTestResult = .failure("API Key is empty")
             return
         }
 
@@ -328,13 +362,9 @@ struct SettingsView: View {
         connectionTestResult = nil
 
         // Temporarily configure the client with the entered values
-        let savedURL = config.serverURL
-        let savedDianeURL = config.dianeServerURL
         let savedKey = config.apiKey
-        config.serverURL = testURL
-        config.dianeServerURL = testDianeURL
         config.apiKey = apiKey.trimmingCharacters(in: .whitespaces)
-        cloudClient.configure(baseURL: testURL, apiKey: apiKey)
+        cloudClient.configure(baseURL: MemoryPlatform.defaultURL, apiKey: config.apiKey)
 
         do {
             // Test Memory Platform connectivity
@@ -351,10 +381,8 @@ struct SettingsView: View {
         }
 
         // Restore saved config
-        config.serverURL = savedURL
-        config.dianeServerURL = savedDianeURL
         config.apiKey = savedKey
-        cloudClient.configure(baseURL: savedURL, apiKey: savedKey)
+        cloudClient.configure(baseURL: MemoryPlatform.defaultURL, apiKey: savedKey)
         isTestingConnection = false
     }
 

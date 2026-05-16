@@ -360,6 +360,7 @@ struct ChatView: View {
         }
         .task { await loadMessages() }
         .onDisappear { stopStreaming() }
+        .sentryView("ChatView")
     }
 
     // MARK: - Load Messages

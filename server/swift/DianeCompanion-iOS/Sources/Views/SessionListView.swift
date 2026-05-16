@@ -240,6 +240,7 @@ struct SessionListView: View {
                 Task { await load() }
             }
         }
+        .sentryView("SessionListView")
     }
 
     // MARK: - Data Loading

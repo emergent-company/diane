@@ -21,6 +21,9 @@ settings:
         CURRENT_PROJECT_VERSION: 1
 
 packages:
+  Sentry:
+    url: https://github.com/getsentry/sentry-cocoa
+    from: 8.0.0
   DianeShared:
     path: ../Packages/DianeShared
 
@@ -34,6 +37,8 @@ targets:
       - path: DianeCompanion/Assets.xcassets
       - path: DianeCompanion/LaunchScreen.storyboard
     dependencies:
+      - package: Sentry
+        product: Sentry
       - package: DianeShared
         product: DianeShared
     settings:

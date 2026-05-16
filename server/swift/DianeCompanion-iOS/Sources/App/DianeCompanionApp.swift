@@ -1,5 +1,6 @@
 import SwiftUI
 import DianeShared
+import Sentry
 
 @main
 struct DianeCompanionApp: App {
@@ -8,6 +9,18 @@ struct DianeCompanionApp: App {
     @State private var showConfigSheet = false
 
     @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        SentrySDK.start { options in
+            options.dsn = "https://d18f08c868e65e24ce766257453eccd6@o4511344463839232.ingest.de.sentry.io/4511344490446928"
+            options.debug = false
+            options.sendDefaultPii = true
+            options.tracesSampleRate = 1.0
+        }
+        #if DEBUG
+        print("[Diane] Sentry SDK initialized")
+        #endif
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -30,8 +43,8 @@ struct DianeCompanionApp: App {
         // 0. Start network monitoring
         NetworkMonitor.shared.start()
 
-        // 1. Configure clients
-        cloudClient.configure(baseURL: config.serverURL, apiKey: config.apiKey)
+        // 1. Hardcode Memory Platform URL for iOS
+        cloudClient.configure(baseURL: MemoryPlatform.defaultURL, apiKey: config.apiKey)
 
         // 2. If no API key, show config sheet
         if !config.isConfigured && !CommandLine.arguments.contains("UITesting") {

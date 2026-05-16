@@ -32,6 +32,7 @@ struct ContentView: View {
         } else {
             iPhoneLayout()
         }
+        .sentryView("ContentView")
     }
 }
 
