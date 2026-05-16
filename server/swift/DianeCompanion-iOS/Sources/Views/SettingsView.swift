@@ -314,12 +314,14 @@ struct SettingsView: View {
         config.apiKey = apiKey.trimmingCharacters(in: .whitespaces)
         config.projectID = projectID.trimmingCharacters(in: .whitespaces)
         config.dianeServerURL = dianeServerURL.trimmingCharacters(in: .whitespaces)
-        cloudClient.configure(baseURL: MemoryPlatform.defaultURL, apiKey: config.apiKey)
+        let effectiveURL = config.dianeServerURL.isEmpty ? MemoryPlatform.defaultURL : config.dianeServerURL
+        cloudClient.configure(baseURL: effectiveURL, apiKey: config.apiKey)
         dismiss()
     }
 
     private func testConnection() async {
         let effectiveDianeURL = dianeServerURL.trimmingCharacters(in: .whitespaces)
+        let testURL = effectiveDianeURL.isEmpty ? MemoryPlatform.defaultURL : effectiveDianeURL
 
         guard !apiKey.trimmingCharacters(in: .whitespaces).isEmpty else {
             connectionTestResult = .failure("API Key is empty")
@@ -330,13 +332,14 @@ struct SettingsView: View {
         connectionTestResult = nil
 
         // Temporarily configure the client with the entered values
+        let savedURL = config.dianeServerURL
         let savedKey = config.apiKey
         config.apiKey = apiKey.trimmingCharacters(in: .whitespaces)
-        cloudClient.configure(baseURL: MemoryPlatform.defaultURL, apiKey: config.apiKey)
+        cloudClient.configure(baseURL: testURL, apiKey: config.apiKey)
 
         do {
-            // Test Memory Platform connectivity
-            let _ = try await cloudClient.fetchSessions()
+            // Test connectivity — use /api/health which exists on both servers
+            let _ = try await cloudClient.fetchDiagnostics()
             connectionTestResult = .success
         } catch {
             let message: String
@@ -350,7 +353,9 @@ struct SettingsView: View {
 
         // Restore saved config
         config.apiKey = savedKey
-        cloudClient.configure(baseURL: MemoryPlatform.defaultURL, apiKey: savedKey)
+        config.dianeServerURL = savedURL
+        let restoreURL = config.dianeServerURL.isEmpty ? MemoryPlatform.defaultURL : config.dianeServerURL
+        cloudClient.configure(baseURL: restoreURL, apiKey: savedKey)
         isTestingConnection = false
     }
 
