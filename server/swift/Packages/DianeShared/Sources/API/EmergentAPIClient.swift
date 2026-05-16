@@ -277,18 +277,19 @@ public final class EmergentAPIClient: @unchecked Sendable {
         return ProjectStats(totalSessions: 0, totalMessages: 0, activeAgents: 0, totalProjects: 0, sessionsToday: 0, messagesToday: 0)
     }
 
-    // MARK: - Diagnostics
+    // MARK: - ACP Sessions Listing
 
-    public func fetchDiagnostics() async throws -> HealthStatus {
-        try await getJSON("/api/diagnostics")
-    }
-
-    // MARK: - Search (MP API)
-
-    public func searchObjects(query: String, type: String? = nil) async throws -> Data {
-        var path = "/api/search?q=\(query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query)"
-        if let type { path += "&type=\(type)" }
-        return try await http.get(path)
+    /// Fetch existing ACP sessions from Memory Platform.
+    /// GET /acp/v1/sessions
+    public func fetchACPSessions() async throws -> [ACPSessionItem] {
+        let data = try await http.get("/acp/v1/sessions")
+        // Try wrapped format first
+        struct WrappedResponse: Decodable, Sendable { let sessions: [ACPSessionItem] }
+        if let resp = try? JSONDecoder().decode(WrappedResponse.self, from: data) {
+            return resp.sessions
+        }
+        // Fallback to direct array
+        return (try? JSONDecoder().decode([ACPSessionItem].self, from: data)) ?? []
     }
 
     // MARK: - Documents (MP API)
@@ -352,5 +353,38 @@ public final class EmergentAPIClient: @unchecked Sendable {
         struct Response: Decodable, Sendable { let data: [AgentDef] }
         if let resp = try? JSONDecoder().decode(Response.self, from: data) { return resp.data }
         return (try? JSONDecoder().decode([AgentDef].self, from: data)) ?? []
+    }
+}
+
+// MARK: - ACP Session Item
+
+public struct ACPSessionItem: Decodable, Sendable {
+    public let id: String
+    public let agentName: String?
+    public let title: String?
+    public let createdAt: String?
+    public let messageCount: Int?
+    public let status: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case agentName = "agent_name"
+        case title
+        case createdAt = "created_at"
+        case messageCount = "message_count"
+        case status
+    }
+}
+
+public extension ACPSessionItem {
+    func toDianeSession() -> DianeSession {
+        DianeSession(
+            id: id,
+            title: title,
+            status: status ?? "active",
+            messageCount: messageCount,
+            createdAt: createdAt,
+            agentName: agentName
+        )
     }
 }

@@ -77,18 +77,6 @@ struct SettingsView: View {
 
     private var connectionSection: some View {
         Section {
-            // Memory Platform URL — hardcoded, not user-editable
-            HStack {
-                Label("Memory Platform", systemImage: "cloud.fill")
-                    .foregroundColor(.accentColor)
-                Spacer()
-                Text(MemoryPlatform.defaultURL)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-
             SecureField("API Key", text: $apiKey)
                 .autocapitalization(.none)
                 .disableAutocorrection(true)
@@ -137,7 +125,7 @@ struct SettingsView: View {
         } header: {
             Label("Connection", systemImage: "antenna.radiowaves.left.and.right")
         } footer: {
-            Text("Configure your API key and project ID. The Memory Platform URL is fixed.")
+            Text("Configure your API key and project ID to connect to the Memory Platform.")
         }
     }
 
@@ -166,52 +154,8 @@ struct SettingsView: View {
                     .foregroundColor(.secondary)
             }
 
-            if !NodeRegistrationService.shared.instanceID.isEmpty {
-                HStack {
-                    Text("Node ID")
-                    Spacer()
-                    Text(NodeRegistrationService.shared.instanceID)
-                        .foregroundColor(.secondary)
-                        .font(.caption.monospaced())
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
-
-            HStack {
-                Text("Node Status")
-                Spacer()
-                HStack(spacing: DesignTokens.spacingXS) {
-                    Circle()
-                        .fill(nodeStatusColor)
-                        .frame(width: 8, height: 8)
-                    Text(NodeRegistrationService.shared.status.rawValue.capitalized)
-                        .foregroundColor(.secondary)
-                }
-            }
-
-            if let token = PushNotificationService.shared.token, !token.isEmpty {
-                HStack {
-                    Text("Push Token")
-                    Spacer()
-                    Text(PushNotificationService.shared.token ?? "")
-                        .foregroundColor(.secondary)
-                        .font(.caption2.monospaced())
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
-
         } header: {
             Label("Device", systemImage: "iphone")
-        }
-    }
-
-    private var nodeStatusColor: Color {
-        switch NodeRegistrationService.shared.status {
-        case .registered: return .green
-        case .unregistered: return .orange
-        case .failed: return .red
         }
     }
 
@@ -338,8 +282,8 @@ struct SettingsView: View {
         )
 
         do {
-            // Test MP connectivity via /api/diagnostics
-            let _ = try await cloudClient.fetchDiagnostics()
+            // Test MP connectivity via projects endpoint
+            let _ = try await cloudClient.fetchProjects()
             connectionTestResult = .success
         } catch {
             let message: String
@@ -381,14 +325,6 @@ struct SettingsView: View {
         }
         return "App Store"
         #endif
-    }
-}
-
-// MARK: - UIDevice Push Token Extension
-
-extension PushNotificationService {
-    var isEmpty: Bool {
-        token == nil || token?.isEmpty == true
     }
 }
 

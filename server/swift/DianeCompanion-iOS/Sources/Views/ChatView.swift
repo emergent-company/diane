@@ -449,13 +449,6 @@ struct ChatView: View {
         isLoading = false
         // Mark session as read
         SessionCache.shared.markRead(sessionID: session.id)
-        updateBadge()
-    }
-
-    private func updateBadge() {
-        let sessions = SessionCache.shared.loadCachedSessions()
-        let count = SessionCache.shared.totalUnreadCount(sessions: sessions)
-        BadgeManager.shared.updateBadge(count: count)
     }
 
     // MARK: - File Upload

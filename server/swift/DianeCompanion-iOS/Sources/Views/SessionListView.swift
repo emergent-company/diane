@@ -261,15 +261,31 @@ struct SessionListView: View {
         isLoading = true
         error = nil
         isOffline = false
+
+        // Show cached sessions immediately while ACP fetch runs
+        let cached = SessionCache.shared.loadCachedSessions()
+        sessions = cached
+
+        // Fetch live sessions from Memory Platform via ACP
         do {
-            sessions = SessionCache.shared.loadCachedSessions()
+            let acpItems = try await cloudClient.fetchACPSessions()
+            let acpSessions = acpItems.map { $0.toDianeSession() }
+
+            // Merge: ACP sessions are canonical, keep any local-only sessions too
+            var merged = [String: DianeSession]()
+            for s in acpSessions { merged[s.id] = s }
+            for s in cached { if merged[s.id] == nil { merged[s.id] = s } }
+
+            sessions = Array(merged.values).sorted { a, b in
+                (a.createdAt ?? "") > (b.createdAt ?? "")
+            }
+
+            SessionCache.shared.cacheSessions(sessions)
         } catch {
-            // Fall back to cached sessions
-            let cached = SessionCache.shared.loadCachedSessions()
-            if cached.isEmpty {
+            // Fall back to cached if ACP fetch fails
+            if sessions.isEmpty {
                 self.error = error.localizedDescription
             } else {
-                sessions = cached
                 isOffline = true
             }
         }

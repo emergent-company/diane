@@ -8,8 +8,6 @@ struct DianeCompanionApp: App {
     @State private var cloudClient = EmergentAPIClient()
     @State private var showConfigSheet = false
 
-    @Environment(\.scenePhase) private var scenePhase
-
     init() {
         SentrySDK.start { options in
             options.dsn = "https://d18f08c868e65e24ce766257453eccd6@o4511344463839232.ingest.de.sentry.io/4511344490446928"
@@ -33,9 +31,6 @@ struct DianeCompanionApp: App {
                         .environment(\.config, config)
                         .environment(\.cloudClient, cloudClient)
                 }
-                .onChange(of: scenePhase) { _, newPhase in
-                    handleScenePhase(newPhase)
-                }
         }
     }
 
@@ -55,44 +50,6 @@ struct DianeCompanionApp: App {
             showConfigSheet = true
             return
         }
-
-        // 3. Register as phone node
-        try? await NodeRegistrationService.shared.register(apiClient: cloudClient)
-
-        // 4. Register for push notifications
-        PushNotificationService.shared.register()
-
-        // 5. Clear badge on launch
-        BadgeManager.shared.clearBadge()
-    }
-
-    private func handleScenePhase(_ newPhase: ScenePhase) {
-        switch newPhase {
-        case .active:
-            BadgeManager.shared.clearBadge()
-            // Send heartbeat on foreground
-            Task {
-                try? await NodeRegistrationService.shared.sendHeartbeat(apiClient: cloudClient)
-            }
-        case .background:
-            Task {
-                // Send final heartbeat with background status
-                guard NodeRegistrationService.shared.status == .registered else { return }
-                try? await sendBackgroundHeartbeat()
-            }
-        case .inactive:
-            break
-        @unknown default:
-            break
-        }
-    }
-
-    private func sendBackgroundHeartbeat() async throws {
-        let body = try JSONSerialization.data(withJSONObject: ["status": "background"])
-        _ = try await cloudClient.http.put(
-            "/api/nodes/\(NodeRegistrationService.shared.instanceID)/heartbeat",
-            body: body
-        )
     }
 }
 
