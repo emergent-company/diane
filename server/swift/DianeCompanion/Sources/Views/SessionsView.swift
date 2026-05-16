@@ -244,6 +244,9 @@ struct SessionsView: View {
                                 }
                                 .padding(.horizontal, Design.Spacing.lg)
                                 .padding(.vertical, 8)
+                                // GPU-composite complex bubble shapes to avoid main-thread
+                                // ShapeStyledDisplayList updates during token streaming.
+                                .drawingGroup()
                             }
                             .onAppear {
                                 if let last = messages.last {
@@ -864,10 +867,25 @@ struct SessionsView: View {
             .background(bubbleBackground(isUser: isUser, isSystem: isSystem))
             .cornerRadius(Design.CornerRadius.medium)
             .overlay(alignment: isUser ? .bottomTrailing : .bottomLeading) {
-                BubbleTail(isUser: isUser)
-                    .fill(bubbleTailColor(isUser: isUser, isSystem: isSystem))
-                    .frame(width: 8, height: 8)
-                    .offset(x: isUser ? 6 : -6, y: 4)
+                // Use Canvas to draw the bubble tail triangle — this bypasses the
+                // ShapeStyledDisplayList / _ShapeStyle_RenderedShape rendering pipeline
+                // that causes main-thread hangs during view updates (APPLE-MACOS-C).
+                Canvas { context, size in
+                    var path = Path()
+                    if isUser {
+                        path.move(to: .zero)
+                        path.addLine(to: CGPoint(x: size.width, y: 0))
+                        path.addLine(to: CGPoint(x: size.width, y: size.height))
+                    } else {
+                        path.move(to: CGPoint(x: 0, y: size.height))
+                        path.addLine(to: CGPoint(x: size.width, y: 0))
+                        path.addLine(to: CGPoint(x: 0, y: 0))
+                    }
+                    path.closeSubpath()
+                    context.fill(path, with: .color(bubbleTailColor(isUser: isUser, isSystem: isSystem)))
+                }
+                .frame(width: 8, height: 8)
+                .offset(x: isUser ? 6 : -6, y: 4)
             }
 
             // Message timestamp below bubble
@@ -1166,7 +1184,7 @@ struct SessionsView: View {
             tokenCount: nil,
             toolCalls: nil,
             reasoningContent: nil,
-            createdAt: ISO8601DateFormatter().string(from: Date())
+            createdAt: Self.isoFormatter.string(from: Date())
         )
         messages.append(userMessage)
 
@@ -1363,28 +1381,6 @@ struct SessionsView: View {
         } catch {
             logDebug("SessionsView: failed to load agent defs: \(error.localizedDescription)", category: "Sessions")
         }
-    }
-}
-
-// MARK: - Bubble Tail Shape
-
-/// A small triangular tail that points to the message sender.
-private struct BubbleTail: Shape {
-    let isUser: Bool
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        if isUser {
-            path.move(to: CGPoint(x: 0, y: 0))
-            path.addLine(to: CGPoint(x: rect.width, y: 0))
-            path.addLine(to: CGPoint(x: rect.width, y: rect.height))
-        } else {
-            path.move(to: CGPoint(x: 0, y: rect.height))
-            path.addLine(to: CGPoint(x: rect.width, y: 0))
-            path.addLine(to: CGPoint(x: 0, y: 0))
-        }
-        path.closeSubpath()
-        return path
     }
 }
 

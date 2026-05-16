@@ -65,7 +65,6 @@ struct DianeCompanionApp: App {
                 .task { await startIfNeeded() }
         } label: {
             Image(systemName: menuBarIconName)
-                .symbolRenderingMode(.hierarchical)
         }
         .menuBarExtraStyle(.window)
     }
