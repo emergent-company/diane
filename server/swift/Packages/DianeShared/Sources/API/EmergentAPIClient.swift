@@ -168,7 +168,7 @@ public final class EmergentAPIClient: @unchecked Sendable {
     // MARK: - Diagnostics
 
     public func fetchDiagnostics() async throws -> HealthStatus {
-        try await getJSON("/api/health")
+        try await getJSON("/api/status")
     }
 
     // MARK: - Search
@@ -186,19 +186,19 @@ public final class EmergentAPIClient: @unchecked Sendable {
     // MARK: - MCP Servers
 
     public func fetchMCPServers() async throws -> [MCPServer] {
-        let response: APIListResponse<MCPServer> = try await getJSON("/api/mcp/servers")
+        let response: APIListResponse<MCPServer> = try await getJSON("/api/mcp-servers")
         return response.data
     }
 
     public func fetchMCPTools(serverID: String) async throws -> [MCPToolInfo] {
-        let response: APIListResponse<MCPToolInfo> = try await getJSON("/api/mcp/servers/\(serverID)/tools")
+        let response: APIListResponse<MCPToolInfo> = try await getJSON("/api/mcp-servers/\(serverID)/tools")
         return response.data
     }
 
     // MARK: - Relay Nodes
 
     public func fetchRelayNodes() async throws -> [RelayNode] {
-        let response: APIListResponse<RelayNode> = try await getJSON("/api/relay/nodes")
+        let response: APIListResponse<RelayNode> = try await getJSON("/api/nodes")
         return response.data
     }
 
