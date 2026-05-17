@@ -31,6 +31,12 @@ final class ServerConfiguration: ObservableObject {
         self.launchAtLogin = UserDefaults.standard.bool(forKey: Keys.launchAtLogin)
         self.home = FileManager.default.homeDirectoryForCurrentUser.path
 
+        // In --uitesting mode, start with a clean slate — don't load real config.
+        if CommandLine.arguments.contains("--uitesting") {
+            AppLogger.shared.info("ServerConfig: skipping config load in uitesting mode", category: "Config")
+            return
+        }
+
         // Load config from diane.yml — single source of truth.
         loadFromConfig()
     }

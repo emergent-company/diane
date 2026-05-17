@@ -172,21 +172,19 @@ func (b *Bridge) CloseSession(ctx context.Context, sessionID string) error {
 
 // ListSessions lists all sessions, optionally filtered by status.
 func (b *Bridge) ListSessions(ctx context.Context, status string) ([]Session, error) {
-	opts := &graph.ListObjectsOptions{
-		Type: "Session",
-	}
-	if status != "" {
-		opts.PropertyFilters = []graph.PropertyFilter{
-			{Path: "status", Op: "eq", Value: status},
-		}
-	}
-	resp, err := b.client.Graph.ListObjects(ctx, opts)
+	resp, err := b.client.Graph.ListSessions(ctx, 100, "")
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)
 	}
 	sessions := make([]Session, 0, len(resp.Items))
 	for _, obj := range resp.Items {
-		sessions = append(sessions, *graphObjectToSession(obj))
+		s := graphObjectToSession(obj)
+		if status != "" {
+			if s.Status != status {
+				continue
+			}
+		}
+		sessions = append(sessions, *s)
 	}
 	return sessions, nil
 }

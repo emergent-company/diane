@@ -996,9 +996,7 @@ func (h *apiHandlers) handleSessions(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		status := r.URL.Query().Get("status")
-		resp, err := bridge.Client().Graph.ListObjects(ctx, &graph.ListObjectsOptions{
-			Type: "Session",
-		})
+		resp, err := bridge.Client().Graph.ListSessions(ctx, 100, "")
 		if err != nil {
 			writeJSON(w, map[string]any{"error": err.Error()})
 			return

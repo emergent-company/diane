@@ -134,10 +134,25 @@ targets:
     settings:
       base:
         PRODUCT_NAME: DianeUITests
-        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        DEVELOPMENT_TEAM: ""
+        ENABLE_HARDENED_RUNTIME: NO
         PRODUCT_BUNDLE_IDENTIFIER: com.emergent-company.diane-companion.uitests
         PRODUCT_MODULE_NAME: DianeUITests
         USES_XCTRUNNER: YES
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_EMIT_MODULE_ARCHIVE: NO
         SWIFT_INSTALL_OBJC_HEADER: NO
+
+schemes:
+  Diane:
+    build:
+      targets:
+        Diane: all
+        DianeTests: [test]
+        DianeUITests: [test]
+    test:
+      targets:
+        - name: DianeTests
+        - name: DianeUITests

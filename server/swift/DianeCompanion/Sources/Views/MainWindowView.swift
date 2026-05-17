@@ -9,8 +9,10 @@ struct MainWindowView: View {
     @EnvironmentObject var serverConfig: ServerConfiguration
 
     var body: some View {
-        if serverConfig.isConfigured {
-            if statusMonitor.isLocalAPIReachable {
+        let isConfigured = !serverConfig.serverURL.isEmpty && !serverConfig.apiKey.isEmpty
+        if isConfigured {
+            // In --uitesting mode, show main content immediately without server check.
+            if CommandLine.arguments.contains("--uitesting") || statusMonitor.isLocalAPIReachable {
                 mainContent
             } else {
                 notConnectedView
@@ -45,6 +47,8 @@ struct MainWindowView: View {
                 ForEach(SidebarItem.allCases) { item in
                     Label(item.rawValue, systemImage: item.systemIcon)
                         .tag(item)
+                        .accessibilityIdentifier(item.rawValue)
+                        .accessibilityAddTraits(.isButton)
                 }
             }
         }
