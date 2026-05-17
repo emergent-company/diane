@@ -428,9 +428,9 @@ public struct ChatTheme {
             let deliveredImage: Image
             let sentImage: Image
 #if os(iOS)
-            readImage = read ?? Image(uiImage: UIImage(named: "checkAll", in: .current, with: nil)!)
-            deliveredImage = delivered ?? Image(uiImage: UIImage(named: "checkAll", in: .current, with: nil)!)
-            sentImage = sent ?? Image(uiImage: UIImage(named: "check", in: .current, with: nil)!)
+            readImage = read ?? (UIImage(named: "checkAll", in: .current, with: nil).map { Image(uiImage: $0) } ?? Image(systemName: "checkmark.circle.fill"))
+            deliveredImage = delivered ?? (UIImage(named: "checkAll", in: .current, with: nil).map { Image(uiImage: $0) } ?? Image(systemName: "checkmark.circle"))
+            sentImage = sent ?? (UIImage(named: "check", in: .current, with: nil).map { Image(uiImage: $0) } ?? Image(systemName: "checkmark"))
 #else
             readImage = read ?? Image(systemName: "checkmark.circle.fill")
             deliveredImage = delivered ?? Image(systemName: "checkmark.circle")
