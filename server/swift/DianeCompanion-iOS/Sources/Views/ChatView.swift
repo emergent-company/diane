@@ -489,6 +489,35 @@ private struct StatCard: View {
     }
 }
 
+// MARK: - Typing Indicator
+
+/// Animated bouncing dots, the typical chat "typing" indicator.
+private struct TypingIndicator: View {
+    @State private var phase = 0
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(0..<3) { i in
+                Circle()
+                    .fill(Color.secondary.opacity(0.5))
+                    .frame(width: 6, height: 6)
+                    .scaleEffect(phase == i ? 1.0 : 0.4)
+                    .animation(
+                        .easeInOut(duration: 0.6).repeatForever(autoreverses: true)
+                            .delay(Double(i) * 0.2),
+                        value: phase
+                    )
+            }
+        }
+        .onAppear {
+            // Cycle through phases so each dot animates staggered
+            withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) {
+                phase = 1
+            }
+        }
+    }
+}
+
 // MARK: - Message Bubble Content
 
 /// Renders a message bubble with tool calls, reasoning, markdown content, and streaming cursor.
@@ -525,12 +554,7 @@ private struct MessageBubbleContent: View {
                             .foregroundColor(textColor)
 
                         if isStreaming {
-                            HStack(spacing: 0) {
-                                Text("\u{258D}")
-                                    .font(.body)
-                                    .foregroundColor(textColor)
-                                    .opacity(0.6)
-                            }
+                            TypingIndicator()
                         }
 
                         if let reasoning = message.reasoningContent, !reasoning.isEmpty {
@@ -563,12 +587,7 @@ private struct MessageBubbleContent: View {
                             .foregroundColor(textColor)
 
                         if isStreaming {
-                            HStack(spacing: 0) {
-                                Text("\u{258D}")
-                                    .font(.body)
-                                    .foregroundColor(textColor)
-                                    .opacity(0.6)
-                            }
+                            TypingIndicator()
                         }
 
                         if let reasoning = message.reasoningContent, !reasoning.isEmpty {
