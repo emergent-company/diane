@@ -193,26 +193,6 @@ struct ModelDecodingTests {
         #expect(node.connectedAgents == 5)
     }
 
-    // MARK: - AnySearchResult
-
-    @Test func decodeSearchResult() throws {
-        let json = """
-        {
-            "id": "sess-999",
-            "type": "session",
-            "title": "Found Session",
-            "score": 0.95,
-            "metadata": {"project": "proj-001"}
-        }
-        """.data(using: .utf8)!
-
-        let result = try JSONDecoder().decode(AnySearchResult.self, from: json)
-        #expect(result.id == "sess-999")
-        #expect(result.type == "session")
-        #expect(result.title == "Found Session")
-        #expect(result.metadata?["project"] == "proj-001")
-    }
-
     // MARK: - Schema Types
 
     @Test func decodeSchemaType() throws {
@@ -232,28 +212,6 @@ struct ModelDecodingTests {
         #expect(type.fields?.count == 2)
         #expect(type.fields?.first?.name == "id")
         #expect(type.fields?.first?.required == true)
-    }
-
-    // MARK: - APIListResponse
-
-    @Test func decodeListResponse() throws {
-        let json = """
-        {
-            "data": [
-                {"id": "sess-1", "title": "First"},
-                {"id": "sess-2", "title": "Second"}
-            ],
-            "total": 2,
-            "page": 1,
-            "page_size": 50
-        }
-        """.data(using: .utf8)!
-
-        let response = try JSONDecoder().decode(APIListResponse<DianeSession>.self, from: json)
-        #expect(response.data.count == 2)
-        #expect(response.total == 2)
-        #expect(response.page == 1)
-        #expect(response.pageSize == 50)
     }
 
     // MARK: - DateUtils

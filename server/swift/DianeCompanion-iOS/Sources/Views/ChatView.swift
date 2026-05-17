@@ -507,50 +507,82 @@ private struct MessageBubbleContent: View {
 
     var body: some View {
         Button(action: onTap) {
-            HStack(alignment: .bottom, spacing: DesignTokens.spacingSM) {
-                if isUser { Spacer(minLength: 60) }
-
-                VStack(alignment: isUser ? .trailing : .leading, spacing: DesignTokens.spacingXS) {
-                    // Tool calls appear ABOVE the response text
-                    if let toolCalls = message.toolCalls, !toolCalls.isEmpty {
-                        VStack(alignment: .leading, spacing: DesignTokens.spacingXXS) {
-                            ForEach(toolCalls, id: \.name) { tc in
-                                ToolCallView(toolCall: tc)
+            HStack(alignment: .bottom, spacing: 0) {
+                if !isUser {
+                    // For assistant messages: bubble on left, empty space on right
+                    VStack(alignment: .leading, spacing: DesignTokens.spacingXS) {
+                        if let toolCalls = message.toolCalls, !toolCalls.isEmpty {
+                            VStack(alignment: .leading, spacing: DesignTokens.spacingXXS) {
+                                ForEach(toolCalls, id: \.name) { tc in
+                                    ToolCallView(toolCall: tc)
+                                }
                             }
                         }
-                    }
 
-                    // Content — auto-detects markdown, renders with Textual (iOS 18+) or AttributedString fallback
-                    MessageContentView(content: message.content, isUser: isUser)
-                        .foregroundColor(textColor)
+                        MessageContentView(content: message.content, isUser: isUser)
+                            .foregroundColor(textColor)
 
-                    // Streaming cursor
-                    if isStreaming {
-                        HStack(spacing: 0) {
-                            Text("\u{258D}")
-                                .font(.body)
-                                .foregroundColor(textColor)
-                                .opacity(0.6)
+                        if isStreaming {
+                            HStack(spacing: 0) {
+                                Text("\u{258D}")
+                                    .font(.body)
+                                    .foregroundColor(textColor)
+                                    .opacity(0.6)
+                            }
+                        }
+
+                        if let reasoning = message.reasoningContent, !reasoning.isEmpty {
+                            ReasoningSection(content: reasoning)
+                        }
+
+                        if let createdAt = message.createdAt {
+                            Text(DateUtils.formatTime(createdAt))
+                                .font(.caption2)
+                                .foregroundColor(isUser ? .white.opacity(0.7) : .secondary.opacity(0.7))
                         }
                     }
+                    .padding(DesignTokens.spacingMD)
+                    .background(bubbleColor)
+                    .cornerRadius(DesignTokens.radiusLG)
+                    Spacer(minLength: 0)
+                } else {
+                    // For user messages: empty space on left, bubble on right
+                    Spacer(minLength: 0)
+                    VStack(alignment: .trailing, spacing: DesignTokens.spacingXS) {
+                        if let toolCalls = message.toolCalls, !toolCalls.isEmpty {
+                            VStack(alignment: .leading, spacing: DesignTokens.spacingXXS) {
+                                ForEach(toolCalls, id: \.name) { tc in
+                                    ToolCallView(toolCall: tc)
+                                }
+                            }
+                        }
 
-                    // Reasoning section
-                    if let reasoning = message.reasoningContent, !reasoning.isEmpty {
-                        ReasoningSection(content: reasoning)
-                    }
+                        MessageContentView(content: message.content, isUser: isUser)
+                            .foregroundColor(textColor)
 
-                    // Timestamp
-                    if let createdAt = message.createdAt {
-                        Text(DateUtils.formatTime(createdAt))
-                            .font(.caption2)
-                            .foregroundColor(isUser ? .white.opacity(0.7) : .secondary.opacity(0.7))
+                        if isStreaming {
+                            HStack(spacing: 0) {
+                                Text("\u{258D}")
+                                    .font(.body)
+                                    .foregroundColor(textColor)
+                                    .opacity(0.6)
+                            }
+                        }
+
+                        if let reasoning = message.reasoningContent, !reasoning.isEmpty {
+                            ReasoningSection(content: reasoning)
+                        }
+
+                        if let createdAt = message.createdAt {
+                            Text(DateUtils.formatTime(createdAt))
+                                .font(.caption2)
+                                .foregroundColor(isUser ? .white.opacity(0.7) : .secondary.opacity(0.7))
+                        }
                     }
+                    .padding(DesignTokens.spacingMD)
+                    .background(bubbleColor)
+                    .cornerRadius(DesignTokens.radiusLG)
                 }
-                .padding(DesignTokens.spacingMD)
-                .background(bubbleColor)
-                .cornerRadius(DesignTokens.radiusLG)
-
-                if !isUser { Spacer(minLength: 60) }
             }
             .padding(.horizontal, DesignTokens.spacingMD)
             .padding(.vertical, DesignTokens.spacingXXS)
