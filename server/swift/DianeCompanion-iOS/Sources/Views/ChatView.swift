@@ -755,10 +755,24 @@ struct ChatView: View {
                             }
                         }
                     }
-                    .scrollDismissesKeyboard(.immediately)
-                    .onChange(of: messages.count) { _, _ in
+                    .scrollDismissesKeyboard(.interactively)
+                    .onChange(of: messages, initial: true) { _, _ in
                         if let lastId = messages.last?.id {
-                            withAnimation {
+                            // Dispatch to next runloop to ensure layout is settled
+                            Task { @MainActor in
+                                try? await Task.sleep(for: .milliseconds(50))
+                                withAnimation {
+                                    proxy.scrollTo(lastId, anchor: .bottom)
+                                }
+                            }
+                        }
+                    }
+                    .onReceive(NotificationCenter.default.publisher(
+                        for: UIResponder.keyboardWillShowNotification
+                    )) { notification in
+                        if let lastId = messages.last?.id {
+                            let duration = (notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
+                            withAnimation(.easeOut(duration: duration)) {
                                 proxy.scrollTo(lastId, anchor: .bottom)
                             }
                         }
