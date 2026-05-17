@@ -114,6 +114,7 @@ targets:
     settings:
       base:
         INFOPLIST_FILE: DianeTests/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.emergent-company.diane-companion.tests
         BUNDLE_LOADER: "$(TEST_HOST)"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Diane.app/Contents/MacOS/Diane"
         GENERATE_INFOPLIST_FILE: YES
