@@ -2,13 +2,15 @@ import Foundation
 
 public final class ServerConfiguration: @unchecked Sendable {
     public var serverURL: String {
-        didSet { store.set(serverURL, forKey: Keys.serverURL) }
+        didSet { persist(value: serverURL, defaultsKey: Keys.serverURL, kcKey: .serverURL) }
     }
+
     public var apiKey: String {
-        didSet { store.set(apiKey, forKey: Keys.apiKey) }
+        didSet { persist(value: apiKey, defaultsKey: Keys.apiKey, kcKey: .apiKey) }
     }
+
     public var projectID: String {
-        didSet { store.set(projectID, forKey: Keys.projectID) }
+        didSet { persist(value: projectID, defaultsKey: Keys.projectID, kcKey: .projectID) }
     }
 
     public var isConfigured: Bool { !serverURL.isEmpty && !apiKey.isEmpty }
@@ -28,8 +30,19 @@ public final class ServerConfiguration: @unchecked Sendable {
 
     public init(userDefaults: UserDefaults = .standard) {
         self.store = userDefaults
-        self.serverURL = userDefaults.string(forKey: Keys.serverURL) ?? ""
-        self.apiKey = userDefaults.string(forKey: Keys.apiKey) ?? ""
-        self.projectID = userDefaults.string(forKey: Keys.projectID) ?? ""
+
+        // Migrate legacy UserDefaults → Keychain on first access
+        KeychainService.migrateFromUserDefaults(userDefaults: userDefaults)
+
+        // Prefer Keychain, fall back to UserDefaults for backward compat
+        self.serverURL = KeychainService.get(.serverURL) ?? userDefaults.string(forKey: Keys.serverURL) ?? ""
+        self.apiKey = KeychainService.get(.apiKey) ?? userDefaults.string(forKey: Keys.apiKey) ?? ""
+        self.projectID = KeychainService.get(.projectID) ?? userDefaults.string(forKey: Keys.projectID) ?? ""
+    }
+
+    // MARK: - Persistence
+
+    private func persist(value: String, defaultsKey: String, kcKey: KeychainService.Key) {
+        KeychainService.set(value, for: kcKey)
     }
 }

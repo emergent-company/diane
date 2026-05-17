@@ -1,0 +1,9 @@
+[auth]
+# Generate a token at https://sentry.io/orgredirect/organizations/:orgslug/settings/auth-tokens/
+# Scopes needed: project:releases, org:read (and optionally project:write)
+token=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
+
+[defaults]
+org=diane-6t
+project=apple-ios
+url=https://sentry.io/

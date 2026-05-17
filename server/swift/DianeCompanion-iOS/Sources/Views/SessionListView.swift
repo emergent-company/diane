@@ -1,8 +1,6 @@
 import SwiftUI
 import DianeShared
 
-// MARK: - RemoteDianeAPIClient Delete Extension
-
 // MARK: - Placeholder Sessions for Loading State
 
 private let placeholderSessions: [DianeSession] = (0..<5).map { i in
@@ -11,7 +9,7 @@ private let placeholderSessions: [DianeSession] = (0..<5).map { i in
         title: "Loading Session...",
         status: "active",
         messageCount: 0,
-        createdAt: ISO8601DateFormatter().string(from: Date()),
+        createdAt: DateUtils.formatISO8601(),
         agentName: "diane-default"
     )
 }
@@ -20,13 +18,20 @@ private let placeholderSessions: [DianeSession] = (0..<5).map { i in
 
 struct SessionRow: View {
     let session: DianeSession
+    let isArchived: Bool
 
     var body: some View {
         HStack(spacing: DesignTokens.spacingMD) {
-            // Status dot
-            Circle()
-                .fill(StatusColors.statusColor(session.status))
-                .frame(width: 10, height: 10)
+            // Status dot or archive icon
+            if isArchived {
+                Image(systemName: "archivebox")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                Circle()
+                    .fill(StatusColors.statusColor(session.status))
+                    .frame(width: 10, height: 10)
+            }
 
             VStack(alignment: .leading, spacing: DesignTokens.spacingXXS) {
                 // Title (1 line truncated)
@@ -132,22 +137,157 @@ private struct ErrorStateView: View {
     }
 }
 
+// MARK: - Agent Picker Sheet
+
+struct AgentPickerView: View {
+    @Environment(\.cloudClient) private var cloudClient
+    @Environment(\.config) private var config
+    @Environment(\.dismiss) private var dismiss
+
+    let onSelect: (AgentDef) -> Void
+
+    @State private var agents: [AgentDef] = []
+    @State private var isLoading = true
+    @State private var error: String?
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if isLoading {
+                    ProgressView("Loading agents...")
+                        .frame(maxHeight: .infinity)
+                } else if let err = error {
+                    VStack(spacing: DesignTokens.spacingMD) {
+                        ContentUnavailableView(
+                            "Could Not Load Agents",
+                            systemImage: "exclamationmark.triangle",
+                            description: Text(err)
+                        )
+                        HStack(spacing: DesignTokens.spacingMD) {
+                            Button("Retry") {
+                                Task { await loadAgents() }
+                            }
+                            .buttonStyle(.bordered)
+                            Button("Use Default Agent (diane-default)") {
+                                let defaultAgent = AgentDef(
+                                    id: "diane-default",
+                                    name: "diane-default",
+                                    description: "Default Diane agent",
+                                    model: nil, provider: nil
+                                )
+                                onSelect(defaultAgent)
+                                dismiss()
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+                    }
+                } else if agents.isEmpty {
+                    VStack(spacing: DesignTokens.spacingMD) {
+                        ContentUnavailableView(
+                            "No Agents Available",
+                            systemImage: "person.2.slash",
+                            description: Text("Create an agent in the Memory Platform dashboard first.")
+                        )
+                        Button("Start with Default Agent") {
+                            let defaultAgent = AgentDef(
+                                id: "diane-default",
+                                name: "diane-default",
+                                description: "Default Diane agent",
+                                model: nil, provider: nil
+                            )
+                            onSelect(defaultAgent)
+                            dismiss()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                } else {
+                    List(agents) { agent in
+                        Button {
+                            onSelect(agent)
+                            dismiss()
+                        } label: {
+                            HStack(spacing: DesignTokens.spacingMD) {
+                                Image(systemName: "person.circle.fill")
+                                    .font(.title2)
+                                    .foregroundColor(.accentColor)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(agent.name)
+                                        .font(.body)
+                                        .foregroundColor(.primary)
+                                    if let desc = agent.description, !desc.isEmpty {
+                                        Text(desc)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                            .lineLimit(2)
+                                    }
+                                    HStack(spacing: 4) {
+                                        if let model = agent.model {
+                                            Text(model)
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        if let provider = agent.provider {
+                                            Text("· \(provider)")
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
+                                    }
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .navigationTitle("Choose Agent")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+            .task { await loadAgents() }
+        }
+    }
+
+    private func loadAgents() async {
+        isLoading = true
+        error = nil
+        do {
+            agents = try await cloudClient.fetchAgentDefs(projectID: config.projectID)
+        } catch {
+            self.error = error.localizedDescription
+        }
+        isLoading = false
+    }
+}
+
 // MARK: - SessionListView
 
 struct SessionListView: View {
     @Environment(\.cloudClient) private var cloudClient
+    @StateObject private var archiveStore = ArchivedSessionsStore.shared
     @State private var sessions: [DianeSession] = []
     @State private var isLoading = true
     @State private var error: String?
     @State private var searchText = ""
-    @State private var sessionToDelete: DianeSession?
-    @State private var showDeleteAlert = false
     @State private var isCreating = false
     @State private var showSettings = false
+    @State private var showAgentPicker = false
+    @State private var navigateToNewSession: DianeSession?
+    @State private var isSearching = false
 
-    var filteredSessions: [DianeSession] {
-        if searchText.isEmpty { return sessions }
-        return sessions.filter {
+    private var filteredSessions: [DianeSession] {
+        let visible = archiveStore.showArchived
+            ? sessions
+            : sessions.filter { !archiveStore.isArchived($0.id) }
+        if searchText.isEmpty { return visible }
+        return visible.filter {
             ($0.title ?? "").localizedCaseInsensitiveContains(searchText)
             || ($0.agentName ?? "").localizedCaseInsensitiveContains(searchText)
         }
@@ -156,54 +296,69 @@ struct SessionListView: View {
     var body: some View {
         VStack(spacing: 0) {
             Group {
-            if isLoading && sessions.isEmpty {
-                // Redacted placeholder rows while loading
-                List {
-                    ForEach(placeholderSessions) { session in
-                        SessionRow(session: session)
-                            .redacted(reason: .placeholder)
-                    }
-                }
-                .listStyle(.insetGrouped)
-            } else if let err = error, sessions.isEmpty {
-                ErrorStateView(message: err) {
-                    Task { await load() }
-                }
-            } else if sessions.isEmpty {
-                EmptyStateView {
-                    Task { await createNewSession() }
-                }
-            } else {
-                List {
-                    ForEach(filteredSessions) { session in
-                        NavigationLink(value: session) {
-                            SessionRow(session: session)
+                if isLoading && sessions.isEmpty {
+                    List {
+                        ForEach(placeholderSessions) { session in
+                            SessionRow(session: session, isArchived: false)
+                                .redacted(reason: .placeholder)
                         }
-                        .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) {
-                                sessionToDelete = session
-                                showDeleteAlert = true
-                            } label: {
-                                Label("Delete", systemImage: "trash")
+                    }
+                    .listStyle(.insetGrouped)
+                } else if let err = error, sessions.isEmpty {
+                    ErrorStateView(message: err) {
+                        Task { await load() }
+                    }
+                } else if sessions.isEmpty {
+                    EmptyStateView {
+                        showAgentPicker = true
+                    }
+                } else {
+                    List {
+                        ForEach(filteredSessions) { session in
+                            ZStack(alignment: .leading) {
+                                NavigationLink(value: session) {
+                                    EmptyView()
+                                }
+                                .opacity(0)
+                                .buttonStyle(.plain)
+
+                                SessionRow(session: session, isArchived: archiveStore.isArchived(session.id))
+                            }
+                            .swipeActions(edge: .trailing) {
+                                Button {
+                                    withAnimation(.easeInOut(duration: 0.25)) {
+                                        archiveStore.toggleArchive(sessionID: session.id)
+                                    }
+                                } label: {
+                                    Label(archiveStore.isArchived(session.id) ? "Unarchive" : "Archive", systemImage: "archivebox")
+                                }
+                                .tint(.gray)
                             }
                         }
+                    
                     }
-                    .onDelete { indexSet in
-                        guard let index = indexSet.first, index < filteredSessions.count else { return }
-                        sessionToDelete = filteredSessions[index]
-                        showDeleteAlert = true
-                    }
+                    .listStyle(.insetGrouped)
                 }
-                .listStyle(.insetGrouped)
             }
-        }  // closes Group
-        }  // closes VStack
-        .searchable(text: $searchText, prompt: "Search sessions...")
+        }
+        .searchable(text: $searchText, isPresented: $isSearching, prompt: "Search sessions...")
         .navigationTitle("Chats")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 4) {
-                    Button(action: { Task { await createNewSession() } }) {
+                    Button(action: { archiveStore.toggleShowArchived() }) {
+                        Image(systemName: archiveStore.showArchived
+                            ? "archivebox.fill"
+                            : "archivebox")
+                    }
+                    .help(archiveStore.showArchived ? "Hide Archived" : "Show Archived")
+
+                    Button(action: { isSearching = true }) {
+                        Image(systemName: "magnifyingglass")
+                    }
+                    .keyboardShortcut("f", modifiers: .command)
+
+                    Button(action: { showAgentPicker = true }) {
                         if isCreating {
                             ProgressView()
                                 .scaleEffect(0.8)
@@ -212,10 +367,12 @@ struct SessionListView: View {
                         }
                     }
                     .disabled(isCreating)
+                    .keyboardShortcut("n", modifiers: .command)
 
                     Button(action: { showSettings = true }) {
                         Image(systemName: "gearshape")
                     }
+                    .keyboardShortcut(",", modifiers: .command)
                 }
             }
         }
@@ -224,23 +381,18 @@ struct SessionListView: View {
                 SettingsView()
             }
         }
+        .sheet(isPresented: $showAgentPicker) {
+            AgentPickerView { agent in
+                Task { await createNewSession(agentName: agent.name) }
+            }
+        }
         .task { await load() }
         .refreshable { await load() }
         .navigationDestination(for: DianeSession.self) { session in
             ChatView(session: session)
         }
-        .alert("Delete Session", isPresented: $showDeleteAlert, presenting: sessionToDelete) { session in
-            Button("Cancel", role: .cancel) {
-                sessionToDelete = nil
-            }
-            Button("Delete", role: .destructive) {
-                if let idx = sessions.firstIndex(where: { $0.id == session.id }) {
-                    sessions.remove(at: idx)
-                }
-                Task { await performDelete(session) }
-            }
-        } message: { session in
-            Text("Are you sure you want to delete \"\(ViewFormatting.sessionTitle(session.title))\"? This action cannot be undone.")
+        .navigationDestination(item: $navigateToNewSession) { session in
+            ChatView(session: session)
         }
         .onReceive(NotificationCenter.default.publisher(for: NetworkMonitor.connectivityChanged)) { notification in
             if let connected = notification.userInfo?["isConnected"] as? Bool, connected {
@@ -256,37 +408,99 @@ struct SessionListView: View {
         isLoading = true
         error = nil
 
-        // Load from local cache only — the MP ACP server does not expose
-        // GET /acp/v1/sessions (list all), so we can't fetch remote session
-        // listings. New sessions are synced on create via createACPSession().
+        // 1. Load local cache immediately
         let cached = SessionCache.shared.loadCachedSessions()
         sessions = cached
         isLoading = false
+
+        // 2. Try to fetch remote sessions from MP (ACP API)
+        do {
+            let remoteItems = try await cloudClient.fetchACPSessions()
+            let remoteSessions = remoteItems.map { $0.toDianeSession() }
+
+            // Merge: prefer remote, keep local-only sessions
+            var merged = remoteSessions
+            for cachedSession in cached {
+                if !remoteSessions.contains(where: { $0.id == cachedSession.id }) {
+                    merged.append(cachedSession)
+                }
+            }
+
+            // Sort by creation date descending
+            merged.sort { a, b in
+                let dateA = DateUtils.parseISO8601(a.createdAt) ?? .distantPast
+                let dateB = DateUtils.parseISO8601(b.createdAt) ?? .distantPast
+                return dateA > dateB
+            }
+
+            await MainActor.run {
+                sessions = merged
+                SessionCache.shared.cacheSessions(merged)
+            }
+        } catch {
+            // Remote fetch failed — show error only if we have nothing cached
+            if cached.isEmpty {
+                await MainActor.run { self.error = error.localizedDescription }
+            }
+        }
     }
 
-    private func createNewSession() async {
+    private func createNewSession(agentName: String) async {
         isCreating = true
         do {
-            let acpID = try await cloudClient.createACPSession(agentName: "diane-default")
-            let session = DianeSession(id: acpID, title: "New Chat", createdAt: ISO8601DateFormatter().string(from: Date()), agentName: "diane-default")
+            let acpID = try await cloudClient.createACPSession(agentName: agentName)
+            let session = DianeSession(
+                id: acpID,
+                title: "New Chat",
+                createdAt: DateUtils.formatISO8601(),
+                agentName: agentName
+            )
             sessions.insert(session, at: 0)
             SessionCache.shared.cacheSessions(sessions)
+            navigateToNewSession = session
         } catch {
             self.error = error.localizedDescription
         }
         isCreating = false
     }
-
-    private func performDelete(_ session: DianeSession) async {
-        // Remove from local cache only
-        SessionCache.shared.cacheSessions(sessions)
-    }
 }
 
 // MARK: - Preview
 
-#Preview {
+#Preview("SessionListView") {
     NavigationStack {
         SessionListView()
     }
+}
+
+#Preview("Session Row") {
+    List {
+        SessionRow(
+            session: DianeSession(
+                id: "preview-1",
+                title: "Project Kickoff Notes",
+                status: "active",
+                messageCount: 12,
+                createdAt: DateUtils.formatISO8601(Date().addingTimeInterval(-3600)),
+                agentName: "diane-default"
+            ),
+            isArchived: false
+        )
+        SessionRow(
+            session: DianeSession(
+                id: "preview-2",
+                title: "Archived Conversation",
+                status: "completed",
+                messageCount: 3,
+                createdAt: DateUtils.formatISO8601(Date().addingTimeInterval(-86_400)),
+                agentName: "research-agent"
+            ),
+            isArchived: true
+        )
+    }
+    .listStyle(.insetGrouped)
+}
+
+#Preview("Agent Picker") {
+    AgentPickerView { _ in }
 }

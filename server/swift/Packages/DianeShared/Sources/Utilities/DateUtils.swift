@@ -87,6 +87,11 @@ public enum DateUtils {
         return mins < minutes
     }
 
+    /// Format a Date to an ISO8601 string with fractional seconds.
+    public static func formatISO8601(_ date: Date = Date()) -> String {
+        isoFormatter.string(from: date)
+    }
+
     public static func isStale(_ dateString: String?, after minutes: Int = 30) -> Bool {
         guard let mins = minutesSince(dateString) else { return true }
         return mins >= minutes

@@ -65,3 +65,24 @@ final class NetworkMonitorObserved: ObservableObject {
         NotificationCenter.default.removeObserver(self)
     }
 }
+
+// MARK: - Preview
+
+#Preview("Banner") {
+    VStack(spacing: 0) {
+        OfflineBanner()
+        Spacer()
+    }
+}
+
+#Preview("With Modifier") {
+    NavigationStack {
+        List {
+            Text("Cached Item 1")
+            Text("Cached Item 2")
+            Text("Cached Item 3")
+        }
+        .navigationTitle("Sessions")
+    }
+    .withOfflineBanner()
+}

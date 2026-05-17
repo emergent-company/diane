@@ -20,6 +20,9 @@ settings:
         MARKETING_VERSION: 1.42.0
         CURRENT_PROJECT_VERSION: 1
         ALWAYS_SEARCH_USER_PATHS: NO
+        # Produce separate .dSYM bundles in all configurations so Sentry can
+        # symbolicate simulator hangs / crashes too (default for Debug is "dwarf" only).
+        DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
 
 packages:
   Sentry:
@@ -63,6 +66,23 @@ targets:
           FW="$CODESIGNING_FOLDER_PATH/Frameworks/Sentry.framework"
           if [ -d "$FW" ]; then
             codesign --force --sign - --verbose "$FW"
+          fi
+        basedOnDependencyAnalysis: NO
+      - name: "Sentry: Upload Debug Symbols"
+        script: |
+          # Reads auth_token / org / project from .sentryclirc at the project root.
+          if [[ "$(uname -m)" == arm64 ]]; then
+              export PATH="/opt/homebrew/bin:$PATH"
+          fi
+          if which sentry-cli >/dev/null; then
+              export SENTRY_ORG=diane-6t
+              export SENTRY_PROJECT=apple-ios
+              ERROR=$(sentry-cli debug-files upload --include-sources "$DWARF_DSYM_FOLDER_PATH" 2>&1 >/dev/null)
+              if [ ! $? -eq 0 ]; then
+                  echo "warning: sentry-cli - $ERROR"
+              fi
+          else
+              echo "warning: sentry-cli not installed, download from https://github.com/getsentry/sentry-cli/releases"
           fi
         basedOnDependencyAnalysis: NO
     info:

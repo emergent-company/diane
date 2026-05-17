@@ -6,14 +6,26 @@ public final class EmergentAPIClient: @unchecked Sendable {
     public let http: HTTPClient
     public var projectID: String = ""
 
+    /// Raw API key, stored directly (not derived from headers).
+    private var _apiKey: String = ""
+
     public var baseURL: String {
         get { http.baseURL }
         set { http.baseURL = newValue }
     }
 
     public var apiKey: String {
-        get { http.defaultHeaders["Authorization"] ?? "" }
-        set { http.defaultHeaders["Authorization"] = newValue.hasPrefix("Bearer ") ? newValue : "Bearer \(newValue)" }
+        get { _apiKey }
+        set {
+            _apiKey = newValue.trimmingCharacters(in: .whitespaces)
+            if _apiKey.hasPrefix("emt_") {
+                http.defaultHeaders["Authorization"] = "Bearer \(_apiKey)"
+                http.defaultHeaders.removeValue(forKey: "X-API-Key")
+            } else {
+                http.defaultHeaders["X-API-Key"] = _apiKey
+                http.defaultHeaders.removeValue(forKey: "Authorization")
+            }
+        }
     }
 
     // MARK: - Init
@@ -116,6 +128,8 @@ public final class EmergentAPIClient: @unchecked Sendable {
                     request.httpBody = jsonData
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                    request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+                    request.cachePolicy = .reloadIgnoringLocalCacheData
                     request.timeoutInterval = 300
                     // ACP auth: use Bearer if key starts with emt_
                     if !self.apiKey.isEmpty {
@@ -292,6 +306,13 @@ public final class EmergentAPIClient: @unchecked Sendable {
         return (try? JSONDecoder().decode([ACPSessionItem].self, from: data)) ?? []
     }
 
+    /// Fetch a single ACP session with full details including run history.
+    /// GET /acp/v1/sessions/:sessionId
+    public func fetchACPSession(id: String) async throws -> ACPSessionItem {
+        let data = try await http.get("/acp/v1/sessions/\(id)")
+        return try JSONDecoder().decode(ACPSessionItem.self, from: data)
+    }
+
     // MARK: - Documents (MP API)
 
     public func fetchDocuments(projectID: String) async throws -> [Document] {
@@ -349,7 +370,7 @@ public final class EmergentAPIClient: @unchecked Sendable {
     // MARK: - Agents (MP API)
 
     public func fetchAgentDefs(projectID: String) async throws -> [AgentDef] {
-        let data = try await http.get("/api/agent-definitions", headers: ["X-Project-ID": projectID])
+        let data = try await http.get("/api/agent-definitions")
         struct Response: Decodable, Sendable { let data: [AgentDef] }
         if let resp = try? JSONDecoder().decode(Response.self, from: data) { return resp.data }
         return (try? JSONDecoder().decode([AgentDef].self, from: data)) ?? []
@@ -363,27 +384,56 @@ public struct ACPSessionItem: Decodable, Sendable {
     public let agentName: String?
     public let title: String?
     public let createdAt: String?
+    public let updatedAt: String?
     public let messageCount: Int?
     public let status: String?
+    public let runCount: Int?
+    public let totalTokens: Int?
+    public let totalCostUsd: Double?
+    public let lastRunStatus: String?
 
     enum CodingKeys: String, CodingKey {
         case id
         case agentName = "agent_name"
         case title
         case createdAt = "created_at"
+        case updatedAt = "updated_at"
         case messageCount = "message_count"
         case status
+        case runCount = "run_count"
+        case totalTokens = "total_tokens"
+        case totalCostUsd = "total_cost_usd"
+        case lastRunStatus = "last_run_status"
     }
 }
 
 public extension ACPSessionItem {
     func toDianeSession() -> DianeSession {
-        DianeSession(
+        // Derive a display title from agent_name + date when server doesn't provide one
+        let displayTitle: String? = {
+            if let t = title, !t.isEmpty { return t }
+            let agent = agentName ?? "Agent"
+            if let created = createdAt {
+                let dateStr = DateUtils.formatRelative(created)
+                return "\(agent) — \(dateStr)"
+            }
+            return "Chat with \(agent)"
+        }()
+
+        // Use run_count as message_count when available (each run = 1 exchange)
+        let displayMessageCount: Int? = messageCount ?? runCount
+
+        return DianeSession(
             id: id,
-            title: title,
-            status: status ?? "active",
-            messageCount: messageCount,
+            title: displayTitle,
+            status: lastRunStatus ?? status ?? "active",
+            messageCount: displayMessageCount,
+            runCount: runCount,
+            totalTokens: totalTokens,
+            totalCostUsd: totalCostUsd,
+            lastRunStatus: lastRunStatus,
             createdAt: createdAt,
+            updatedAt: updatedAt,
             agentName: agentName
         )
     }

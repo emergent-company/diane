@@ -51,7 +51,7 @@ public final class SessionCache: @unchecked Sendable {
     // MARK: - Badge / Last Read Tracking
 
     public func markRead(sessionID: String) {
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = DateUtils.formatISO8601()
         defaults?.set(now, forKey: Keys.lastReadPrefix + sessionID)
     }
 
@@ -59,7 +59,7 @@ public final class SessionCache: @unchecked Sendable {
         guard let dateStr = defaults?.string(forKey: Keys.lastReadPrefix + sessionID) else {
             return nil
         }
-        return ISO8601DateFormatter().date(from: dateStr)
+        return DateUtils.parseISO8601(dateStr)
     }
 
     public func unreadCount(sessionID: String, messages: [DianeMessage]) -> Int {
@@ -70,7 +70,7 @@ public final class SessionCache: @unchecked Sendable {
         return messages.filter { msg in
             guard msg.role != "user" && msg.role != "error",
                   let created = msg.createdAt,
-                  let createdDate = ISO8601DateFormatter().date(from: created) else {
+                  let createdDate = DateUtils.parseISO8601(created) else {
                 return false
             }
             return createdDate > lastRead

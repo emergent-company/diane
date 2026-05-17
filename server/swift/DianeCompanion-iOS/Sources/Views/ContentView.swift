@@ -67,14 +67,19 @@ struct SessionListiPadView: View {
     @Environment(\.cloudClient) private var cloudClient
     @Binding var selectedSession: DianeSession?
 
+    @StateObject private var archiveStore = ArchivedSessionsStore.shared
     @State private var sessions: [DianeSession] = []
     @State private var isLoading = true
     @State private var error: String?
     @State private var searchText = ""
+    @State private var showAgentPicker = false
 
-    var filteredSessions: [DianeSession] {
-        if searchText.isEmpty { return sessions }
-        return sessions.filter {
+    private var filteredSessions: [DianeSession] {
+        let visible = archiveStore.showArchived
+            ? sessions
+            : sessions.filter { !archiveStore.isArchived($0.id) }
+        if searchText.isEmpty { return visible }
+        return visible.filter {
             ($0.title ?? "").localizedCaseInsensitiveContains(searchText)
             || ($0.agentName ?? "").localizedCaseInsensitiveContains(searchText)
         }
@@ -111,7 +116,7 @@ struct SessionListiPadView: View {
             } else {
                 List(filteredSessions) { session in
                     Button(action: { selectedSession = session }) {
-                        SessionRow(session: session)
+                        SessionRow(session: session, isArchived: archiveStore.isArchived(session.id))
                     }
                     .buttonStyle(.plain)
                     .listRowBackground(
@@ -119,6 +124,17 @@ struct SessionListiPadView: View {
                             ? Color.accentColor.opacity(0.15)
                             : Color.clear
                     )
+                    .swipeActions(edge: .trailing) {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                archiveStore.toggleArchive(sessionID: session.id)
+                            }
+                        } label: {
+                            Label(archiveStore.isArchived(session.id) ? "Unarchive" : "Archive",
+                                  systemImage: "archivebox")
+                        }
+                        .tint(.gray)
+                    }
                 }
                 .listStyle(.insetGrouped)
             }
@@ -126,9 +142,21 @@ struct SessionListiPadView: View {
         .searchable(text: $searchText, prompt: "Search sessions...")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button(action: { Task { await createNewSession() } }) {
-                    Image(systemName: "plus.bubble")
+                HStack(spacing: 4) {
+                    Button(action: { archiveStore.toggleShowArchived() }) {
+                        Image(systemName: archiveStore.showArchived
+                            ? "archivebox.fill"
+                            : "archivebox")
+                    }
+                    Button(action: { showAgentPicker = true }) {
+                        Image(systemName: "plus.bubble")
+                    }
                 }
+            }
+        }
+        .sheet(isPresented: $showAgentPicker) {
+            AgentPickerView { agent in
+                Task { await createNewSession(agentName: agent.name) }
             }
         }
         .task { await load() }
@@ -143,14 +171,45 @@ struct SessionListiPadView: View {
     private func load() async {
         isLoading = true
         error = nil
-        sessions = SessionCache.shared.loadCachedSessions()
+
+        // 1. Load local cache immediately
+        let cached = SessionCache.shared.loadCachedSessions()
+        sessions = cached
         isLoading = false
+
+        // 2. Try to fetch remote sessions from MP
+        do {
+            let remoteItems = try await cloudClient.fetchACPSessions()
+            let remoteSessions = remoteItems.map { $0.toDianeSession() }
+
+            var merged = remoteSessions
+            for cachedSession in cached {
+                if !remoteSessions.contains(where: { $0.id == cachedSession.id }) {
+                    merged.append(cachedSession)
+                }
+            }
+
+            merged.sort { a, b in
+                let dateA = DateUtils.parseISO8601(a.createdAt) ?? .distantPast
+                let dateB = DateUtils.parseISO8601(b.createdAt) ?? .distantPast
+                return dateA > dateB
+            }
+
+            await MainActor.run {
+                sessions = merged
+                SessionCache.shared.cacheSessions(merged)
+            }
+        } catch {
+            if cached.isEmpty {
+                await MainActor.run { self.error = error.localizedDescription }
+            }
+        }
     }
 
-    private func createNewSession() async {
+    private func createNewSession(agentName: String) async {
         do {
-            let acpID = try await cloudClient.createACPSession(agentName: "diane-default")
-            let session = DianeSession(id: acpID, title: "New Chat", createdAt: ISO8601DateFormatter().string(from: Date()), agentName: "diane-default")
+            let acpID = try await cloudClient.createACPSession(agentName: agentName)
+            let session = DianeSession(id: acpID, title: "New Chat", createdAt: DateUtils.formatISO8601(), agentName: agentName)
             sessions.insert(session, at: 0)
             selectedSession = session
             SessionCache.shared.cacheSessions(sessions)
@@ -159,3 +218,23 @@ struct SessionListiPadView: View {
         }
     }
 }
+// MARK: - Preview
+
+#Preview("ContentView") {
+    ContentView()
+}
+
+#Preview("iPhone Layout") {
+    iPhoneLayout()
+}
+
+#Preview("iPad Layout") {
+    iPadLayout()
+}
+
+#Preview("iPad Sidebar") {
+    NavigationStack {
+        SessionListiPadView(selectedSession: .constant(nil))
+    }
+}
+

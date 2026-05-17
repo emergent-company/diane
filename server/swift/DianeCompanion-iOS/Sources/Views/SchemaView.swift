@@ -216,3 +216,62 @@ struct SchemaTypeDetailView: View {
         return label
     }
 }
+
+// MARK: - Preview
+
+private enum SchemaPreviewSamples {
+    static let typeJSON = #"""
+    {
+        "name": "User",
+        "description": "A user account",
+        "fields": [
+            {"name": "id", "type": "ID", "required": true},
+            {"name": "email", "type": "String", "required": true, "description": "Primary email address"},
+            {"name": "name", "type": "String", "required": false},
+            {"name": "tags", "type": "String", "required": false, "is_list": true, "default_value": "[]"}
+        ]
+    }
+    """#
+
+    static let relationshipJSON = #"""
+    {
+        "name": "ownsProject",
+        "from_type": "User",
+        "to_type": "Project",
+        "type": "one_to_many",
+        "description": "A user can own many projects"
+    }
+    """#
+
+    static func decodedType() -> SchemaType {
+        try! JSONDecoder().decode(SchemaType.self, from: Data(typeJSON.utf8))
+    }
+
+    static func decodedRelationship() -> SchemaRelationship {
+        try! JSONDecoder().decode(SchemaRelationship.self, from: Data(relationshipJSON.utf8))
+    }
+}
+
+#Preview("SchemaView") {
+    NavigationStack {
+        SchemaView()
+    }
+}
+
+#Preview("Type Row") {
+    List {
+        SchemaTypeRow(type: SchemaPreviewSamples.decodedType())
+    }
+}
+
+#Preview("Relationship Row") {
+    List {
+        RelationshipRow(rel: SchemaPreviewSamples.decodedRelationship())
+    }
+}
+
+#Preview("Type Detail") {
+    NavigationStack {
+        SchemaTypeDetailView(type: SchemaPreviewSamples.decodedType())
+    }
+}
