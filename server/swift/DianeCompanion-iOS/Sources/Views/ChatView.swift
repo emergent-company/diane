@@ -1019,7 +1019,14 @@ struct ChatView: View {
                     // Only use remote messages (they're authoritative)
                     // But preserve any messages that were sent locally and not yet on server
                     let remoteIDs = Set(remoteMessages.map(\.id))
-                    let localOnly = cached.filter { !remoteIDs.contains($0.id) }
+                    let localOnly = cached.filter { cachedMsg in
+                        // Exclude by exact ID match
+                        if remoteIDs.contains(cachedMsg.id) { return false }
+                        // Also exclude if same role + same content (streaming vs ACP history IDs differ)
+                        return !remoteMessages.contains { remoteMsg in
+                            remoteMsg.role == cachedMsg.role && remoteMsg.content == cachedMsg.content
+                        }
+                    }
                     messages = (remoteMessages + localOnly).sorted { a, b in
                         let dateA = DateUtils.parseISO8601(a.createdAt) ?? .distantPast
                         let dateB = DateUtils.parseISO8601(b.createdAt) ?? .distantPast

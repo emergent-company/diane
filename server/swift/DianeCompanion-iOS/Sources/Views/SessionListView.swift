@@ -59,8 +59,8 @@ struct SessionRow: View {
 
             Spacer()
 
-            // Relative timestamp
-            Text(DateUtils.formatRelative(session.createdAt))
+            // Relative timestamp (last activity)
+            Text(DateUtils.formatRelative(session.updatedAt ?? session.createdAt))
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
@@ -426,10 +426,10 @@ struct SessionListView: View {
                 }
             }
 
-            // Sort by creation date descending
+            // Sort by last activity descending (updatedAt, fallback to createdAt)
             merged.sort { a, b in
-                let dateA = DateUtils.parseISO8601(a.createdAt) ?? .distantPast
-                let dateB = DateUtils.parseISO8601(b.createdAt) ?? .distantPast
+                let dateA = DateUtils.parseISO8601(a.updatedAt ?? a.createdAt) ?? .distantPast
+                let dateB = DateUtils.parseISO8601(b.updatedAt ?? b.createdAt) ?? .distantPast
                 return dateA > dateB
             }
 
