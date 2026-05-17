@@ -61,4 +61,30 @@ public enum StatusColors {
     public static let error = Color.red
     public static let info = Color.blue
     public static let muted = Color.secondary
+
+    // MARK: - ACP Status Animation (pulsing dots)
+
+    /// Defines the animation type for a session status dot.
+    /// `.static` for terminal/completed states, `.pulse` for active/in-progress states.
+    public enum StatusAnimation: Equatable, Sendable {
+        /// No animation — dot is static
+        case `static`
+        /// Gentle pulse — indicates activity (submitted, working, cancelling, or nil/no runs)
+        case pulse
+    }
+
+    /// Returns the animation type for a given ACP `last_run_status` value.
+    /// - Parameter status: The raw status string from the ACP API (`completed`, `failed`, `submitted`, `working`, etc.)
+    /// - Returns: `.pulse` for active states, `.static` for terminal states
+    public static func statusAnimation(_ status: String?) -> StatusAnimation {
+        guard let status = status?.lowercased(), !status.isEmpty else {
+            return .pulse  // nil = no runs yet = waiting
+        }
+        switch status {
+        case "submitted", "working", "cancelling":
+            return .pulse
+        default:
+            return .static  // completed, failed, input-required, cancelled, skipped
+        }
+    }
 }

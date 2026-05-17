@@ -105,7 +105,7 @@ public final class EmergentAPIClient: @unchecked Sendable {
         sessionID: String,
         content: String
     ) -> AsyncThrowingStream<StreamChatEvent, Error> {
-        return AsyncThrowingStream { continuation in
+        return AsyncThrowingStream<StreamChatEvent, Error>(StreamChatEvent.self, bufferingPolicy: .unbounded) { continuation in
             let task = Task {
                 do {
                     guard let url = URL(string: "/acp/v1/agents/\(agentName)/runs", relativeTo: URL(string: self.http.baseURL))
@@ -167,7 +167,17 @@ public final class EmergentAPIClient: @unchecked Sendable {
 
                             switch eventType {
                             case "run.created", "run.in-progress":
-                                break
+                                // Extract the run status from event data (submitted, working, etc.)
+                                let status = json["status"] as? String
+                                if let status, let runID = json["run_id"] as? String ?? (json["run"] as? [String: Any])?["run_id"] as? String {
+                                    continuation.yield(StreamChatEvent(
+                                        type: eventType, content: status,
+                                        name: nil, role: nil, sessionID: sessionID, runID: runID, message: nil))
+                                } else {
+                                    continuation.yield(StreamChatEvent(
+                                        type: eventType, content: nil,
+                                        name: nil, role: nil, sessionID: sessionID, runID: nil, message: nil))
+                                }
 
                             case "message.part":
                                 guard let part = json["part"] as? [String: Any],
@@ -377,8 +387,6 @@ public final class EmergentAPIClient: @unchecked Sendable {
     }
 }
 
-// MARK: - ACP Session Item
-
 public struct ACPSessionItem: Decodable, Sendable {
     public let id: String
     public let agentName: String?
@@ -391,6 +399,8 @@ public struct ACPSessionItem: Decodable, Sendable {
     public let totalTokens: Int?
     public let totalCostUsd: Double?
     public let lastRunStatus: String?
+    /// Server-side archive flag — iOS currently uses local archive only
+    public let isArchived: Bool?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -404,6 +414,7 @@ public struct ACPSessionItem: Decodable, Sendable {
         case totalTokens = "total_tokens"
         case totalCostUsd = "total_cost_usd"
         case lastRunStatus = "last_run_status"
+        case isArchived = "is_archived"
     }
 }
 
@@ -426,7 +437,7 @@ public extension ACPSessionItem {
         return DianeSession(
             id: id,
             title: displayTitle,
-            status: lastRunStatus ?? status ?? "active",
+            status: lastRunStatus,  // use last_run_status directly — nil means "no runs yet"
             messageCount: displayMessageCount,
             runCount: runCount,
             totalTokens: totalTokens,

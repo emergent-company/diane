@@ -31,27 +31,21 @@ struct DianeMessageTests {
         #expect(SendStatusTransition.canTransition(from: .queued, to: .retrying) == false)
     }
 
-    @Test("SendStatus no transitions from terminal states")
-    func testSendStatusNoTransitionsFromTerminal() throws {
-        let terminalStates: [DianeMessage.SendStatus] = [.read, .failed, .streaming, .sent]
-        for fromState in terminalStates {
-            for toState in DianeMessage.SendStatus.allCases {
-                if fromState == .sent && toState == .read {
-                    // sent → read is the only allowed transition from sent
-                    continue
-                }
-                #expect(SendStatusTransition.canTransition(from: fromState, to: toState) == false,
-                        "\(fromState) → \(toState) should be disallowed")
-            }
+    @Test("SendStatus no transitions from read (truly terminal)")
+    func testReadIsTerminal() throws {
+        for toState in DianeMessage.SendStatus.allCases {
+            #expect(SendStatusTransition.canTransition(from: .read, to: toState) == false,
+                    "read should only transition to \\(toState)")
         }
     }
 
-    @Test("sent → read is the only valid sent transition")
-    func testSentOnlyGoesToRead() throws {
-        for toState in DianeMessage.SendStatus.allCases where toState != .read {
-            #expect(SendStatusTransition.canTransition(from: .sent, to: toState) == false,
-                    "sent should only transition to read, not \(toState)")
-        }
+    @Test("sent can transition to read or failed")
+    func testSentTransitions() throws {
+        #expect(SendStatusTransition.canTransition(from: .sent, to: .read) == true)
+        #expect(SendStatusTransition.canTransition(from: .sent, to: .failed) == true)
+        // sent should NOT go back to earlier states
+        #expect(SendStatusTransition.canTransition(from: .sent, to: .sending) == false)
+        #expect(SendStatusTransition.canTransition(from: .sent, to: .queued) == false)
     }
 
     @Test("streaming is assistant-only, transitions to sent or failed")
@@ -60,6 +54,12 @@ struct DianeMessageTests {
         #expect(SendStatusTransition.canTransition(from: .streaming, to: .failed) == true)
         #expect(SendStatusTransition.canTransition(from: .streaming, to: .read) == false)
         #expect(SendStatusTransition.canTransition(from: .streaming, to: .sending) == false)
+    }
+
+    @Test("failed can retry or stay failed")
+    func testFailedTransitions() throws {
+        #expect(SendStatusTransition.canTransition(from: .failed, to: .retrying) == true)
+        #expect(SendStatusTransition.canTransition(from: .failed, to: .sending) == false)  // must go through retrying
     }
 
     // MARK: - Model encoding/decoding
@@ -144,9 +144,6 @@ public enum SendStatusTransition {
 
         // Streaming lifecycle
         case (.streaming, .sent):   return true
-
-        // Queued → failed directly (offline, never attempted)
-        case (.queued, .failed):    return true
 
         default: return false
         }
