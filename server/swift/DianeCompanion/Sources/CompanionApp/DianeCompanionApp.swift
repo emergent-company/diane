@@ -74,6 +74,13 @@ struct DianeCompanionApp: App {
         guard !hasStarted else { return }
         hasStarted = true
 
+        // In XCTest mode (host-app bundle loaded by xcodebuild), skip startup.
+        // XCTestConfigurationFilePath is set by xcodebuild when running unit tests.
+        // Without this check, the MenuBarExtra app's startup blocks the XCTest lifecycle.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil || ProcessInfo.processInfo.environment["XCTestBundlePath"] != nil {
+            return
+        }
+
         // In uitesting mode, skip startup and just bring window to front for XCUITest
         if CommandLine.arguments.contains("--uitesting") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
