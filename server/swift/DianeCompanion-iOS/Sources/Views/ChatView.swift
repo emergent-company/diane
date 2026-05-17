@@ -290,6 +290,8 @@ struct MessageDetailSheet: View {
                 }
             }
         }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
     }
 
     /// Full plain text of the message for copying.
@@ -680,7 +682,6 @@ struct ChatView: View {
 
     // Sheet state
     @State private var selectedMessage: DianeMessage?
-    @State private var showMessageDetail = false
     @State private var showSessionDetail = false
 
     // File upload state
@@ -836,10 +837,8 @@ struct ChatView: View {
             }
         }
         // Message detail sheet
-        .sheet(isPresented: $showMessageDetail) {
-            if let msg = selectedMessage {
-                MessageDetailSheet(message: msg)
-            }
+        .sheet(item: $selectedMessage) { msg in
+            MessageDetailSheet(message: msg)
         }
         // Session detail sheet
         .sheet(isPresented: $showSessionDetail) {
@@ -885,7 +884,6 @@ struct ChatView: View {
                     isStreaming: dianeMsg.id == streamingMessageID && isStreaming,
                     onTap: {
                         selectedMessage = dianeMsg
-                        showMessageDetail = true
                     }
                 )
             }

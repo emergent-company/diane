@@ -96,7 +96,7 @@ public struct MessageContentView: View {
         StructuredText(markdown: content)
             .textual.textSelection(.enabled)
             .textual.structuredTextStyle(.default)
-            .font(.body)
+            .font(.subheadline)
     }
     #endif
 
@@ -104,7 +104,7 @@ public struct MessageContentView: View {
     private var attributedMarkdownView: some View {
         if let attributed = content.toMarkdownAttributed() {
             Text(attributed)
-                .font(.body)
+                .font(.subheadline)
                 .textSelection(.enabled)
         } else {
             plainView
@@ -116,7 +116,7 @@ public struct MessageContentView: View {
     @ViewBuilder
     private var plainView: some View {
         Text(content)
-            .font(.body)
+            .font(.subheadline)
             .textSelection(.enabled)
     }
 }
