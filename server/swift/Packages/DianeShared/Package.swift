@@ -11,13 +11,13 @@ let package = Package(
         .library(name: "DianeShared", targets: ["DianeShared"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/gonzalezreal/textual", from: "0.3.1"),
+        .package(url: "https://github.com/johnxnguyen/Down", from: "0.11.0"),
     ],
     targets: [
         .target(
             name: "DianeShared",
             dependencies: [
-                .product(name: "Textual", package: "textual", condition: .when(platforms: [.macOS, .iOS])),
+                .product(name: "Down", package: "Down"),
             ]
         ),
         .testTarget(
