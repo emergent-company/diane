@@ -555,6 +555,7 @@ private struct MessageBubbleContent: View {
 
                     MessageContentView(content: message.content, isUser: isUser)
                         .foregroundColor(textColor)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
                     if isStreaming {
                         TypingIndicator()
@@ -588,6 +589,7 @@ private struct MessageBubbleContent: View {
 
                     MessageContentView(content: message.content, isUser: isUser)
                         .foregroundColor(textColor)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
 
                     if isStreaming {
                         TypingIndicator()
