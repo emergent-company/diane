@@ -82,7 +82,7 @@ struct ExpandedToolCallView: View {
                     .font(.subheadline)
                     .foregroundColor(.purple)
                 Text(toolCall.name)
-                    .font(.body.monospaced())
+                    .font(.subheadline.monospaced())
                     .fontWeight(.semibold)
                     .foregroundColor(.purple)
             }
@@ -989,11 +989,23 @@ struct ChatView: View {
                                     }
                                     return nil
                                 }()
-                                toolCalls.append(DianeMessage.ToolCall(
-                                    name: toolName,
-                                    arguments: toolInput,
-                                    result: toolOutput
-                                ))
+                                // ACP history has two trajectory events per tool call
+                                // (one without output, one with). Update in-place if
+                                // a matching entry exists, append only for new tools.
+                                if let existingIdx = toolCalls.firstIndex(where: { $0.name == toolName }) {
+                                    let existing = toolCalls[existingIdx]
+                                    toolCalls[existingIdx] = DianeMessage.ToolCall(
+                                        name: existing.name,
+                                        arguments: toolInput ?? existing.arguments,
+                                        result: toolOutput ?? existing.result
+                                    )
+                                } else {
+                                    toolCalls.append(DianeMessage.ToolCall(
+                                        name: toolName,
+                                        arguments: toolInput,
+                                        result: toolOutput
+                                    ))
+                                }
                             }
                         }
                     }
