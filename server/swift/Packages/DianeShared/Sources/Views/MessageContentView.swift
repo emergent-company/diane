@@ -1,16 +1,12 @@
 import SwiftUI
 
-#if canImport(Textual)
-import Textual
-#endif
-
 // MARK: - Message Content View
 
 /// A shared content view that renders message content with intelligent content detection.
 ///
 /// Supports three content types:
 /// - **HTML**: Renders in a WKWebView with auto-sizing and dark mode support
-/// - **Markdown**: Renders with Textual (when available) or AttributedString fallback
+/// - **Markdown**: Renders via Down → HTML → WKWebView
 /// - **Plain text**: Rendered as-is with `.font(.body)` and `.textSelection(.enabled)`
 ///
 /// Detection is automatic via `DianeContentDetector`, but can be overridden
@@ -79,36 +75,10 @@ public struct MessageContentView: View {
 
     @ViewBuilder
     private var markdownView: some View {
-        #if canImport(Textual)
-        if #available(iOS 18.0, macOS 15.0, *) {
-            textualMarkdownView
-        } else {
-            attributedMarkdownView
-        }
-        #else
-        attributedMarkdownView
-        #endif
-    }
-
-    #if canImport(Textual)
-    @ViewBuilder
-    private var textualMarkdownView: some View {
-        StructuredText(markdown: content)
-            .textual.textSelection(.enabled)
-            .textual.structuredTextStyle(.default)
-            .font(.subheadline)
-    }
-    #endif
-
-    @ViewBuilder
-    private var attributedMarkdownView: some View {
-        if let attributed = content.toMarkdownAttributed() {
-            Text(attributed)
-                .font(.subheadline)
-                .textSelection(.enabled)
-        } else {
-            plainView
-        }
+        HTMLWebView(htmlContent: content.markdownToHTML(isUser: isUser), dynamicHeight: $htmlHeight)
+            .frame(height: max(htmlHeight, 50))
+            .frame(maxWidth: .infinity)
+            .textSelection(.enabled)
     }
 
     // MARK: - Plain

@@ -3,8 +3,6 @@ github.com/bwmarrin/discordgo v0.29.0/go.mod h1:NJZpH+1AfhIcyQsPeuBKsUtYrRnjkyu0
 github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ33E=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1VwoXQT9A3Wy9MM3WgvqSxFWenqJduM=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
-github.com/emergent-company/emergent.memory/apps/server/pkg/sdk v0.40.73 h1:FtgUmMMFlZpikPmLIhWygs/VYl16R/15tsQMzGjDMJ8=
-github.com/emergent-company/emergent.memory/apps/server/pkg/sdk v0.40.73/go.mod h1:7dtjFLeSIXNj9J1M2tqNBqqTeDr9MXwpNbF/p0a35TU=
 github.com/emergent-company/emergent.memory/apps/server/pkg/sdk v0.41.52 h1:MpFGLwtcOU8xjbtoKrunu5igg5/2fUh7RY/70MmmduI=
 github.com/emergent-company/emergent.memory/apps/server/pkg/sdk v0.41.52/go.mod h1:7dtjFLeSIXNj9J1M2tqNBqqTeDr9MXwpNbF/p0a35TU=
 github.com/golang-jwt/jwt/v5 v5.3.1 h1:kYf81DTWFe7t+1VvL7eS+jKFVWaUnK9cB1qbwn63YCY=

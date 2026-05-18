@@ -1,4 +1,5 @@
 import Foundation
+import Down
 
 // MARK: - Content Type Detection
 
@@ -78,19 +79,21 @@ public struct DianeContentDetector: Sendable {
     }
 }
 
-// MARK: - Markdown to AttributedString
+// MARK: - Markdown to HTML
 
 extension String {
-    /// Convert markdown to an AttributedString.
-    /// Apple's parser is very lenient — it will succeed for plain text too.
-    public func toMarkdownAttributed() -> AttributedString? {
-        try? AttributedString(
-            markdown: self,
-            options: .init(
-                allowsExtendedAttributes: true,
-                interpretedSyntax: .full
-            )
-        )
+    /// Convert markdown to HTML using Down (cmark).
+    /// Returns a complete HTML document wrapped for WebView rendering.
+    public func markdownToHTML(isUser: Bool = false) -> String {
+        guard !isEmpty else { return "" }
+        do {
+            let down = Down(markdownString: self)
+            let html = try down.toHTML()
+            return html.htmlWrappedForWebView(darkMode: true, isUser: isUser)
+        } catch {
+            // Fallback: render plain text in a paragraph if markdown parsing fails
+            return "<p>\(self)</p>".htmlWrappedForWebView(darkMode: true, isUser: isUser)
+        }
     }
 }
 
@@ -98,14 +101,33 @@ extension String {
 
 extension String {
     /// Wraps the content in a minimal HTML document for WKWebView rendering.
-    /// Includes dark mode support and base styling.
-    public func htmlWrappedForWebView(darkMode: Bool = false) -> String {
+    /// Includes dark mode support, base styling, and bubble-aware colors for user messages.
+    public func htmlWrappedForWebView(darkMode: Bool = false, isUser: Bool = false) -> String {
         let htmlContent = self
-        let bgColor = darkMode ? "#1C1C1E" : "#FFFFFF"
-        let textColor = darkMode ? "#E5E5E5" : "#1C1C1E"
-        let linkColor = darkMode ? "#64A8FF" : "#007AFF"
-        let codeBg = darkMode ? "#2C2C2E" : "#F2F2F7"
-        let codeColor = darkMode ? "#E5E5E5" : "#1C1C1E"
+        let bgColor: String
+        let textColor: String
+        let linkColor: String
+        let codeBg: String
+        let codeColor: String
+        if isUser {
+            bgColor = "#007AFF" // accentColor
+            textColor = "#FFFFFF"
+            linkColor = "#FFFFFF"
+            codeBg = "#0055CC"
+            codeColor = "#E5E5E5"
+        } else if darkMode {
+            bgColor = "#1C1C1E"
+            textColor = "#E5E5E5"
+            linkColor = "#64A8FF"
+            codeBg = "#2C2C2E"
+            codeColor = "#E5E5E5"
+        } else {
+            bgColor = "#FFFFFF"
+            textColor = "#1C1C1E"
+            linkColor = "#007AFF"
+            codeBg = "#F2F2F7"
+            codeColor = "#1C1C1E"
+        }
 
         return """
         <!DOCTYPE html>
