@@ -537,78 +537,77 @@ private struct MessageBubbleContent: View {
     }
 
     var body: some View {
-        Button(action: onTap) {
-            HStack(alignment: .bottom, spacing: 0) {
-                if !isUser {
-                    // For assistant messages: bubble on left, empty space on right
-                    VStack(alignment: .leading, spacing: DesignTokens.spacingXS) {
-                        if let toolCalls = message.toolCalls, !toolCalls.isEmpty {
-                            VStack(alignment: .leading, spacing: DesignTokens.spacingXXS) {
-                                ForEach(toolCalls, id: \.name) { tc in
-                                    ToolCallView(toolCall: tc)
-                                }
+        HStack(alignment: .bottom, spacing: 0) {
+            if !isUser {
+                // For assistant messages: bubble on left, empty space on right
+                VStack(alignment: .leading, spacing: DesignTokens.spacingXS) {
+                    if let toolCalls = message.toolCalls, !toolCalls.isEmpty {
+                        VStack(alignment: .leading, spacing: DesignTokens.spacingXXS) {
+                            ForEach(toolCalls, id: \.name) { tc in
+                                ToolCallView(toolCall: tc)
                             }
                         }
-
-                        MessageContentView(content: message.content, isUser: isUser)
-                            .foregroundColor(textColor)
-
-                        if isStreaming {
-                            TypingIndicator()
-                        }
-
-                        if let reasoning = message.reasoningContent, !reasoning.isEmpty {
-                            ReasoningSection(content: reasoning)
-                        }
-
-                        if let createdAt = message.createdAt {
-                            Text(DateUtils.formatTime(createdAt))
-                                .font(.caption2)
-                                .foregroundColor(isUser ? .white.opacity(0.7) : .secondary.opacity(0.7))
-                        }
                     }
-                    .padding(DesignTokens.spacingMD)
-                    .background(bubbleColor)
-                    .cornerRadius(DesignTokens.radiusLG)
-                    Spacer(minLength: 0)
-                } else {
-                    // For user messages: empty space on left, bubble on right
-                    Spacer(minLength: 0)
-                    VStack(alignment: .trailing, spacing: DesignTokens.spacingXS) {
-                        if let toolCalls = message.toolCalls, !toolCalls.isEmpty {
-                            VStack(alignment: .leading, spacing: DesignTokens.spacingXXS) {
-                                ForEach(toolCalls, id: \.name) { tc in
-                                    ToolCallView(toolCall: tc)
-                                }
-                            }
-                        }
 
-                        MessageContentView(content: message.content, isUser: isUser)
-                            .foregroundColor(textColor)
+                    MessageContentView(content: message.content, isUser: isUser)
+                        .foregroundColor(textColor)
 
-                        if isStreaming {
-                            TypingIndicator()
-                        }
-
-                        if let reasoning = message.reasoningContent, !reasoning.isEmpty {
-                            ReasoningSection(content: reasoning)
-                        }
-
-                        if let createdAt = message.createdAt {
-                            Text(DateUtils.formatTime(createdAt))
-                                .font(.caption2)
-                                .foregroundColor(isUser ? .white.opacity(0.7) : .secondary.opacity(0.7))
-                        }
+                    if isStreaming {
+                        TypingIndicator()
                     }
-                    .padding(DesignTokens.spacingMD)
-                    .background(bubbleColor)
-                    .cornerRadius(DesignTokens.radiusLG)
+
+                    if let reasoning = message.reasoningContent, !reasoning.isEmpty {
+                        ReasoningSection(content: reasoning)
+                    }
+
+                    if let createdAt = message.createdAt {
+                        Text(DateUtils.formatTime(createdAt))
+                            .font(.caption2)
+                            .foregroundColor(isUser ? .white.opacity(0.7) : .secondary.opacity(0.7))
+                    }
                 }
+                .padding(DesignTokens.spacingMD)
+                .background(bubbleColor)
+                .cornerRadius(DesignTokens.radiusLG)
+                Spacer(minLength: 0)
+            } else {
+                // For user messages: empty space on left, bubble on right
+                Spacer(minLength: 0)
+                VStack(alignment: .trailing, spacing: DesignTokens.spacingXS) {
+                    if let toolCalls = message.toolCalls, !toolCalls.isEmpty {
+                        VStack(alignment: .leading, spacing: DesignTokens.spacingXXS) {
+                            ForEach(toolCalls, id: \.name) { tc in
+                                ToolCallView(toolCall: tc)
+                            }
+                        }
+                    }
+
+                    MessageContentView(content: message.content, isUser: isUser)
+                        .foregroundColor(textColor)
+
+                    if isStreaming {
+                        TypingIndicator()
+                    }
+
+                    if let reasoning = message.reasoningContent, !reasoning.isEmpty {
+                        ReasoningSection(content: reasoning)
+                    }
+
+                    if let createdAt = message.createdAt {
+                        Text(DateUtils.formatTime(createdAt))
+                            .font(.caption2)
+                            .foregroundColor(isUser ? .white.opacity(0.7) : .secondary.opacity(0.7))
+                    }
+                }
+                .padding(DesignTokens.spacingMD)
+                .background(bubbleColor)
+                .cornerRadius(DesignTokens.radiusLG)
             }
-            .padding(.horizontal, DesignTokens.spacingMD)
-            .padding(.vertical, DesignTokens.spacingXXS)
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, DesignTokens.spacingMD)
+        .padding(.vertical, DesignTokens.spacingXXS)
+        .contentShape(Rectangle())
+        .onTapGesture { onTap() }
         .accessibilityIdentifier("bubble-\(message.id)")
     }
 }
