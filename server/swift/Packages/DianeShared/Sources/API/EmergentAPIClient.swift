@@ -197,9 +197,19 @@ public final class EmergentAPIClient: @unchecked Sendable {
                                        kind == "trajectory" {
                                         let toolName = meta["tool_name"] as? String ?? "unknown"
                                         let hasOutput = meta["tool_output"] != nil
+                                        // Serialize tool input/output from metadata
+                                        let toolContent: String? = {
+                                            let raw = hasOutput ? meta["tool_output"] : meta["tool_input"]
+                                            guard let raw else { return nil }
+                                            if let str = raw as? String { return str }
+                                            if let d = try? JSONSerialization.data(withJSONObject: raw, options: .fragmentsAllowed) {
+                                                return String(data: d, encoding: .utf8)
+                                            }
+                                            return nil
+                                        }()
                                         continuation.yield(StreamChatEvent(
                                             type: hasOutput ? "tool_result" : "tool_call",
-                                            content: nil, name: toolName, role: nil,
+                                            content: toolContent, name: toolName, role: nil,
                                             sessionID: sessionID, runID: nil, message: nil))
                                     }
                                 default:
