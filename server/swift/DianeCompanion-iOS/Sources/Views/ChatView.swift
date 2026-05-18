@@ -4,6 +4,22 @@ import Foundation
 
 // MARK: - Tool Call View (compact, args hidden by default)
 
+// MARK: - JSON pretty-print helper
+
+/// Attempts to parse the string as JSON and re-serialize with pretty printing.
+/// Falls back to the original string if parsing fails.
+private func formatJSON(_ raw: String) -> String {
+    guard let data = raw.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data),
+          let prettyData = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]),
+          let pretty = String(data: prettyData, encoding: .utf8),
+          !pretty.isEmpty
+    else {
+        return raw
+    }
+    return pretty
+}
+
 struct ToolCallView: View {
     let toolCall: DianeMessage.ToolCall
     @State private var showDetails = false
@@ -40,7 +56,7 @@ struct ToolCallView: View {
                         Text("Arguments")
                             .font(.system(size: 9).monospaced())
                             .foregroundColor(.secondary)
-                        Text(args)
+                        Text(formatJSON(args))
                             .font(.system(size: 9).monospaced())
                             .foregroundColor(.secondary)
                             .textSelection(.enabled)
@@ -53,7 +69,7 @@ struct ToolCallView: View {
                         Text("Result")
                             .font(.system(size: 9).monospaced())
                             .foregroundColor(.secondary)
-                        Text(result)
+                        Text(formatJSON(result))
                             .font(.system(size: 9).monospaced())
                             .foregroundColor(.secondary)
                             .lineLimit(8)
@@ -93,7 +109,7 @@ struct ExpandedToolCallView: View {
                         .font(.caption.monospaced())
                         .fontWeight(.medium)
                         .foregroundColor(.secondary)
-                    Text(args)
+                    Text(formatJSON(args))
                         .font(.caption.monospaced())
                         .foregroundColor(.primary)
                         .textSelection(.enabled)
@@ -107,7 +123,7 @@ struct ExpandedToolCallView: View {
                         .fontWeight(.medium)
                         .foregroundColor(.secondary)
                     ScrollView(.vertical) {
-                        Text(result)
+                        Text(formatJSON(result))
                             .font(.caption.monospaced())
                             .foregroundColor(.primary)
                             .textSelection(.enabled)
@@ -608,6 +624,16 @@ private struct MessageBubbleContent: View {
         .padding(.vertical, DesignTokens.spacingXXS)
         .contentShape(Rectangle())
         .onTapGesture { onTap() }
+        .contextMenu {
+            Button(action: onTap) {
+                Label("Details", systemImage: "info.circle")
+            }
+            Button(action: {
+                UIPasteboard.general.string = message.content
+            }) {
+                Label("Copy Message", systemImage: "doc.on.doc")
+            }
+        }
         .accessibilityIdentifier("bubble-\(message.id)")
     }
 }

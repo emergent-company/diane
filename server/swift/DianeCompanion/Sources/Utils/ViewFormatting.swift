@@ -110,7 +110,7 @@ enum ViewFormatting {
     static func formatToolArgs(_ raw: String) -> String {
         guard let data = raw.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data),
-              let pretty = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys, .withoutEscapingSlashes]),
+              let pretty = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]),
               let str = String(data: pretty, encoding: .utf8)
         else { return raw }
         return str
