@@ -1,13 +1,12 @@
 #!/bin/bash
-# Agent Test Loop for Diane Companion App
-# Runs unit tests (Swift XCTest) and Go backend tests.
-# XCUITest currently blocked by MenuBarExtra + ad-hoc code signing on this machine.
+# Agent Test Loop for Diane
+# Runs Go backend tests and API health checks.
+# macOS companion app (DianeCompanion) extracted to diane-macos repo.
 #
 # Outputs summary to stdout AND writes JSON results to /tmp/diane-test-results.json
 # (for consumption by the diane-test-loop cron job).
 set -euo pipefail
 
-SWIFT_DIR="/Users/mcj/src/diane/server/swift/DianeCompanion"
 GO_DIR="/Users/mcj/src/diane/server"
 RESULTS_FILE="/tmp/diane-test-results.json"
 TIMESTAMP=$(date +%s)
@@ -25,7 +24,7 @@ fail_test() { FAIL=$((FAIL+1)); TESTS+=("{\"name\":\"$1\",\"passed\":false,\"err
 
 # ── Step 1: Go backend tests ──
 echo ""
-echo "=== [1/3] Go Backend Tests ==="
+echo "=== [1/2] Go Backend Tests ==="
 cd "$GO_DIR"
 
 # Run vet — capture full output, tail only summary lines for display
@@ -49,159 +48,14 @@ tail -10 /tmp/gotest-output.txt
 if [ "$TEST_EXIT" -eq 0 ]; then
     pass_test "go_test"
 else
-    fail_test "go_test" "$(tail -3 /tmp/gotest-output.txt | tr '\n' ' ')"
+    # Count failures for the error message
+    FAIL_COUNT=$(grep -c '^--- FAIL' /tmp/gotest-output.txt || true)
+    fail_test "go_test" "$FAIL_COUNT test(s) failed. Last lines: $(tail -3 /tmp/gotest-output.txt | tr '\n' ' ')"
 fi
 
-# ── Step 2: Swift Unit Tests (build verification) ──
+# ── Step 2: API Integration Test ──
 echo ""
-echo "=== [2/3] Swift Unit Tests (build verification) ==="
-echo "NOTE: Using build-for-testing — MenuBarExtra apps can't auto-exit after test execution."
-cd "$SWIFT_DIR"
-
-# Clean up stale xcresult bundle from previous run
-rm -rf /tmp/DianeUnitTests.xcresult
-
-# Regenerate project if project.yml changed
-xcodegen generate 2>&1 | tail -1
-
-# Create a test-only scheme for DianeTests (separate from the main Diane scheme
-# to avoid Xcode 26.5 module name conflicts between the app and test targets).
-# UUIDs are extracted dynamically from the pbxproj since xcodegen regenerates them.
-SCHEME_DIR="Diane.xcodeproj/xcshareddata/xcschemes"
-mkdir -p "$SCHEME_DIR"
-
-DIANE_UUID=$(grep -B1 'isa = PBXNativeTarget' Diane.xcodeproj/project.pbxproj | grep '/\* Diane \*/' | awk '{print $1}')
-TEST_UUID=$(grep -B1 'isa = PBXNativeTarget' Diane.xcodeproj/project.pbxproj | grep '/\* DianeTests \*/' | awk '{print $1}')
-
-cat > "$SCHEME_DIR/DianeUnitTests.xcscheme" << SCHEME_EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<Scheme LastUpgradeVersion="1650" version="2.0">
-   <BuildAction
-      parallelizeBuildables="YES"
-      buildImplicitDependencies="YES">
-      <BuildActionEntries>
-         <BuildActionEntry
-            buildForTesting="YES"
-            buildForRunning="YES"
-            buildForProfiling="YES"
-            buildForArchiving="YES"
-            buildForAnalyzing="YES">
-            <BuildableReference
-               BuildableIdentifier="primary"
-               BlueprintIdentifier="${DIANE_UUID}"
-               BuildableName="Diane.app"
-               BlueprintName="Diane"
-               ReferencedContainer="container:Diane.xcodeproj">
-            </BuildableReference>
-         </BuildActionEntry>
-         <BuildActionEntry
-            buildForTesting="YES"
-            buildForRunning="NO"
-            buildForProfiling="NO"
-            buildForArchiving="NO"
-            buildForAnalyzing="NO">
-            <BuildableReference
-               BuildableIdentifier="primary"
-               BlueprintIdentifier="${TEST_UUID}"
-               BuildableName="DianeTests.xctest"
-               BlueprintName="DianeTests"
-               ReferencedContainer="container:Diane.xcodeproj">
-            </BuildableReference>
-         </BuildActionEntry>
-      </BuildActionEntries>
-   </BuildAction>
-   <TestAction
-      buildConfiguration="Debug"
-      selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB"
-      selectedLauncherIdentifier="Xcode.DebuggerFoundation.Launcher.LLDB"
-      shouldUseLaunchSchemeArgsEnv="YES">
-      <Testables>
-         <TestableReference
-            skipped="NO">
-            <BuildableReference
-               BuildableIdentifier="primary"
-               BlueprintIdentifier="${TEST_UUID}"
-               BuildableName="DianeTests.xctest"
-               BlueprintName="DianeTests"
-               ReferencedContainer="container:Diane.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
-      </Testables>
-      <MacroExpansion>
-         <BuildableReference
-            BuildableIdentifier="primary"
-            BlueprintIdentifier="${DIANE_UUID}"
-            BuildableName="Diane.app"
-            BlueprintName="Diane"
-            ReferencedContainer="container:Diane.xcodeproj">
-         </BuildableReference>
-      </MacroExpansion>
-   </TestAction>
-   <LaunchAction
-      buildConfiguration="Debug"
-      selectedDebuggerIdentifier=""
-      selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.PosixSpawn"
-      launchStyle="0"
-      useCustomWorkingDirectory="NO"
-      ignoresPersistentStateOnLaunch="NO"
-      debugDocumentVersioning="YES"
-      debugServiceExtension="internal"
-      allowLocationSimulation="NO">
-      <MacroExpansion>
-         <BuildableReference
-            BuildableIdentifier="primary"
-            BlueprintIdentifier="${DIANE_UUID}"
-            BuildableName="Diane.app"
-            BlueprintName="Diane"
-            ReferencedContainer="container:Diane.xcodeproj">
-         </BuildableReference>
-      </MacroExpansion>
-   </LaunchAction>
-   <ProfileAction
-      buildConfiguration="Release"
-      shouldUseLaunchSchemeArgsEnv="YES"
-      savedToolIdentifier=""
-      useCustomWorkingDirectory="NO"
-      debugDocumentVersioning="YES">
-      <MacroExpansion>
-         <BuildableReference
-            BuildableIdentifier="primary"
-            BlueprintIdentifier="${DIANE_UUID}"
-            BuildableName="Diane.app"
-            BlueprintName="Diane"
-            ReferencedContainer="container:Diane.xcodeproj">
-         </BuildableReference>
-      </MacroExpansion>
-   </ProfileAction>
-   <AnalyzeAction buildConfiguration="Debug">
-   </AnalyzeAction>
-   <ArchiveAction buildConfiguration="Release" revealArchiveInOrganizer="YES">
-   </ArchiveAction>
-</Scheme>
-SCHEME_EOF
-
-# Build tests to verify compilation (don't run — MenuBarExtra app won't auto-exit).
-# This checks: test compilation, type-checking, and scheme resolution.
-set +e
-xcodebuild build-for-testing -project Diane.xcodeproj -scheme DianeUnitTests \
-  -destination 'platform=macOS' \
-  -skip-testing:DianeTests/DianeLiveAPITests \
-  -skip-testing:DianeTests/LiveAPIResponseShapeTests \
-  2>&1 | tee /tmp/xctest-build-output.txt | tail -3
-BUILD_EXIT=${PIPESTATUS[0]}
-set -e
-
-if [ "$BUILD_EXIT" -eq 0 ]; then
-    echo "✓ Unit test build succeeded (all $(find DianeTests -name '*.swift' | wc -l | tr -d ' ') test files compile)"
-    pass_test "swift_xctest_build"
-else
-    echo "✗ Unit test build FAILED"
-    fail_test "swift_xctest_build" "$(grep -i 'error:' /tmp/xctest-build-output.txt | head -3 | tr '\\n' ' ')"
-fi
-
-# ── Step 3: API Integration Test ──
-echo ""
-echo "=== [3/3] Live API Check ==="
+echo "=== [2/2] Live API Check ==="
 # Check if diane serve is running
 if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8890/api/status 2>/dev/null | grep -q 200; then
     echo "✓ diane serve is running on port 8890"
