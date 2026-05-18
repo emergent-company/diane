@@ -1029,3 +1029,57 @@ func (b *Bridge) UpdateMCPProxyConfigScope(ctx context.Context, entityID, newSco
 	}
 	return nil
 }
+
+// FindMCPProxyConfigEntityID finds the entity ID for an MCP proxy config by server name.
+func (b *Bridge) FindMCPProxyConfigEntityID(ctx context.Context, serverName string) (string, error) {
+	entries, err := b.ListMCPProxyConfigs(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, e := range entries {
+		var nameCheck struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal([]byte(e.Config), &nameCheck) == nil && nameCheck.Name == serverName {
+			return e.EntityID, nil
+		}
+	}
+	return "", fmt.Errorf("mcp proxy config not found: %s", serverName)
+}
+
+// CreateMCPProxyConfig creates a new MCP proxy config in the graph.
+func (b *Bridge) CreateMCPProxyConfig(ctx context.Context, configJSON, scope string) error {
+	_, err := b.client.Graph.CreateObject(ctx, &graph.CreateObjectRequest{
+		Type: MCPProxyConfigType,
+		Properties: map[string]any{
+			"scope":  scope,
+			"config": configJSON,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("create mcp proxy config: %w", err)
+	}
+	return nil
+}
+
+// DeleteMCPProxyConfig deletes an MCP proxy config by entity ID.
+func (b *Bridge) DeleteMCPProxyConfig(ctx context.Context, entityID string) error {
+	err := b.client.Graph.DeleteObject(ctx, entityID, nil)
+	if err != nil {
+		return fmt.Errorf("delete mcp proxy config: %w", err)
+	}
+	return nil
+}
+
+// UpdateMCPProxyConfig replaces the config JSON for an MCP proxy config by entity ID.
+func (b *Bridge) UpdateMCPProxyConfig(ctx context.Context, entityID, configJSON string) error {
+	_, err := b.client.Graph.UpdateObject(ctx, entityID, &graph.UpdateObjectRequest{
+		Properties: map[string]any{
+			"config": configJSON,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("update mcp proxy config: %w", err)
+	}
+	return nil
+}

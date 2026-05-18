@@ -1732,14 +1732,86 @@ func extractContentValue(val any) string {
 	}
 }
 
-// handleMCPServers returns the list of MCP servers from the graph.
+// handleMCPServers handles listing and creating MCP servers.
 func (h *apiHandlers) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// Query MCP proxy configs from the graph
+	switch r.Method {
+	case http.MethodGet:
+		h.handleMCPServersList(ctx, w)
+	case http.MethodPost:
+		h.handleMCPServerCreate(ctx, w, r)
+	default:
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed (use GET or POST)")
+	}
+}
+
+// handleMCPServerCreate creates a new MCP server config in the graph.
+// POST /api/mcp-servers  body: {"name","type","command","args","env","url","enabled","scope","timeout"}
+func (h *apiHandlers) handleMCPServerCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name    string            `json:"name"`
+		Type    string            `json:"type"`
+		Command string            `json:"command"`
+		Args    []string          `json:"args"`
+		Env     map[string]string `json:"env"`
+		URL     string            `json:"url"`
+		Enabled bool              `json:"enabled"`
+		Scope   string            `json:"scope"`
+		Timeout int               `json:"timeout"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+		return
+	}
+	if body.Name == "" {
+		jsonError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if body.Type == "" {
+		body.Type = "stdio"
+	}
+	if body.Scope == "" {
+		body.Scope = "all"
+	}
+
+	sc := mcpproxy.ServerConfig{
+		Name:    body.Name,
+		Type:    body.Type,
+		Command: body.Command,
+		Args:    body.Args,
+		Env:     body.Env,
+		URL:     body.URL,
+		Enabled: body.Enabled,
+		Timeout: body.Timeout,
+	}
+	configJSON, err := json.Marshal(sc)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("failed to serialize config: %v", err))
+		return
+	}
+
 	bridge, err := h.bridge(ctx)
 	if err != nil {
-		log.Printf("[LOCAL-API] handleMCPServers: bridge: %v", err)
+		jsonError(w, http.StatusInternalServerError, "failed to connect to Memory Platform")
+		return
+	}
+	defer bridge.Close()
+
+	if err := bridge.CreateMCPProxyConfig(ctx, string(configJSON), body.Scope); err != nil {
+		log.Printf("[LOCAL-API] create MCP server %s: %v", body.Name, err)
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create MCP server: %v", err))
+		return
+	}
+
+	log.Printf("[LOCAL-API] Created MCP server %s (type=%s, scope=%s)", body.Name, body.Type, body.Scope)
+	writeJSON(w, map[string]any{"status": "ok", "server": body.Name, "scope": body.Scope})
+}
+
+func (h *apiHandlers) handleMCPServersList(ctx context.Context, w http.ResponseWriter) {
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		log.Printf("[LOCAL-API] handleMCPServersList: bridge: %v", err)
 		writeJSON(w, map[string]any{"servers": []any{}})
 		return
 	}
@@ -1851,7 +1923,7 @@ func (h *apiHandlers) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 	if len(servers) > 0 && h.pc.ServerURL != "" {
 		// 1. Get all active sessions
 		relayURL := strings.TrimSuffix(h.pc.ServerURL, "/") + "/api/mcp-relay/sessions"
-		sessions := h.queryRelaySessions(r.Context(), relayURL)
+		sessions := h.queryRelaySessions(ctx, relayURL)
 
 		// 2. Collect tools from all sessions, grouped by instance ID
 		type instanceTools struct {
@@ -1863,7 +1935,7 @@ func (h *apiHandlers) handleMCPServers(w http.ResponseWriter, r *http.Request) {
 			if instID == "" {
 				continue
 			}
-			tools := h.queryInstanceTools(r.Context(), instID)
+			tools := h.queryInstanceTools(ctx, instID)
 			if len(tools) > 0 {
 				allInstanceTools = append(allInstanceTools, instanceTools{InstanceID: instID, Tools: tools})
 			}
@@ -1978,6 +2050,32 @@ func (h *apiHandlers) handleMCPServerSubRoutes(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	if len(parts) == 2 && parts[1] == "enabled" {
+		// PUT /api/mcp-servers/{name}/enabled  body: {"enabled": true}
+		if r.Method != http.MethodPut {
+			jsonError(w, http.StatusMethodNotAllowed, "method not allowed (use PUT)")
+			return
+		}
+		h.handleMCPServerToggleEnabled(w, r, serverName)
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "config" {
+		// PUT /api/mcp-servers/{name}/config  body: {"name","type","command","args","env","url","enabled","timeout"}
+		if r.Method != http.MethodPut {
+			jsonError(w, http.StatusMethodNotAllowed, "method not allowed (use PUT)")
+			return
+		}
+		h.handleMCPServerUpdateConfig(w, r, serverName)
+		return
+	}
+
+	// DELETE /api/mcp-servers/{name}
+	if len(parts) == 1 && r.Method == http.MethodDelete {
+		h.handleMCPServerDelete(w, r, serverName)
+		return
+	}
+
 	jsonError(w, http.StatusNotFound, "not found")
 }
 
@@ -2059,6 +2157,167 @@ func (h *apiHandlers) handleMCPServerLogs(w http.ResponseWriter, r *http.Request
 		entries = []mcpproxy.LogEntry{}
 	}
 	writeJSON(w, map[string]any{"logs": entries})
+}
+
+// handleMCPServerToggleEnabled toggles the enabled state of an MCP server.
+// PUT /api/mcp-servers/{name}/enabled  body: {"enabled": true}
+func (h *apiHandlers) handleMCPServerToggleEnabled(w http.ResponseWriter, r *http.Request, serverName string) {
+	ctx := r.Context()
+
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to connect to Memory Platform")
+		return
+	}
+	defer bridge.Close()
+
+	entityID, err := bridge.FindMCPProxyConfigEntityID(ctx, serverName)
+	if err != nil {
+		jsonError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	// Read current config, modify enabled field, write back
+	entries, err := bridge.ListMCPProxyConfigs(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to list configs")
+		return
+	}
+	var currentConfig string
+	for _, e := range entries {
+		if e.EntityID == entityID {
+			currentConfig = e.Config
+			break
+		}
+	}
+	if currentConfig == "" {
+		jsonError(w, http.StatusInternalServerError, "failed to read config")
+		return
+	}
+
+	var sc mcpproxy.ServerConfig
+	if err := json.Unmarshal([]byte(currentConfig), &sc); err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to parse config")
+		return
+	}
+	sc.Enabled = req.Enabled
+
+	updatedJSON, err := json.Marshal(sc)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to serialize config")
+		return
+	}
+
+	if err := bridge.UpdateMCPProxyConfig(ctx, entityID, string(updatedJSON)); err != nil {
+		log.Printf("[LOCAL-API] handleMCPServerToggleEnabled: update: %v", err)
+		jsonError(w, http.StatusInternalServerError, "failed to update enabled state")
+		return
+	}
+
+	label := "disabled"
+	if req.Enabled {
+		label = "enabled"
+	}
+	log.Printf("[LOCAL-API] %s MCP server %s", label, serverName)
+	writeJSON(w, map[string]any{"status": "ok", "server": serverName, "enabled": req.Enabled})
+}
+
+// handleMCPServerUpdateConfig updates the full config of an MCP server.
+// PUT /api/mcp-servers/{name}/config  body: {"type","command","args","env","url","enabled","timeout"}
+func (h *apiHandlers) handleMCPServerUpdateConfig(w http.ResponseWriter, r *http.Request, serverName string) {
+	ctx := r.Context()
+
+	var body struct {
+		Type    string            `json:"type"`
+		Command string            `json:"command"`
+		Args    []string          `json:"args"`
+		Env     map[string]string `json:"env"`
+		URL     string            `json:"url"`
+		Enabled bool              `json:"enabled"`
+		Timeout int               `json:"timeout"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to connect to Memory Platform")
+		return
+	}
+	defer bridge.Close()
+
+	entityID, err := bridge.FindMCPProxyConfigEntityID(ctx, serverName)
+	if err != nil {
+		jsonError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	sc := mcpproxy.ServerConfig{
+		Name:    serverName,
+		Type:    body.Type,
+		Command: body.Command,
+		Args:    body.Args,
+		Env:     body.Env,
+		URL:     body.URL,
+		Enabled: body.Enabled,
+		Timeout: body.Timeout,
+	}
+	if sc.Type == "" {
+		sc.Type = "stdio"
+	}
+
+	updatedJSON, err := json.Marshal(sc)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to serialize config")
+		return
+	}
+
+	if err := bridge.UpdateMCPProxyConfig(ctx, entityID, string(updatedJSON)); err != nil {
+		log.Printf("[LOCAL-API] handleMCPServerUpdateConfig: update: %v", err)
+		jsonError(w, http.StatusInternalServerError, "failed to update config")
+		return
+	}
+
+	log.Printf("[LOCAL-API] Updated config for MCP server %s", serverName)
+	writeJSON(w, map[string]any{"status": "ok", "server": serverName})
+}
+
+// handleMCPServerDelete deletes an MCP server config from the graph.
+// DELETE /api/mcp-servers/{name}
+func (h *apiHandlers) handleMCPServerDelete(w http.ResponseWriter, r *http.Request, serverName string) {
+	ctx := r.Context()
+
+	bridge, err := h.bridge(ctx)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to connect to Memory Platform")
+		return
+	}
+	defer bridge.Close()
+
+	entityID, err := bridge.FindMCPProxyConfigEntityID(ctx, serverName)
+	if err != nil {
+		jsonError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	if err := bridge.DeleteMCPProxyConfig(ctx, entityID); err != nil {
+		log.Printf("[LOCAL-API] handleMCPServerDelete: delete: %v", err)
+		jsonError(w, http.StatusInternalServerError, "failed to delete MCP server")
+		return
+	}
+
+	log.Printf("[LOCAL-API] Deleted MCP server %s", serverName)
+	writeJSON(w, map[string]any{"status": "ok", "server": serverName})
 }
 
 // handleMCPServerTools returns tools exposed by a specific MCP server.
