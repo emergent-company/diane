@@ -214,7 +214,7 @@ final class DianeUITests: XCTestCase {
         XCTAssertTrue(agentLabel.waitForExistence(timeout: 2))
     }
 
-    func testSessionDetailShowsDeleteButton() throws {
+    func testSessionDetailShowsArchiveButton() throws {
         let sessionRow = app.staticTexts["Mock Chat"]
         XCTAssertTrue(sessionRow.waitForExistence(timeout: 5))
         sessionRow.tap()
@@ -223,8 +223,8 @@ final class DianeUITests: XCTestCase {
         XCTAssertTrue(titleButton.waitForExistence(timeout: 5))
         titleButton.tap()
 
-        let deleteButton = app.buttons["delete-session-button"]
-        XCTAssertTrue(deleteButton.waitForExistence(timeout: 5))
+        let archiveButton = app.buttons["archive-session-button"]
+        XCTAssertTrue(archiveButton.waitForExistence(timeout: 5))
     }
 
     func testSessionDetailCanBeDismissed() throws {

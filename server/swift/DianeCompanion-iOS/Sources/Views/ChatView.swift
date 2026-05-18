@@ -245,9 +245,7 @@ struct MessageDetailSheet: View {
                                 .fontWeight(.medium)
                                 .foregroundColor(.secondary)
 
-                            Text(message.content)
-                                .font(.body)
-                                .textSelection(.enabled)
+                            MessageContentView(content: message.content)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .padding()
@@ -339,10 +337,8 @@ struct MessageDetailSheet: View {
 
 struct SessionDetailSheet: View {
     let session: DianeSession
-    let onDelete: () -> Void
     let onArchive: () -> Void
     @Environment(\.dismiss) private var dismiss
-    @State private var showDeleteConfirm = false
 
     var body: some View {
         NavigationStack {
@@ -428,15 +424,16 @@ struct SessionDetailSheet: View {
 
                     // Action buttons
                     VStack(spacing: DesignTokens.spacingSM) {
-                        Button(role: .destructive) {
-                            showDeleteConfirm = true
+                        Button {
+                            onArchive()
+                            dismiss()
                         } label: {
-                            Label("Delete Session", systemImage: "trash")
+                            Label("Archive Session", systemImage: "archivebox")
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.bordered)
-                        .tint(.red)
-                        .accessibilityIdentifier("delete-session-button")
+                        .tint(.orange)
+                        .accessibilityIdentifier("archive-session-button")
                     }
                     .padding(.top)
                 }
@@ -449,15 +446,6 @@ struct SessionDetailSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
-            }
-            .alert("Delete Session", isPresented: $showDeleteConfirm) {
-                Button("Cancel", role: .cancel) {}
-                Button("Delete", role: .destructive) {
-                    onDelete()
-                    dismiss()
-                }
-            } message: {
-                Text("Are you sure you want to delete this session? This cannot be undone.")
             }
         }
     }
@@ -888,9 +876,6 @@ struct ChatView: View {
         .sheet(isPresented: $showSessionDetail) {
             SessionDetailSheet(
                 session: displaySession,
-                onDelete: {
-                    Task { await deleteSession() }
-                },
                 onArchive: {
                     archiveStore.toggleArchive(sessionID: session.id)
                 }
@@ -900,20 +885,6 @@ struct ChatView: View {
     }
 
     // MARK: - Actions
-
-    private func deleteSession() async {
-        // Remove locally
-        SessionCache.shared.cacheMessages([], for: session.id)
-
-        // Attempt remote deletion (best-effort)
-        do {
-            try await cloudClient.http.delete("/acp/v1/sessions/\(session.id)")
-        } catch {
-            #if DEBUG
-            print("[Diane] Remote session deletion failed: \(error.localizedDescription)")
-            #endif
-        }
-    }
 
     // MARK: - Message Content Builder
 
@@ -1090,21 +1061,35 @@ struct ChatView: View {
         let messageCount = json["message_count"] as? Int
         let lastRunStatus = json["last_run_status"] as? String
 
-        if tokens != nil || cost != nil || runCount != nil {
-            enrichedSession = DianeSession(
-                id: session.id,
-                title: session.title,
-                status: session.status,
-                messageCount: messageCount ?? session.messageCount,
-                runCount: runCount ?? session.runCount,
-                totalTokens: tokens ?? session.totalTokens,
-                totalCostUsd: cost ?? session.totalCostUsd,
-                lastRunStatus: lastRunStatus ?? session.lastRunStatus,
-                entityID: session.entityID,
-                createdAt: session.createdAt,
-                updatedAt: session.updatedAt,
-                agentName: session.agentName
-            )
+        // Always create enrichedSession so fallback values from the original session
+        // (which came from the list endpoint) are preserved, even when the detail
+        // endpoint omits these fields.
+        enrichedSession = DianeSession(
+            id: session.id,
+            title: session.title,
+            status: session.status,
+            messageCount: messageCount ?? session.messageCount,
+            runCount: runCount ?? session.runCount,
+            totalTokens: tokens ?? session.totalTokens,
+            totalCostUsd: cost ?? session.totalCostUsd,
+            lastRunStatus: lastRunStatus ?? session.lastRunStatus,
+            entityID: session.entityID,
+            createdAt: session.createdAt,
+            updatedAt: session.updatedAt,
+            agentName: session.agentName
+        )
+    }
+
+    /// Refresh session stats from the ACP detail endpoint after a run completes.
+    private func refreshSessionStats() async {
+        do {
+            let data = try await cloudClient.http.get("/acp/v1/sessions/\(session.id)")
+            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            await MainActor.run { enrichSession(from: json) }
+        } catch {
+            #if DEBUG
+            print("[Diane] Failed to refresh session stats: \(error.localizedDescription)")
+            #endif
         }
     }
 
@@ -1338,6 +1323,9 @@ struct ChatView: View {
                 // Cache messages after successful stream
                 SessionCache.shared.cacheMessages(messages, for: session.id)
 
+                // Refresh session stats (tokens, cost, message count) from ACP
+                Task { await refreshSessionStats() }
+
             } catch {
                 if Task.isCancelled { return }
                 await MainActor.run {
@@ -1440,9 +1428,7 @@ private enum ChatPreviewSamples {
 #Preview("Session Detail") {
     SessionDetailSheet(
         session: ChatPreviewSamples.session,
-        onDelete: {},
-        onArchive: {}
-    )
+        onArchive: {})
 }
 
 #Preview("Chat Input Bar — idle") {
