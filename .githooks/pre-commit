@@ -1,85 +1,35 @@
 #!/bin/bash
-# Pre-commit hook: build the Swift companion app when Swift files change.
+# Pre-commit hook: run go vet + test when Go files are staged.
 # 
-# This catches compilation errors (like unicode escape issues, type mismatches)
-# before they reach CI.
+# This catches compilation errors and test failures before they reach CI.
+# Companion apps (macOS + iOS) were extracted to separate repos in May 2026.
 #
 # To install hooks: make setup
 #   or: git config core.hooksPath .githooks
 
 set -euo pipefail
 
-SWIFT_DIR="server/swift/DianeCompanion"
-IOS_DIR="server/swift/DianeCompanion-iOS"
+# Companion apps (macOS + iOS) were extracted to separate repos in May 2026.
+# The main diane repo now only has Go server code + shared SPM packages.
+# No macOS/iOS companion builds are needed here.
+# See: diane-macos (https://github.com/emergent-company/diane-macos)
+# See: diane-ios   (https://github.com/emergent-company/diane-ios)
 
-# Only run if Swift files are staged
-STAGED_SWIFT=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null | grep '\.swift$' || true)
-STAGED_IOS=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null | grep -E '(DianeCompanion-iOS|Packages/DianeShared)' || true)
-if [ -z "$STAGED_SWIFT" ]; then
+# Only run if Go files are staged (vet + test)
+STAGED_GO=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null | grep '\.go$' || true)
+if [ -z "$STAGED_GO" ]; then
     exit 0
 fi
 
-# Check for xcodegen
-if ! command -v xcodegen &>/dev/null; then
-    echo "⚠️  xcodegen not found — skipping Swift build check"
-    echo "   Install: brew install xcodegen"
-    exit 0
+echo "🔍 Go files staged — running vet + test..."
+cd "$(git rev-parse --show-toplevel)"
+go vet ./internal/... ./cmd/... 2>&1 | tail -10
+VET_EXIT=${PIPESTATUS[0]}
+if [ "$VET_EXIT" -ne 0 ]; then
+    echo "❌ go vet FAILED. Fix issues before committing."
+    exit 1
 fi
+echo "✅ go vet passed."
+go test -count=1 ./internal/... ./cmd/... 2>&1 | tail -5
+echo "✅ go test passed."
 
-# ── macOS companion ──────────────────────────────────────────────
-# Only build macOS if non-iOS Swift files are staged
-if echo "$STAGED_SWIFT" | grep -vq 'DianeCompanion-iOS' 2>/dev/null; then
-    echo "🔍 Swift files staged — checking macOS companion build..."
-    echo "==> Generating Xcode project..."
-    (cd "$SWIFT_DIR" && xcodegen generate --quiet) 2>&1
-
-    echo "==> Building Diane scheme (debug, no signing)..."
-    xcodebuild \
-        -project "$SWIFT_DIR/Diane.xcodeproj" \
-        -scheme Diane \
-        -configuration Debug \
-        -derivedDataPath "$SWIFT_DIR/build/DerivedData" \
-        CODE_SIGN_IDENTITY="" \
-        CODE_SIGNING_REQUIRED=NO \
-        CODE_SIGNING_ALLOWED=NO \
-        SWIFT_ACTIVE_COMPILATION_CONDITIONS= \
-        build \
-        2>&1 | tail -20
-
-    BUILD_EXIT=${PIPESTATUS[0]}
-    if [ "$BUILD_EXIT" -ne 0 ]; then
-        echo ""
-        echo "❌ macOS companion build FAILED. Fix errors before committing."
-        exit 1
-    fi
-    echo "✅ macOS companion app builds cleanly."
-fi
-
-# ── iOS companion ───────────────────────────────────────────────
-if [ -n "$STAGED_IOS" ]; then
-    echo "🔍 iOS files staged — checking iOS companion build..."
-    echo "==> Generating iOS Xcode project..."
-    (cd "$IOS_DIR" && xcodegen generate --quiet) 2>&1
-
-    echo "==> Building iOS Diane scheme (debug, no signing)..."
-    xcodebuild \
-        -project "$IOS_DIR/Diane.xcodeproj" \
-        -scheme Diane \
-        -configuration Debug \
-        -sdk iphonesimulator \
-        -derivedDataPath "$IOS_DIR/build/DerivedData" \
-        CODE_SIGN_IDENTITY="" \
-        CODE_SIGNING_REQUIRED=NO \
-        CODE_SIGNING_ALLOWED=NO \
-        SWIFT_ACTIVE_COMPILATION_CONDITIONS= \
-        build \
-        2>&1 | tail -20
-
-    BUILD_EXIT=${PIPESTATUS[0]}
-    if [ "$BUILD_EXIT" -ne 0 ]; then
-        echo ""
-        echo "❌ iOS companion build FAILED. Fix errors before committing."
-        exit 1
-    fi
-    echo "✅ iOS companion app builds cleanly."
-fi
